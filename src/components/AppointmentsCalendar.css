@@ -1,0 +1,71 @@
+.appointments-calendar .rbc-calendar {
+  color: rgba(255, 255, 255, 0.85);
+  font-family: inherit;
+}
+
+.appointments-calendar .rbc-toolbar button {
+  background: #1a1a1a;
+  border: 1px solid #333;
+  color: #d4af37;
+  border-radius: 0.5rem;
+  padding: 0.35rem 0.75rem;
+}
+
+.appointments-calendar .rbc-toolbar button:hover,
+.appointments-calendar .rbc-toolbar button:active,
+.appointments-calendar .rbc-toolbar button.rbc-active {
+  background: rgba(212, 175, 55, 0.15);
+  border-color: #d4af37;
+  color: #d4af37;
+}
+
+.appointments-calendar .rbc-toolbar-label {
+  color: #d4af37;
+  font-family: ui-serif, Georgia, serif;
+  font-weight: 600;
+}
+
+.appointments-calendar .rbc-header,
+.appointments-calendar .rbc-time-header-content,
+.appointments-calendar .rbc-time-content,
+.appointments-calendar .rbc-month-view,
+.appointments-calendar .rbc-time-view {
+  border-color: #333;
+}
+
+.appointments-calendar .rbc-header {
+  background: rgba(26, 26, 26, 0.8);
+  color: rgba(255, 255, 255, 0.6);
+  padding: 0.75rem 0;
+}
+
+.appointments-calendar .rbc-day-bg,
+.appointments-calendar .rbc-time-slot,
+.appointments-calendar .rbc-timeslot-group {
+  border-color: #2a2a2a;
+}
+
+.appointments-calendar .rbc-off-range-bg {
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.appointments-calendar .rbc-today {
+  background: rgba(212, 175, 55, 0.08);
+}
+
+.appointments-calendar .rbc-event {
+  border-radius: 0.375rem;
+}
+
+.appointments-calendar .rbc-show-more {
+  color: #d4af37;
+}
+
+.appointments-calendar .rbc-time-view .rbc-allday-cell,
+.appointments-calendar .rbc-time-view .rbc-time-gutter {
+  background: rgba(26, 26, 26, 0.6);
+}
+
+.appointments-calendar .rbc-time-gutter .rbc-timeslot-group {
+  color: rgba(255, 255, 255, 0.45);
+}
