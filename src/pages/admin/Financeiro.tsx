@@ -184,10 +184,10 @@ const selectStyle: React.CSSProperties = {
 }
 
 export default function Financeiro() {
-  const [pagamentos, setPagamentos] = useState([])
-  const [resumo, setResumo] = useState({ total: 0, porForma: {}, quantidade: 0 })
-  const [agendamentos, setAgendamentos] = useState([])
-  const [clientes, setClientes] = useState([])
+  const [pagamentos, setPagamentos] = useState<any[]>([])
+  const [resumo, setResumo] = useState({ total: 0, porForma: {} as Record<string, number>, quantidade: 0 })
+  const [agendamentos, setAgendamentos] = useState<any[]>([])
+  const [clientes, setClientes] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -278,12 +278,10 @@ export default function Financeiro() {
       setFormValor('')
       setFormForma('Dinheiro')
       await loadData()
-    } catch (err) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : JSON.stringify(err)
       console.error('❌ Erro completo ao criar pagamento:', err)
-      console.error('❌ Mensagem:', err?.message)
-      console.error('❌ Resposta:', err?.response)
-      console.error('❌ Stack:', err?.stack)
-      alert('Erro ao criar pagamento: ' + (err?.message || JSON.stringify(err)))
+      alert('Erro ao criar pagamento: ' + message)
     } finally {
       setSaving(false)
     }

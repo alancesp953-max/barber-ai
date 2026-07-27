@@ -1,5 +1,10 @@
 import { supabase } from '../services/supabaseClient'
-import type { Barber, CreateBarberInput } from '../types/database'
+import type { Appointment, Barber, CreateBarberInput } from '../types/database'
+
+function joinOne<T>(value: T | T[] | null | undefined): T | null {
+  if (value == null) return null
+  return Array.isArray(value) ? value[0] ?? null : value
+}
 
 // =====================
 // Autenticação
@@ -120,9 +125,15 @@ export async function createAppointment(appointment: any) {
   return data
 }
 
-export async function updateAppointmentStatus(id: string, status: string) {
-  const { error } = await supabase.from('agendamentos').update({ status }).eq('id', id)
+export async function updateAppointmentStatus(id: string, status: string): Promise<Appointment> {
+  const { data, error } = await supabase
+    .from('agendamentos')
+    .update({ status })
+    .eq('id', id)
+    .select('*, barbeiros(nome), servicos(nome, duracao_minutos, preco), clientes(nome, email)')
+    .single()
   if (error) throw new Error(`Erro ao atualizar status do agendamento: ${error.message}`)
+  return data as Appointment
 }
 
 export async function deleteAppointment(id: string) {
@@ -444,9 +455,13 @@ export async function getResumoComissoes(params: { dataInicio: string; dataFim: 
     if (errVendas) throw new Error(`Erro ao buscar vendas: ${errVendas.message}`)
 
     const totalVendas = vendas?.length ?? 0
-    const valorVendas = vendas?.reduce((acc, v) => acc + (Number(v.produtos?.preco_venda || 0) * v.quantidade), 0) ?? 0
+    const valorVendas = vendas?.reduce((acc, v) => {
+      const produto = joinOne(v.produtos as { preco_venda: number } | { preco_venda: number }[] | null)
+      return acc + (Number(produto?.preco_venda || 0) * v.quantidade)
+    }, 0) ?? 0
     const comissaoVendas = vendas?.reduce((acc, v) => {
-      const valorItem = Number(v.produtos?.preco_venda || 0) * v.quantidade
+      const produto = joinOne(v.produtos as { preco_venda: number } | { preco_venda: number }[] | null)
+      const valorItem = Number(produto?.preco_venda || 0) * v.quantidade
       return acc + (valorItem * (v.comissao_percentual ?? barbeiro.percentual_produto) / 100)
     }, 0) ?? 0
 
@@ -477,13 +492,17 @@ export async function getRelatorioComissoes(params: {
     .eq('barbeiro_id', barbeiro_id)
     .gte('data', dataInicio).lte('data', dataFim).order('data', { ascending: false })
   if (errServicos) throw new Error(`Erro ao buscar serviços: ${errServicos.message}`)
-  const detalheServicos: DetalheServicoComissao[] = (servicos ?? []).map(s => ({
-    data: s.data,
-    servico_nome: s.servicos?.nome || 'Serviço',
-    valor_cobrado: Number(s.valor || s.servicos?.preco || 0),
-    percentual_comissao: barbeiro.percentual_servico,
-    valor_comissao: Number(s.valor || s.servicos?.preco || 0) * (barbeiro.percentual_servico / 100),
-  }))
+  const detalheServicos: DetalheServicoComissao[] = (servicos ?? []).map(s => {
+    const servico = joinOne(s.servicos as { nome: string; preco: number } | { nome: string; preco: number }[] | null)
+    const valor = Number(s.valor || servico?.preco || 0)
+    return {
+      data: s.data,
+      servico_nome: servico?.nome || 'Serviço',
+      valor_cobrado: valor,
+      percentual_comissao: barbeiro.percentual_servico,
+      valor_comissao: valor * (barbeiro.percentual_servico / 100),
+    }
+  })
   const { data: vendas, error: errVendas } = await supabase
     .from('movimentacoes_estoque').select('created_at, quantidade, comissao_percentual, produtos!inner(nome, preco_venda)')
     .eq('barbeiro_id', barbeiro_id).eq('motivo', 'venda')
@@ -491,11 +510,12 @@ export async function getRelatorioComissoes(params: {
     .order('created_at', { ascending: false })
   if (errVendas) throw new Error(`Erro ao buscar vendas: ${errVendas.message}`)
   const detalheVendas: DetalheVendaComissao[] = (vendas ?? []).map(v => {
-    const valorTotal = Number(v.produtos?.preco_venda || 0) * v.quantidade
+    const produto = joinOne(v.produtos as { nome: string; preco_venda: number } | { nome: string; preco_venda: number }[] | null)
+    const valorTotal = Number(produto?.preco_venda || 0) * v.quantidade
     const perc = v.comissao_percentual ?? barbeiro.percentual_produto
     return {
       data: v.created_at,
-      produto_nome: v.produtos?.nome || 'Produto',
+      produto_nome: produto?.nome || 'Produto',
       quantidade: v.quantidade,
       valor_total: valorTotal,
       percentual_comissao: perc,

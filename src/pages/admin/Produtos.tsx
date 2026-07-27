@@ -23,7 +23,6 @@ export default function Produtos() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [filtroProduto, setFiltroProduto] = useState('')
-
   const [formNome, setFormNome] = useState('')
   const [formPreco, setFormPreco] = useState('')
   const [formEstoque, setFormEstoque] = useState('0')
@@ -32,8 +31,6 @@ export default function Produtos() {
   const [movObservacao, setMovObservacao] = useState('')
   const [movBarbeiroId, setMovBarbeiroId] = useState('')
   const [movComissao, setMovComissao] = useState(0)
-
-  // 🔥 NOVO: Calcular valor total automaticamente
   const [valorTotal, setValorTotal] = useState(0)
 
   useEffect(() => {
@@ -71,7 +68,6 @@ export default function Produtos() {
     setMovObservacao('')
     setMovBarbeiroId('')
     setMovComissao(0)
-
     if (produto && tipo === 'movimentacoes') loadMovimentacoes(produto.id)
     if (tipo === 'produto') {
       setFormNome(produto?.nome || '')
@@ -101,13 +97,17 @@ export default function Produtos() {
     try {
       if (produtoSelecionado) {
         await updateProduto(produtoSelecionado.id, {
-          nome: formNome.trim(), preco_venda: Number(formPreco.replace(',', '.')) || 0,
-          estoque_atual: Number(formEstoque) || 0, estoque_minimo: Number(formEstoqueMinimo) || 5,
+          nome: formNome.trim(),
+          preco_venda: Number(formPreco.replace(',', '.')) || 0,
+          estoque_atual: Number(formEstoque) || 0,
+          estoque_minimo: Number(formEstoqueMinimo) || 5,
         })
       } else {
         await createProduto({
-          nome: formNome.trim(), preco_venda: Number(formPreco.replace(',', '.')) || 0,
-          estoque_atual: Number(formEstoque) || 0, estoque_minimo: Number(formEstoqueMinimo) || 5,
+          nome: formNome.trim(),
+          preco_venda: Number(formPreco.replace(',', '.')) || 0,
+          estoque_atual: Number(formEstoque) || 0,
+          estoque_minimo: Number(formEstoqueMinimo) || 5,
         })
       }
       fecharModal(); await loadProdutos()
@@ -122,7 +122,10 @@ export default function Produtos() {
     setSaving(true)
     try {
       await registrarEntradaEstoque({
-        produto_id: produtoSelecionado.id, quantidade: qtd, motivo: 'compra', observacao: movObservacao || undefined,
+        produto_id: produtoSelecionado.id,
+        quantidade: qtd,
+        motivo: 'compra',
+        observacao: movObservacao || undefined,
       })
       fecharModal(); await loadProdutos()
     } catch (err: any) { setError(err.message) }
@@ -136,8 +139,11 @@ export default function Produtos() {
     setSaving(true)
     try {
       await registrarSaidaEstoque({
-        produto_id: produtoSelecionado.id, quantidade: qtd, motivo: 'venda',
-        observacao: movObservacao || undefined, barbeiro_id: movBarbeiroId || undefined,
+        produto_id: produtoSelecionado.id,
+        quantidade: qtd,
+        motivo: 'venda',
+        observacao: movObservacao || undefined,
+        barbeiro_id: movBarbeiroId || undefined,
       })
       fecharModal(); await loadProdutos()
     } catch (err: any) { setError(err.message) }
@@ -150,17 +156,27 @@ export default function Produtos() {
     catch (err: any) { alert(err.message) }
   }
 
-  const produtosFiltrados = produtos.filter(p => p.nome.toLowerCase().includes(filtroProduto.toLowerCase()))
+  const produtosFiltrados = produtos.filter(p =>
+    p.nome.toLowerCase().includes(filtroProduto.toLowerCase())
+  )
 
+  // 🔧 FIX: converte explicitamente para número para evitar TS2367
   const getStatus = (p: Produto) => {
-    if (p.estoque_atual === 0) return { cor: '#ff6b6b', texto: 'Sem estoque' }
-    if (p.estoque_atual <= p.estoque_minimo) return { cor: '#ff9800', texto: 'Estoque baixo' }
+    const estoque = Number(p.estoque_atual)
+    const minimo = Number(p.estoque_minimo)
+    if (estoque === 0) return { cor: '#ff6b6b', texto: 'Sem estoque' }
+    if (estoque <= minimo) return { cor: '#ff9800', texto: 'Estoque baixo' }
     return { cor: '#4caf50', texto: 'OK' }
   }
 
+  // 🔧 FIX: helpers para comparar com número convertido
+  const estoqueZero = (p: Produto) => Number(p.estoque_atual) === 0
+  const estoqueBaixo = (p: Produto) => Number(p.estoque_atual) <= Number(p.estoque_minimo)
+
   const inputStyle: React.CSSProperties = {
     backgroundColor: '#0d0d0d', border: '1px solid #333', borderRadius: '6px',
-    padding: '10px 12px', color: '#f5f5f5', fontSize: '14px', outline: 'none', width: '100%', boxSizing: 'border-box',
+    padding: '10px 12px', color: '#f5f5f5', fontSize: '14px', outline: 'none',
+    width: '100%', boxSizing: 'border-box',
   }
 
   const selectStyle: React.CSSProperties = {
@@ -170,22 +186,33 @@ export default function Produtos() {
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#0d0d0d', color: '#f5f5f5', padding: '32px' }}>
       {/* Título + Botão Novo Produto */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', borderBottom: '1px solid #222', paddingBottom: '12px' }}>
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        marginBottom: '24px', borderBottom: '1px solid #222', paddingBottom: '12px'
+      }}>
         <h1 style={{ fontSize: '28px', fontWeight: 700, color: '#D4AF37' }}>📦 Produtos</h1>
-        <button onClick={() => abrirModal('produto')} style={{ backgroundColor: '#D4AF37', color: '#0d0d0d', border: 'none', borderRadius: '6px', padding: '10px 20px', fontSize: '14px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <button onClick={() => abrirModal('produto')} style={{
+          backgroundColor: '#D4AF37', color: '#0d0d0d', border: 'none', borderRadius: '6px',
+          padding: '10px 20px', fontSize: '14px', fontWeight: 700, cursor: 'pointer',
+          display: 'flex', alignItems: 'center', gap: '8px'
+        }}>
           <Plus size={18} /> Novo Produto
         </button>
       </div>
 
       {/* Filtro */}
       <div style={{ marginBottom: '16px' }}>
-        <input style={inputStyle} placeholder="Buscar produto..." value={filtroProduto} onChange={e => setFiltroProduto(e.target.value)} />
+        <input style={inputStyle} placeholder="Buscar produto..."
+          value={filtroProduto} onChange={e => setFiltroProduto(e.target.value)} />
       </div>
 
       {loading ? (
         <p style={{ color: '#aaa' }}>Carregando...</p>
       ) : (
-        <div style={{ backgroundColor: '#161616', border: '1px solid #222', borderRadius: '8px', padding: '24px', marginBottom: '24px' }}>
+        <div style={{
+          backgroundColor: '#161616', border: '1px solid #222', borderRadius: '8px',
+          padding: '24px', marginBottom: '24px'
+        }}>
           {produtosFiltrados.length === 0 && (
             <p style={{ color: '#aaa', textAlign: 'center', padding: '20px' }}>
               {filtroProduto ? 'Nenhum produto encontrado.' : 'Nenhum produto cadastrado.'}
@@ -208,39 +235,71 @@ export default function Produtos() {
                   {produtosFiltrados.map(p => {
                     const st = getStatus(p)
                     return (
-                      <tr key={p.id} style={{ backgroundColor: p.estoque_atual === 0 ? '#1a0a0a' : undefined }}>
+                      <tr key={p.id} style={{
+                        backgroundColor: estoqueZero(p) ? '#1a0a0a' : undefined
+                      }}>
                         <td style={{ padding: '10px 12px', borderBottom: '1px solid #222' }}>
                           <Package size={16} color="#D4AF37" style={{ marginRight: '8px', verticalAlign: 'middle' }} />
                           <span style={{ fontWeight: 500 }}>{p.nome}</span>
                         </td>
-                        <td style={{ padding: '10px 12px', borderBottom: '1px solid #222' }}>R$ {Number(p.preco_venda).toFixed(2)}</td>
                         <td style={{ padding: '10px 12px', borderBottom: '1px solid #222' }}>
-                          <span style={{ fontWeight: 700, fontSize: '16px', color: p.estoque_atual === 0 ? '#ff6b6b' : p.estoque_atual <= p.estoque_minimo ? '#ff9800' : '#4caf50' }}>
+                          R$ {Number(p.preco_venda).toFixed(2)}
+                        </td>
+                        <td style={{ padding: '10px 12px', borderBottom: '1px solid #222' }}>
+                          <span style={{
+                            fontWeight: 700, fontSize: '16px',
+                            color: estoqueZero(p) ? '#ff6b6b' : estoqueBaixo(p) ? '#ff9800' : '#4caf50'
+                          }}>
                             {p.estoque_atual}
                           </span>
                         </td>
                         <td style={{ padding: '10px 12px', borderBottom: '1px solid #222' }}>{p.estoque_minimo}</td>
                         <td style={{ padding: '10px 12px', borderBottom: '1px solid #222' }}>
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', backgroundColor: st.cor + '20', color: st.cor, padding: '2px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 600 }}>
-                            {p.estoque_atual <= p.estoque_minimo && <AlertTriangle size={12} />}
+                          <span style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '4px',
+                            backgroundColor: st.cor + '20', color: st.cor,
+                            padding: '2px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 600
+                          }}>
+                            {estoqueBaixo(p) && <AlertTriangle size={12} />}
                             {st.texto}
                           </span>
                         </td>
                         <td style={{ padding: '10px 12px', borderBottom: '1px solid #222' }}>
                           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                            <button onClick={() => abrirModal('entrada', p)} style={{ backgroundColor: '#D4AF37', color: '#0d0d0d', border: 'none', borderRadius: '6px', padding: '4px 8px', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <button onClick={() => abrirModal('entrada', p)} style={{
+                              backgroundColor: '#D4AF37', color: '#0d0d0d', border: 'none',
+                              borderRadius: '6px', padding: '4px 8px', fontSize: '11px',
+                              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px'
+                            }}>
                               <ArrowDownToLine size={14} /> Entrada
                             </button>
-                            <button onClick={() => abrirModal('saida', p)} disabled={p.estoque_atual === 0} style={{ backgroundColor: '#ff9800', color: '#0d0d0d', border: 'none', borderRadius: '6px', padding: '4px 8px', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', opacity: p.estoque_atual === 0 ? 0.5 : 1 }}>
+                            <button onClick={() => abrirModal('saida', p)}
+                              disabled={estoqueZero(p)}
+                              style={{
+                                backgroundColor: '#ff9800', color: '#0d0d0d', border: 'none',
+                                borderRadius: '6px', padding: '4px 8px', fontSize: '11px',
+                                cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px',
+                                opacity: estoqueZero(p) ? 0.5 : 1
+                              }}>
                               <ArrowUpFromLine size={14} /> Saída
                             </button>
-                            <button onClick={() => abrirModal('movimentacoes', p)} style={{ backgroundColor: 'transparent', color: '#aaa', border: '1px solid #444', borderRadius: '6px', padding: '4px 8px', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <button onClick={() => abrirModal('movimentacoes', p)} style={{
+                              backgroundColor: 'transparent', color: '#aaa', border: '1px solid #444',
+                              borderRadius: '6px', padding: '4px 8px', fontSize: '11px',
+                              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px'
+                            }}>
                               <History size={14} /> Histórico
                             </button>
-                            <button onClick={() => abrirModal('produto', p)} style={{ backgroundColor: 'transparent', color: '#aaa', border: '1px solid #444', borderRadius: '6px', padding: '4px 8px', fontSize: '11px', cursor: 'pointer' }}>
+                            <button onClick={() => abrirModal('produto', p)} style={{
+                              backgroundColor: 'transparent', color: '#aaa', border: '1px solid #444',
+                              borderRadius: '6px', padding: '4px 8px', fontSize: '11px', cursor: 'pointer'
+                            }}>
                               Editar
                             </button>
-                            <button onClick={() => handleExcluir(p.id)} style={{ backgroundColor: 'transparent', color: '#ff6b6b', border: '1px solid #ff6b6b', borderRadius: '4px', padding: '4px 10px', fontSize: '12px', cursor: 'pointer' }}>
+                            <button onClick={() => handleExcluir(p.id)} style={{
+                              backgroundColor: 'transparent', color: '#ff6b6b', border: '1px solid #ff6b6b',
+                              borderRadius: '4px', padding: '4px 10px', fontSize: '12px', cursor: 'pointer'
+                            }}>
                               <Trash2 size={14} />
                             </button>
                           </div>
@@ -257,27 +316,62 @@ export default function Produtos() {
 
       {/* Modal Novo/Editar Produto */}
       {modalAberto === 'produto' && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={fecharModal}>
-          <div style={{ backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '32px', width: '90%', maxWidth: '500px' }} onClick={e => e.stopPropagation()}>
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center',
+          justifyContent: 'center', zIndex: 1000
+        }} onClick={fecharModal}>
+          <div style={{
+            backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '8px',
+            padding: '32px', width: '90%', maxWidth: '500px'
+          }} onClick={e => e.stopPropagation()}>
             <h2 style={{ fontSize: '18px', color: '#D4AF37', marginBottom: '16px', fontWeight: 600 }}>
               {produtoSelecionado ? 'Editar Produto' : 'Novo Produto'}
             </h2>
-            {error && <div style={{ backgroundColor: '#3a1a1a', color: '#ff6b6b', padding: '10px', borderRadius: '4px', marginBottom: '16px', fontSize: '13px' }}>{error}</div>}
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '14px', color: '#cfcfcf', marginBottom: '16px' }}>
-              Nome * <input style={inputStyle} value={formNome} onChange={e => setFormNome(e.target.value)} placeholder="Ex: Shampoo" />
+            {error && (
+              <div style={{
+                backgroundColor: '#3a1a1a', color: '#ff6b6b', padding: '10px',
+                borderRadius: '4px', marginBottom: '16px', fontSize: '13px'
+              }}>{error}</div>
+            )}
+            <label style={{
+              display: 'flex', flexDirection: 'column', gap: '6px',
+              fontSize: '14px', color: '#cfcfcf', marginBottom: '16px'
+            }}>
+              Nome * <input style={inputStyle} value={formNome}
+                onChange={e => setFormNome(e.target.value)} placeholder="Ex: Shampoo" />
             </label>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '14px', color: '#cfcfcf', marginBottom: '16px' }}>
-              Preço (R$) <input style={inputStyle} value={formPreco} onChange={e => setFormPreco(e.target.value)} placeholder="39,90" />
+            <label style={{
+              display: 'flex', flexDirection: 'column', gap: '6px',
+              fontSize: '14px', color: '#cfcfcf', marginBottom: '16px'
+            }}>
+              Preço (R$) <input style={inputStyle} value={formPreco}
+                onChange={e => setFormPreco(e.target.value)} placeholder="39,90" />
             </label>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '14px', color: '#cfcfcf', marginBottom: '16px' }}>
-              Estoque Inicial <input style={inputStyle} type="number" value={formEstoque} onChange={e => setFormEstoque(e.target.value)} min="0" />
+            <label style={{
+              display: 'flex', flexDirection: 'column', gap: '6px',
+              fontSize: '14px', color: '#cfcfcf', marginBottom: '16px'
+            }}>
+              Estoque Inicial <input style={inputStyle} type="number"
+                value={formEstoque} onChange={e => setFormEstoque(e.target.value)} min="0" />
             </label>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '14px', color: '#cfcfcf', marginBottom: '16px' }}>
-              Estoque Mínimo <input style={inputStyle} type="number" value={formEstoqueMinimo} onChange={e => setFormEstoqueMinimo(e.target.value)} min="0" />
+            <label style={{
+              display: 'flex', flexDirection: 'column', gap: '6px',
+              fontSize: '14px', color: '#cfcfcf', marginBottom: '16px'
+            }}>
+              Estoque Mínimo <input style={inputStyle} type="number"
+                value={formEstoqueMinimo} onChange={e => setFormEstoqueMinimo(e.target.value)} min="0" />
             </label>
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '24px' }}>
-              <button onClick={fecharModal} style={{ backgroundColor: 'transparent', color: '#aaa', border: '1px solid #444', borderRadius: '6px', padding: '10px 20px', fontSize: '14px', cursor: 'pointer' }}>Cancelar</button>
-              <button onClick={handleSalvarProduto} disabled={saving} style={{ backgroundColor: '#D4AF37', color: '#0d0d0d', border: 'none', borderRadius: '6px', padding: '10px 20px', fontSize: '14px', fontWeight: 700, cursor: 'pointer' }}>
+              <button onClick={fecharModal} style={{
+                backgroundColor: 'transparent', color: '#aaa', border: '1px solid #444',
+                borderRadius: '6px', padding: '10px 20px', fontSize: '14px', cursor: 'pointer'
+              }}>Cancelar</button>
+              <button onClick={handleSalvarProduto} disabled={saving} style={{
+                backgroundColor: '#D4AF37', color: '#0d0d0d', border: 'none',
+                borderRadius: '6px', padding: '10px 20px', fontSize: '14px', fontWeight: 700,
+                cursor: 'pointer'
+              }}>
                 {saving ? 'Salvando...' : 'Salvar'}
               </button>
             </div>
@@ -287,20 +381,52 @@ export default function Produtos() {
 
       {/* Modal Entrada */}
       {modalAberto === 'entrada' && produtoSelecionado && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={fecharModal}>
-          <div style={{ backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '32px', width: '90%', maxWidth: '500px' }} onClick={e => e.stopPropagation()}>
-            <h2 style={{ fontSize: '18px', color: '#D4AF37', marginBottom: '16px', fontWeight: 600 }}>📥 Registrar Entrada</h2>
-            <p style={{ color: '#aaa', marginBottom: '16px' }}>Produto: <strong style={{ color: '#D4AF37' }}>{produtoSelecionado.nome}</strong><br />Estoque atual: <strong>{produtoSelecionado.estoque_atual}</strong></p>
-            {error && <div style={{ backgroundColor: '#3a1a1a', color: '#ff6b6b', padding: '10px', borderRadius: '4px', marginBottom: '16px', fontSize: '13px' }}>{error}</div>}
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '14px', color: '#cfcfcf', marginBottom: '16px' }}>
-              Quantidade * <input style={inputStyle} type="number" value={movQuantidade} onChange={e => setMovQuantidade(e.target.value)} min="1" />
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center',
+          justifyContent: 'center', zIndex: 1000
+        }} onClick={fecharModal}>
+          <div style={{
+            backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '8px',
+            padding: '32px', width: '90%', maxWidth: '500px'
+          }} onClick={e => e.stopPropagation()}>
+            <h2 style={{ fontSize: '18px', color: '#D4AF37', marginBottom: '16px', fontWeight: 600 }}>
+              📥 Registrar Entrada
+            </h2>
+            <p style={{ color: '#aaa', marginBottom: '16px' }}>
+              Produto: <strong style={{ color: '#D4AF37' }}>{produtoSelecionado.nome}</strong><br />
+              Estoque atual: <strong>{produtoSelecionado.estoque_atual}</strong>
+            </p>
+            {error && (
+              <div style={{
+                backgroundColor: '#3a1a1a', color: '#ff6b6b', padding: '10px',
+                borderRadius: '4px', marginBottom: '16px', fontSize: '13px'
+              }}>{error}</div>
+            )}
+            <label style={{
+              display: 'flex', flexDirection: 'column', gap: '6px',
+              fontSize: '14px', color: '#cfcfcf', marginBottom: '16px'
+            }}>
+              Quantidade * <input style={inputStyle} type="number"
+                value={movQuantidade} onChange={e => setMovQuantidade(e.target.value)} min="1" />
             </label>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '14px', color: '#cfcfcf', marginBottom: '16px' }}>
-              Observação <input style={inputStyle} value={movObservacao} onChange={e => setMovObservacao(e.target.value)} placeholder="Compra do fornecedor" />
+            <label style={{
+              display: 'flex', flexDirection: 'column', gap: '6px',
+              fontSize: '14px', color: '#cfcfcf', marginBottom: '16px'
+            }}>
+              Observação <input style={inputStyle} value={movObservacao}
+                onChange={e => setMovObservacao(e.target.value)} placeholder="Compra do fornecedor" />
             </label>
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '24px' }}>
-              <button onClick={fecharModal} style={{ backgroundColor: 'transparent', color: '#aaa', border: '1px solid #444', borderRadius: '6px', padding: '10px 20px', fontSize: '14px', cursor: 'pointer' }}>Cancelar</button>
-              <button onClick={handleEntrada} disabled={saving} style={{ backgroundColor: '#D4AF37', color: '#0d0d0d', border: 'none', borderRadius: '6px', padding: '10px 20px', fontSize: '14px', fontWeight: 700, cursor: 'pointer' }}>
+              <button onClick={fecharModal} style={{
+                backgroundColor: 'transparent', color: '#aaa', border: '1px solid #444',
+                borderRadius: '6px', padding: '10px 20px', fontSize: '14px', cursor: 'pointer'
+              }}>Cancelar</button>
+              <button onClick={handleEntrada} disabled={saving} style={{
+                backgroundColor: '#D4AF37', color: '#0d0d0d', border: 'none',
+                borderRadius: '6px', padding: '10px 20px', fontSize: '14px', fontWeight: 700,
+                cursor: 'pointer'
+              }}>
                 {saving ? 'Registrando...' : 'Registrar Entrada'}
               </button>
             </div>
@@ -308,31 +434,50 @@ export default function Produtos() {
         </div>
       )}
 
-      {/* Modal Saída — COM BARBEIRO + VALOR AUTOMÁTICO */}
+      {/* Modal Saída */}
       {modalAberto === 'saida' && produtoSelecionado && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={fecharModal}>
-          <div style={{ backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '32px', width: '90%', maxWidth: '500px' }} onClick={e => e.stopPropagation()}>
-            <h2 style={{ fontSize: '18px', color: '#D4AF37', marginBottom: '16px', fontWeight: 600 }}>📤 Registrar Saída (Venda)</h2>
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center',
+          justifyContent: 'center', zIndex: 1000
+        }} onClick={fecharModal}>
+          <div style={{
+            backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '8px',
+            padding: '32px', width: '90%', maxWidth: '500px'
+          }} onClick={e => e.stopPropagation()}>
+            <h2 style={{ fontSize: '18px', color: '#D4AF37', marginBottom: '16px', fontWeight: 600 }}>
+              📤 Registrar Saída (Venda)
+            </h2>
             <p style={{ color: '#aaa', marginBottom: '16px' }}>
               Produto: <strong style={{ color: '#D4AF37' }}>{produtoSelecionado.nome}</strong><br />
               Estoque atual: <strong>{produtoSelecionado.estoque_atual}</strong><br />
-              Preço unitário: <strong style={{ color: '#D4AF37' }}>R$ {Number(produtoSelecionado.preco_venda).toFixed(2)}</strong>
+              Preço unitário: <strong style={{ color: '#D4AF37' }}>
+                R$ {Number(produtoSelecionado.preco_venda).toFixed(2)}</strong>
             </p>
-            {error && <div style={{ backgroundColor: '#3a1a1a', color: '#ff6b6b', padding: '10px', borderRadius: '4px', marginBottom: '16px', fontSize: '13px' }}>{error}</div>}
-
-            {/* 🔥 BARBEIRO */}
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '14px', color: '#cfcfcf', marginBottom: '16px' }}>
+            {error && (
+              <div style={{
+                backgroundColor: '#3a1a1a', color: '#ff6b6b', padding: '10px',
+                borderRadius: '4px', marginBottom: '16px', fontSize: '13px'
+              }}>{error}</div>
+            )}
+            <label style={{
+              display: 'flex', flexDirection: 'column', gap: '6px',
+              fontSize: '14px', color: '#cfcfcf', marginBottom: '16px'
+            }}>
               Barbeiro que vendeu *
-              <select style={selectStyle} value={movBarbeiroId} onChange={e => handleBarbeiroChange(e.target.value)}>
+              <select style={selectStyle} value={movBarbeiroId}
+                onChange={e => handleBarbeiroChange(e.target.value)}>
                 <option value="">Selecione um barbeiro</option>
                 {barbeiros.map(b => (
                   <option key={b.id} value={b.id}>{b.nome}</option>
                 ))}
               </select>
             </label>
-
             {movBarbeiroId && (
-              <div style={{ backgroundColor: '#D4AF3715', border: '1px solid #D4AF3740', borderRadius: '6px', padding: '12px', marginBottom: '16px' }}>
+              <div style={{
+                backgroundColor: '#D4AF3715', border: '1px solid #D4AF3740',
+                borderRadius: '6px', padding: '12px', marginBottom: '16px'
+              }}>
                 <p style={{ color: '#D4AF37', fontSize: '13px', margin: 0 }}>
                   💰 Comissão do barbeiro: <strong>{movComissao}%</strong>
                   {valorTotal > 0 && (
@@ -341,14 +486,18 @@ export default function Produtos() {
                 </p>
               </div>
             )}
-
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '14px', color: '#cfcfcf', marginBottom: '16px' }}>
-              Quantidade *
-              <input style={inputStyle} type="number" value={movQuantidade} onChange={e => setMovQuantidade(e.target.value)} min="1" max={produtoSelecionado.estoque_atual} />
+            <label style={{
+              display: 'flex', flexDirection: 'column', gap: '6px',
+              fontSize: '14px', color: '#cfcfcf', marginBottom: '16px'
+            }}>
+              Quantidade * <input style={inputStyle} type="number"
+                value={movQuantidade} onChange={e => setMovQuantidade(e.target.value)}
+                min="1" max={produtoSelecionado.estoque_atual} />
             </label>
-
-            {/* 🔥 VALOR TOTAL AUTOMÁTICO */}
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '14px', color: '#cfcfcf', marginBottom: '16px' }}>
+            <label style={{
+              display: 'flex', flexDirection: 'column', gap: '6px',
+              fontSize: '14px', color: '#cfcfcf', marginBottom: '16px'
+            }}>
               Valor Total (R$)
               <div style={{
                 backgroundColor: '#0d0d0d', border: '1px solid #333', borderRadius: '6px',
@@ -357,13 +506,23 @@ export default function Produtos() {
                 R$ {valorTotal.toFixed(2)}
               </div>
             </label>
-
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '14px', color: '#cfcfcf', marginBottom: '16px' }}>
-              Observação <input style={inputStyle} value={movObservacao} onChange={e => setMovObservacao(e.target.value)} placeholder="Venda avulsa" />
+            <label style={{
+              display: 'flex', flexDirection: 'column', gap: '6px',
+              fontSize: '14px', color: '#cfcfcf', marginBottom: '16px'
+            }}>
+              Observação <input style={inputStyle} value={movObservacao}
+                onChange={e => setMovObservacao(e.target.value)} placeholder="Venda avulsa" />
             </label>
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '24px' }}>
-              <button onClick={fecharModal} style={{ backgroundColor: 'transparent', color: '#aaa', border: '1px solid #444', borderRadius: '6px', padding: '10px 20px', fontSize: '14px', cursor: 'pointer' }}>Cancelar</button>
-              <button onClick={handleSaida} disabled={saving || !movBarbeiroId} style={{ backgroundColor: '#ff9800', color: '#0d0d0d', border: 'none', borderRadius: '6px', padding: '10px 20px', fontSize: '14px', fontWeight: 700, cursor: 'pointer', opacity: saving || !movBarbeiroId ? 0.5 : 1 }}>
+              <button onClick={fecharModal} style={{
+                backgroundColor: 'transparent', color: '#aaa', border: '1px solid #444',
+                borderRadius: '6px', padding: '10px 20px', fontSize: '14px', cursor: 'pointer'
+              }}>Cancelar</button>
+              <button onClick={handleSaida} disabled={saving || !movBarbeiroId} style={{
+                backgroundColor: '#ff9800', color: '#0d0d0d', border: 'none',
+                borderRadius: '6px', padding: '10px 20px', fontSize: '14px', fontWeight: 700,
+                cursor: 'pointer', opacity: saving || !movBarbeiroId ? 0.5 : 1
+              }}>
                 {saving ? 'Registrando...' : 'Registrar Saída'}
               </button>
             </div>
@@ -371,12 +530,26 @@ export default function Produtos() {
         </div>
       )}
 
-      {/* Modal Histórico — COM BARBEIRO + COMISSÃO */}
+      {/* Modal Histórico */}
       {modalAberto === 'movimentacoes' && produtoSelecionado && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={fecharModal}>
-          <div style={{ backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', padding: '32px', width: '90%', maxWidth: '700px', maxHeight: '90vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
-            <h2 style={{ fontSize: '18px', color: '#D4AF37', marginBottom: '16px', fontWeight: 600 }}>📊 Histórico — {produtoSelecionado.nome}</h2>
-            {movimentacoes.length === 0 && <p style={{ color: '#aaa', textAlign: 'center', padding: '20px' }}>Nenhuma movimentação.</p>}
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center',
+          justifyContent: 'center', zIndex: 1000
+        }} onClick={fecharModal}>
+          <div style={{
+            backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '8px',
+            padding: '32px', width: '90%', maxWidth: '700px',
+            maxHeight: '90vh', overflowY: 'auto'
+          }} onClick={e => e.stopPropagation()}>
+            <h2 style={{ fontSize: '18px', color: '#D4AF37', marginBottom: '16px', fontWeight: 600 }}>
+              📊 Histórico — {produtoSelecionado.nome}
+            </h2>
+            {movimentacoes.length === 0 && (
+              <p style={{ color: '#aaa', textAlign: 'center', padding: '20px' }}>
+                Nenhuma movimentação.
+              </p>
+            )}
             {movimentacoes.length > 0 && (
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
@@ -394,13 +567,24 @@ export default function Produtos() {
                   <tbody>
                     {movimentacoes.map(m => (
                       <tr key={m.id}>
-                        <td style={{ padding: '10px 12px', borderBottom: '1px solid #222' }}>{new Date(m.created_at).toLocaleDateString('pt-BR')}</td>
                         <td style={{ padding: '10px 12px', borderBottom: '1px solid #222' }}>
-                          <span style={{ display: 'inline-flex', padding: '2px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 600, backgroundColor: m.tipo === 'entrada' ? '#1a3a1a' : '#3a1a1a', color: m.tipo === 'entrada' ? '#4caf50' : '#ff6b6b' }}>
+                          {new Date(m.created_at).toLocaleDateString('pt-BR')}
+                        </td>
+                        <td style={{ padding: '10px 12px', borderBottom: '1px solid #222' }}>
+                          <span style={{
+                            display: 'inline-flex', padding: '2px 8px', borderRadius: '4px',
+                            fontSize: '12px', fontWeight: 600,
+                            backgroundColor: m.tipo === 'entrada' ? '#1a3a1a' : '#3a1a1a',
+                            color: m.tipo === 'entrada' ? '#4caf50' : '#ff6b6b'
+                          }}>
                             {m.tipo === 'entrada' ? '📥 Entrada' : '📤 Saída'}
                           </span>
                         </td>
-                        <td style={{ padding: '10px 12px', borderBottom: '1px solid #222', fontWeight: 700, fontSize: '16px', color: m.tipo === 'entrada' ? '#4caf50' : '#ff6b6b' }}>
+                        <td style={{
+                          padding: '10px 12px', borderBottom: '1px solid #222',
+                          fontWeight: 700, fontSize: '16px',
+                          color: m.tipo === 'entrada' ? '#4caf50' : '#ff6b6b'
+                        }}>
                           {m.tipo === 'entrada' ? '+' : '-'}{m.quantidade}
                         </td>
                         <td style={{ padding: '10px 12px', borderBottom: '1px solid #222', color: '#aaa' }}>
@@ -412,7 +596,9 @@ export default function Produtos() {
                         <td style={{ padding: '10px 12px', borderBottom: '1px solid #222', color: '#aaa', textTransform: 'capitalize' }}>
                           {m.motivo === 'venda' ? 'Venda' : m.motivo === 'compra' ? 'Compra' : m.motivo === 'ajuste' ? 'Ajuste' : 'Perda'}
                         </td>
-                        <td style={{ padding: '10px 12px', borderBottom: '1px solid #222', color: '#888', fontSize: '12px' }}>{m.observacao || '-'}</td>
+                        <td style={{ padding: '10px 12px', borderBottom: '1px solid #222', color: '#888', fontSize: '12px' }}>
+                          {m.observacao || '-'}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -420,7 +606,10 @@ export default function Produtos() {
               </div>
             )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '16px' }}>
-              <button onClick={fecharModal} style={{ backgroundColor: 'transparent', color: '#aaa', border: '1px solid #444', borderRadius: '6px', padding: '10px 20px', fontSize: '14px', cursor: 'pointer' }}>Fechar</button>
+              <button onClick={fecharModal} style={{
+                backgroundColor: 'transparent', color: '#aaa', border: '1px solid #444',
+                borderRadius: '6px', padding: '10px 20px', fontSize: '14px', cursor: 'pointer'
+              }}>Fechar</button>
             </div>
           </div>
         </div>

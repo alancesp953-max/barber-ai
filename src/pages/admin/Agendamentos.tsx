@@ -1,5 +1,5 @@
 import { Plus, Trash2, ChevronLeft, ChevronRight } from 'lucide-react'
-import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { CheckinModal } from '../../components/CheckinModal'
 import { PageHeader } from '../../components/PageHeader'
@@ -20,13 +20,6 @@ const statusColors: Record<AppointmentStatus, string> = {
   confirmado: 'bg-barber-gold/10 text-barber-gold',
   concluido: 'bg-emerald-500/10 text-emerald-400',
   cancelado: 'bg-red-500/10 text-red-400',
-}
-
-const statusBgColors: Record<AppointmentStatus, string> = {
-  pendente: 'bg-blue-500/20 border-l-blue-400',
-  confirmado: 'bg-barber-gold/20 border-l-barber-gold',
-  concluido: 'bg-emerald-500/20 border-l-emerald-400',
-  cancelado: 'bg-red-500/20 border-l-red-400',
 }
 
 const appointmentStatuses = ['pendente', 'confirmado', 'concluido', 'cancelado'] as const
@@ -235,7 +228,7 @@ export default function Agendamentos() {
     setSelectedDate(null)
   }
 
-  const handleCreate = async (e: React.FormEvent) => {
+  const handleCreate = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     const form = new FormData(e.currentTarget)
 
@@ -306,11 +299,17 @@ export default function Agendamentos() {
     <>
       <PageHeader
         title={t('appointments.title')}
-        button={{
-          label: t('appointments.newAppointment'),
-          onClick: () => setShowForm(!showForm),
-          icon: Plus,
-        }}
+        description={t('appointments.description')}
+        action={
+          <button
+            type="button"
+            onClick={() => setShowForm(!showForm)}
+            className="flex items-center gap-2 rounded-lg bg-barber-gold px-4 py-2 text-sm font-semibold text-barber-black hover:bg-barber-gold/90"
+          >
+            <Plus className="h-4 w-4" />
+            {t('appointments.newAppointment')}
+          </button>
+        }
       />
 
       <div className="mb-4">
@@ -534,6 +533,7 @@ export default function Agendamentos() {
 
       <CheckinModal
         appointment={checkinAppointment}
+        open={!!checkinAppointment}
         onClose={() => setCheckinAppointment(null)}
         onUpdated={() => load()}
       />

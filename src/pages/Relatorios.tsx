@@ -5,21 +5,33 @@ import {
   CartesianGrid, PieChart, Pie, Cell, Legend,
 } from 'recharts';
 import {
-  FileText, Search, DollarSign, Scissors, Users, TrendingUp, Calendar,
+  FileText, Search, DollarSign, Scissors, Users, TrendingUp,
 } from 'lucide-react';
 import jsPDF from 'jspdf';
-import 'jspdf-autotable';
+import autoTable from 'jspdf-autotable';
 
 const CORES = ['#c9a227', '#1a1a1a', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#3b82f6', '#ec4899'];
 
-function formatarMoeda(valor) {
+type RelatorioAgendamento = {
+  data: string
+  horario: string
+  barbeiros?: { nome: string } | { nome: string }[] | null
+  servicos?: { nome: string; preco: number } | { nome: string; preco: number }[] | null
+}
+
+function formatarMoeda(valor: number) {
   return valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+function joinOne<T>(value: T | T[] | null | undefined): T | null {
+  if (value == null) return null
+  return Array.isArray(value) ? value[0] ?? null : value
 }
 
 export default function Relatorios() {
   const [dataInicio, setDataInicio] = useState('');
   const [dataFim, setDataFim] = useState('');
-  const [agendamentos, setAgendamentos] = useState([]);
+  const [agendamentos, setAgendamentos] = useState<RelatorioAgendamento[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -49,15 +61,16 @@ export default function Relatorios() {
   useEffect(() => { buscarDados(); }, [dataInicio, dataFim]);
 
   const relatorio = useMemo(() => {
-    const barbeiroMap = {};
-    const servicoMap = {};
+    const barbeiroMap: Record<string, { quantidade: number; receita: number }> = {};
+    const servicoMap: Record<string, { quantidade: number; receita: number }> = {};
     let receitaTotal = 0;
     let quantidadeTotal = 0;
 
     agendamentos.forEach((item) => {
-      const barbeiro = item.barbeiros?.nome || 'Desconhecido';
-      const servico = item.servicos?.nome || 'Desconhecido';
-      const preco = Number(item.servicos?.preco) || 0;
+      const barbeiro = joinOne(item.barbeiros)?.nome || 'Desconhecido';
+      const servicoInfo = joinOne(item.servicos);
+      const servico = servicoInfo?.nome || 'Desconhecido';
+      const preco = Number(servicoInfo?.preco) || 0;
 
       if (!barbeiroMap[barbeiro]) {
         barbeiroMap[barbeiro] = { quantidade: 0, receita: 0 };
@@ -109,14 +122,18 @@ export default function Relatorios() {
     doc.text('Periodo: ' + dataInicio + ' a ' + dataFim, 14, 30);
     doc.text('Receita Total: ' + formatarMoeda(relatorio.receitaTotal), 14, 38);
     doc.text('Total de Atendimentos: ' + relatorio.quantidadeTotal, 14, 46);
-    const linhas = agendamentos.map((item) => [
-      item.data ? new Date(item.data + 'T00:00:00').toLocaleDateString('pt-BR') : '-',
-      item.horario || '-',
-      item.barbeiros?.nome || 'Desconhecido',
-      item.servicos?.nome || 'Desconhecido',
-      formatarMoeda(Number(item.servicos?.preco) || 0),
-    ]);
-    doc.autoTable({
+    const linhas = agendamentos.map((item) => {
+      const barbeiro = joinOne(item.barbeiros)?.nome || 'Desconhecido';
+      const servicoInfo = joinOne(item.servicos);
+      return [
+        item.data ? new Date(item.data + 'T00:00:00').toLocaleDateString('pt-BR') : '-',
+        item.horario || '-',
+        barbeiro,
+        servicoInfo?.nome || 'Desconhecido',
+        formatarMoeda(Number(servicoInfo?.preco) || 0),
+      ];
+    });
+    autoTable(doc, {
       head: [['Data', 'Horario', 'Barbeiro', 'Servico', 'Receita']],
       body: linhas, startY: 55,
       headStyles: { fillColor: [26, 26, 26], textColor: 255, fontStyle: 'bold' },
@@ -226,7 +243,7 @@ export default function Relatorios() {
                     <CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" />
                     <XAxis dataKey="barbeiro" tick={{ fill: '#000', fontWeight: 700 }} />
                     <YAxis tick={{ fill: '#000', fontWeight: 700 }} tickFormatter={(v) => 'R$' + v} />
-                    <Tooltip formatter={(v) => formatarMoeda(v)} contentStyle={{ backgroundColor: '#fff', border: '2px solid #1a1a1a', color: '#000' }} itemStyle={{ color: '#000', fontWeight: 700 }} />
+                    <Tooltip formatter={(v) => formatarMoeda(Number(v ?? 0))} contentStyle={{ backgroundColor: '#fff', border: '2px solid #1a1a1a', color: '#000' }} itemStyle={{ color: '#000', fontWeight: 700 }} />
                     <Bar dataKey="receita" fill="#1a1a1a" stroke="#c9a227" strokeWidth={2} radius={[6, 6, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -240,7 +257,7 @@ export default function Relatorios() {
                   <PieChart>
                     <Pie data={relatorio.servicosPorTipo} dataKey="quantidade" nameKey="servico"
                       cx="50%" cy="50%" outerRadius={100}
-                      label={({ name, percent }) => name + ': ' + (percent * 100).toFixed(0) + '%'}>
+                      label={({ name, percent }) => name + ': ' + ((percent ?? 0) * 100).toFixed(0) + '%'}>
                       {relatorio.servicosPorTipo.map((_, i) => (
                         <Cell key={i} fill={CORES[i % CORES.length]} stroke="#1a1a1a" strokeWidth={2} />
                       ))}
@@ -264,19 +281,23 @@ export default function Relatorios() {
                       </tr>
                     </thead>
                     <tbody>
-                      {agendamentos.map((item, i) => (
+                      {agendamentos.map((item, i) => {
+                        const barbeiro = joinOne(item.barbeiros)?.nome || 'Desconhecido'
+                        const servicoInfo = joinOne(item.servicos)
+                        return (
                         <tr key={i} style={{ backgroundColor: i % 2 === 0 ? '#fff' : '#f3f4f6' }}>
                           <td style={{ padding: 12, fontWeight: 700, color: '#000' }}>
                             {item.data ? new Date(item.data + 'T00:00:00').toLocaleDateString('pt-BR') : '-'}
                           </td>
                           <td style={{ padding: 12, fontWeight: 700, color: '#000' }}>{item.horario || '-'}</td>
-                          <td style={{ padding: 12, fontWeight: 700, color: '#000' }}>{item.barbeiros?.nome || 'Desconhecido'}</td>
-                          <td style={{ padding: 12, fontWeight: 700, color: '#000' }}>{item.servicos?.nome || 'Desconhecido'}</td>
+                          <td style={{ padding: 12, fontWeight: 700, color: '#000' }}>{barbeiro}</td>
+                          <td style={{ padding: 12, fontWeight: 700, color: '#000' }}>{servicoInfo?.nome || 'Desconhecido'}</td>
                           <td style={{ padding: 12, textAlign: 'right', fontWeight: 900, color: '#000' }}>
-                            {formatarMoeda(Number(item.servicos?.preco) || 0)}
+                            {formatarMoeda(Number(servicoInfo?.preco) || 0)}
                           </td>
                         </tr>
-                      ))}
+                        )
+                      })}
                       {agendamentos.length === 0 && (
                         <tr>
                           <td colSpan={5} style={{ padding: 20, textAlign: 'center', color: '#000', fontWeight: 700 }}>

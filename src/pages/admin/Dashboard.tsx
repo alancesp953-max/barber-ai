@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { getBarbers, getProdutos, getMovimentacoes, getResumoComissoes } from '../../lib/api'
-import type { Barber } from '../../types/database'
 import type { Produto, ResumoComissaoBarbeiro } from '../../lib/api'
 import { useNavigate } from '@tanstack/react-router'
 import { gerarPDFResumoComissoes } from '../../utils/gerarPDF'

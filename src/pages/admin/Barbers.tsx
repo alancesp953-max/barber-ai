@@ -97,10 +97,6 @@ export default function Barbeiros() {
     padding: '10px 12px', color: '#f5f5f5', fontSize: '14px', outline: 'none', width: '100%', boxSizing: 'border-box',
   }
 
-  const selectStyle: React.CSSProperties = {
-    ...inputStyle, appearance: 'none', cursor: 'pointer',
-  }
-
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#0d0d0d', color: '#f5f5f5', padding: '32px' }}>
       {/* Título + Botão Novo */}

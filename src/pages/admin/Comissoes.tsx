@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getBarbers, getResumoComissoes, getRelatorioComissoes } from '../../lib/api'
-import type { ResumoComissaoBarbeiro, RelatorioComissaoCompleto, DetalheServicoComissao, DetalheVendaComissao } from '../../lib/api'
+import type { ResumoComissaoBarbeiro, RelatorioComissaoCompleto } from '../../lib/api'
 import type { Barber } from '../../types/database'
 import { gerarPDFResumoComissoes, gerarPDFRelatorioIndividual } from '../../utils/gerarPDF'
 
