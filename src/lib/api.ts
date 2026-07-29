@@ -11,15 +11,17 @@ function joinOne<T>(value: T | T[] | null | undefined): T | null {
 // =====================
 
 export async function requireSession() {
-  const { data: { session }, error } = await supabase.auth.getSession()
-  if (error || !session) throw new Error('Sessão inválida ou expirada')
+  const { data: { session } } = await supabase.auth.getSession()
   return session
 }
 
 export async function getCurrentUser() {
   const session = await requireSession()
+  if (!session) return null
+
   const { data, error } = await supabase.auth.getUser()
-  if (error || !data.user) throw new Error('Usuário não encontrado')
+  if (error || !data.user) return null
+
   return { session, user: data.user }
 }
 
@@ -34,6 +36,7 @@ export async function getDashboardStats() {
     supabase.from('agendamentos').select('*', { count: 'exact', head: true }),
     supabase.from('clientes').select('*', { count: 'exact', head: true }),
   ])
+
   return {
     totalBarbers: barbersResult.count ?? 0,
     totalProducts: productsResult.count ?? 0,
@@ -59,18 +62,23 @@ export async function getBarber(id: string): Promise<Barber> {
 }
 
 export async function createBarber(barber: CreateBarberInput): Promise<Barber> {
-  const { data, error } = await supabase.from('barbeiros').insert({
-    nome: barber.nome,
-    email: barber.email,
-    telefone: barber.telefone ?? null,
-    especialidades: barber.especialidades ?? null,
-    percentual_servico: barber.percentual_servico ?? 0,
-    percentual_produto: barber.percentual_produto ?? 0,
-    comissao_servico_tipo: barber.comissao_servico_tipo ?? 'porcentagem',
-    comissao_produto_tipo: barber.comissao_produto_tipo ?? 'porcentagem',
-    avaliacao: barber.avaliacao ?? 5,
-    foto_url: barber.foto_url ?? null,
-  }).select().single()
+  const { data, error } = await supabase
+    .from('barbeiros')
+    .insert({
+      nome: barber.nome,
+      email: barber.email,
+      telefone: barber.telefone ?? null,
+      especialidades: barber.especialidades ?? null,
+      percentual_servico: barber.percentual_servico ?? 0,
+      percentual_produto: barber.percentual_produto ?? 0,
+      comissao_servico_tipo: barber.comissao_servico_tipo ?? 'porcentagem',
+      comissao_produto_tipo: barber.comissao_produto_tipo ?? 'porcentagem',
+      avaliacao: barber.avaliacao ?? 5,
+      foto_url: barber.foto_url ?? null,
+    })
+    .select()
+    .single()
+
   if (error) throw new Error(`Erro ao criar barbeiro: ${error.message}`)
   return data
 }
@@ -113,8 +121,10 @@ export async function deleteProduct(id: string) {
 
 export async function getAppointments() {
   const { data, error } = await supabase
-    .from('agendamentos').select('*, barbeiros(nome), servicos(nome, duracao_minutos, preco), clientes(nome, email)')
+    .from('agendamentos')
+    .select('*, barbeiros(nome), servicos(nome, duracao_minutos, preco), clientes(nome, email)')
     .order('created_at', { ascending: false })
+
   if (error) throw new Error(`Erro ao buscar agendamentos: ${error.message}`)
   return data ?? []
 }
@@ -132,6 +142,7 @@ export async function updateAppointmentStatus(id: string, status: string): Promi
     .eq('id', id)
     .select('*, barbeiros(nome), servicos(nome, duracao_minutos, preco), clientes(nome, email)')
     .single()
+
   if (error) throw new Error(`Erro ao atualizar status do agendamento: ${error.message}`)
   return data as Appointment
 }
@@ -174,16 +185,24 @@ export async function getClients() {
 
 export async function findOrCreateClient(cliente: { nome: string; telefone?: string; email?: string }) {
   let query = supabase.from('clientes').select('*')
+
   if (cliente.telefone) query = query.eq('telefone', cliente.telefone)
   else if (cliente.email) query = query.eq('email', cliente.email)
   else query = query.eq('nome', cliente.nome)
+
   const { data: existing } = await query.limit(1).single()
   if (existing) return existing
-  const { data, error } = await supabase.from('clientes').insert({
-    nome: cliente.nome,
-    telefone: cliente.telefone || null,
-    email: cliente.email || null,
-  }).select().single()
+
+  const { data, error } = await supabase
+    .from('clientes')
+    .insert({
+      nome: cliente.nome,
+      telefone: cliente.telefone || null,
+      email: cliente.email || null,
+    })
+    .select()
+    .single()
+
   if (error) throw new Error(`Erro ao criar cliente: ${error.message}`)
   return data
 }
@@ -198,7 +217,7 @@ export async function getConfiguracoes() {
   return data
 }
 
-export async function updateConfiguracoes(config: Record<string, any>) {
+export async function updateConfiguracoes(config: Record<string, unknown>) {
   const { data, error } = await supabase.from('configuracoes').update(config).eq('id', 1).select().single()
   if (error) throw new Error(`Erro ao atualizar configurações: ${error.message}`)
   return data
@@ -209,14 +228,22 @@ export async function updateConfiguracoes(config: Record<string, any>) {
 // =====================
 
 export async function getPagamentos() {
-  const { data, error } = await supabase.from('pagamentos').select('*, agendamentos(*)').order('created_at', { ascending: false })
+  const { data, error } = await supabase
+    .from('pagamentos')
+    .select('*, agendamentos(*)')
+    .order('created_at', { ascending: false })
+
   if (error) throw new Error(`Erro ao buscar pagamentos: ${error.message}`)
   return data ?? []
 }
 
 export async function createPagamento(pagamento: {
-  agendamento_id: string; cliente_id: string; valor: number;
-  forma_pagamento: string; status?: string; observacao?: string
+  agendamento_id: string
+  cliente_id: string
+  valor: number
+  forma_pagamento: string
+  status?: string
+  observacao?: string
 }) {
   const { data, error } = await supabase.from('pagamentos').insert(pagamento).select().single()
   if (error) throw new Error(`Erro ao criar pagamento: ${error.message}`)
@@ -234,23 +261,35 @@ export async function deletePagamento(id: string) {
 }
 
 export async function getPagamentosDoDia() {
-  const hoje = new Date(); hoje.setHours(0, 0, 0, 0)
+  const hoje = new Date()
+  hoje.setHours(0, 0, 0, 0)
+
   const { data, error } = await supabase
-    .from('pagamentos').select('*, agendamentos(*)')
-    .gte('created_at', hoje.toISOString()).eq('status', 'Pago')
+    .from('pagamentos')
+    .select('*, agendamentos(*)')
+    .gte('created_at', hoje.toISOString())
+    .eq('status', 'Pago')
     .order('created_at', { ascending: false })
+
   if (error) throw new Error(`Erro ao buscar pagamentos do dia: ${error.message}`)
   return data ?? []
 }
 
 export async function getResumoFinanceiro() {
-  const { data, error } = await supabase.from('pagamentos').select('valor, forma_pagamento, status').eq('status', 'Pago')
+  const { data, error } = await supabase
+    .from('pagamentos')
+    .select('valor, forma_pagamento, status')
+    .eq('status', 'Pago')
+
   if (error) throw new Error(`Erro ao buscar resumo financeiro: ${error.message}`)
+
   const total = data?.reduce((acc, p) => acc + Number(p.valor), 0) ?? 0
   const porForma: Record<string, number> = {}
+
   data?.forEach(p => {
     porForma[p.forma_pagamento] = (porForma[p.forma_pagamento] || 0) + Number(p.valor)
   })
+
   return { total, porForma, quantidade: data?.length ?? 0 }
 }
 
@@ -259,8 +298,12 @@ export async function getResumoFinanceiro() {
 // =====================
 
 export type Produto = {
-  id: string; nome: string; preco_venda: number;
-  estoque_atual: number; estoque_minimo: number; created_at: string
+  id: string
+  nome: string
+  preco_venda: number
+  estoque_atual: number
+  estoque_minimo: number
+  created_at: string
 }
 
 export async function getProdutos(): Promise<Produto[]> {
@@ -276,7 +319,10 @@ export async function getProduto(id: string): Promise<Produto> {
 }
 
 export async function createProduto(produto: {
-  nome: string; preco_venda?: number; estoque_atual?: number; estoque_minimo?: number
+  nome: string
+  preco_venda?: number
+  estoque_atual?: number
+  estoque_minimo?: number
 }): Promise<Produto> {
   const { data, error } = await supabase.from('produtos').insert(produto).select().single()
   if (error) throw new Error(`Erro ao criar produto: ${error.message}`)
@@ -299,12 +345,18 @@ export async function deleteProduto(id: string) {
 // =====================
 
 export type MovimentacaoEstoque = {
-  id: string; produto_id: string; tipo: 'entrada' | 'saida'; quantidade: number;
-  motivo: 'venda' | 'compra' | 'ajuste' | 'perda'; referencia_id: string | null;
-  observacao: string | null; created_at: string; barbeiro_id: string | null;
-  comissao_percentual: number | null;
-  produtos?: { nome: string };
-  barbeiros?: { nome: string; percentual_produto: number };
+  id: string
+  produto_id: string
+  tipo: 'entrada' | 'saida'
+  quantidade: number
+  motivo: 'venda' | 'compra' | 'ajuste' | 'perda'
+  referencia_id: string | null
+  observacao: string | null
+  created_at: string
+  barbeiro_id: string | null
+  comissao_percentual: number | null
+  produtos?: { nome: string }
+  barbeiros?: { nome: string; percentual_produto: number }
 }
 
 export async function getMovimentacoes(produtoId?: string): Promise<MovimentacaoEstoque[]> {
@@ -312,64 +364,111 @@ export async function getMovimentacoes(produtoId?: string): Promise<Movimentacao
     .from('movimentacoes_estoque')
     .select('*, produtos(nome), barbeiros(nome, percentual_produto)')
     .order('created_at', { ascending: false })
+
   if (produtoId) query = query.eq('produto_id', produtoId)
+
   const { data, error } = await query
   if (error) throw new Error(`Erro ao buscar movimentações: ${error.message}`)
   return data ?? []
 }
 
 export async function registrarSaidaEstoque(params: {
-  produto_id: string; quantidade: number; motivo: 'venda' | 'ajuste' | 'perda';
-  referencia_id?: string; observacao?: string; barbeiro_id?: string
+  produto_id: string
+  quantidade: number
+  motivo: 'venda' | 'ajuste' | 'perda'
+  referencia_id?: string
+  observacao?: string
+  barbeiro_id?: string
 }): Promise<MovimentacaoEstoque> {
   const { data: produto, error: errProduto } = await supabase
-    .from('produtos').select('estoque_atual, preco_venda').eq('id', params.produto_id).single()
+    .from('produtos')
+    .select('estoque_atual, preco_venda')
+    .eq('id', params.produto_id)
+    .single()
+
   if (errProduto) throw new Error(`Produto não encontrado: ${errProduto.message}`)
+
   if (produto.estoque_atual < params.quantidade) {
     throw new Error(`Estoque insuficiente. Disponível: ${produto.estoque_atual}, solicitado: ${params.quantidade}`)
   }
+
   let comissaoPercentual: number | null = null
   if (params.barbeiro_id) {
     const { data: barbeiro, error: errBarbeiro } = await supabase
-      .from('barbeiros').select('percentual_produto').eq('id', params.barbeiro_id).single()
+      .from('barbeiros')
+      .select('percentual_produto')
+      .eq('id', params.barbeiro_id)
+      .single()
+
     if (errBarbeiro) throw new Error(`Barbeiro não encontrado: ${errBarbeiro.message}`)
     comissaoPercentual = barbeiro.percentual_produto ?? 0
   }
-  const { data: mov, error: errMov } = await supabase.from('movimentacoes_estoque').insert({
-    produto_id: params.produto_id,
-    tipo: 'saida',
-    quantidade: params.quantidade,
-    motivo: params.motivo,
-    referencia_id: params.referencia_id || null,
-    observacao: params.observacao || null,
-    barbeiro_id: params.barbeiro_id || null,
-    comissao_percentual: comissaoPercentual,
-  }).select().single()
+
+  const { data: mov, error: errMov } = await supabase
+    .from('movimentacoes_estoque')
+    .insert({
+      produto_id: params.produto_id,
+      tipo: 'saida',
+      quantidade: params.quantidade,
+      motivo: params.motivo,
+      referencia_id: params.referencia_id || null,
+      observacao: params.observacao || null,
+      barbeiro_id: params.barbeiro_id || null,
+      comissao_percentual: comissaoPercentual,
+    })
+    .select()
+    .single()
+
   if (errMov) throw new Error(`Erro ao registrar saída: ${errMov.message}`)
+
   const { error: errUpdate } = await supabase
-    .from('produtos').update({ estoque_atual: produto.estoque_atual - params.quantidade }).eq('id', params.produto_id)
+    .from('produtos')
+    .update({ estoque_atual: produto.estoque_atual - params.quantidade })
+    .eq('id', params.produto_id)
+
   if (errUpdate) throw new Error(`Erro ao atualizar estoque: ${errUpdate.message}`)
+
   return mov
 }
 
 export async function registrarEntradaEstoque(params: {
-  produto_id: string; quantidade: number; motivo: 'compra' | 'ajuste'; observacao?: string
+  produto_id: string
+  quantidade: number
+  motivo: 'compra' | 'ajuste'
+  observacao?: string
 }): Promise<MovimentacaoEstoque> {
   const { data: produto, error: errProduto } = await supabase
-    .from('produtos').select('estoque_atual').eq('id', params.produto_id).single()
-  if (errProduto && errProduto.code !== 'PGRST116') throw new Error(`Erro ao buscar produto: ${errProduto.message}`)
+    .from('produtos')
+    .select('estoque_atual')
+    .eq('id', params.produto_id)
+    .single()
+
+  if (errProduto && errProduto.code !== 'PGRST116')
+    throw new Error(`Erro ao buscar produto: ${errProduto.message}`)
+
   const estoqueAtual = produto?.estoque_atual ?? 0
-  const { data: mov, error: errMov } = await supabase.from('movimentacoes_estoque').insert({
-    produto_id: params.produto_id,
-    tipo: 'entrada',
-    quantidade: params.quantidade,
-    motivo: params.motivo,
-    observacao: params.observacao || null,
-  }).select().single()
+
+  const { data: mov, error: errMov } = await supabase
+    .from('movimentacoes_estoque')
+    .insert({
+      produto_id: params.produto_id,
+      tipo: 'entrada',
+      quantidade: params.quantidade,
+      motivo: params.motivo,
+      observacao: params.observacao || null,
+    })
+    .select()
+    .single()
+
   if (errMov) throw new Error(`Erro ao registrar entrada: ${errMov.message}`)
+
   const { error: errUpdate } = await supabase
-    .from('produtos').update({ estoque_atual: estoqueAtual + params.quantidade }).eq('id', params.produto_id)
+    .from('produtos')
+    .update({ estoque_atual: estoqueAtual + params.quantidade })
+    .eq('id', params.produto_id)
+
   if (errUpdate) throw new Error(`Erro ao atualizar estoque: ${errUpdate.message}`)
+
   return mov
 }
 
@@ -430,17 +529,29 @@ export type RelatorioComissaoCompleto = {
 // Comissões e Relatórios
 // =====================
 
-export async function getResumoComissoes(params: { dataInicio: string; dataFim: string }): Promise<ResumoComissaoBarbeiro[]> {
+export async function getResumoComissoes(params: {
+  dataInicio: string
+  dataFim: string
+}): Promise<ResumoComissaoBarbeiro[]> {
   const { dataInicio, dataFim } = params
+
   const { data: barbeiros, error: errBarbeiros } = await supabase
-    .from('barbeiros').select('id, nome, percentual_servico, percentual_produto').order('nome')
+    .from('barbeiros')
+    .select('id, nome, percentual_servico, percentual_produto')
+    .order('nome')
+
   if (errBarbeiros) throw new Error(`Erro ao buscar barbeiros: ${errBarbeiros.message}`)
 
   const resultado: ResumoComissaoBarbeiro[] = []
+
   for (const barbeiro of barbeiros ?? []) {
     const { data: servicos, error: errServicos } = await supabase
-      .from('agendamentos').select('valor').eq('barbeiro_id', barbeiro.id)
-      .gte('data', dataInicio).lte('data', dataFim)
+      .from('agendamentos')
+      .select('valor')
+      .eq('barbeiro_id', barbeiro.id)
+      .gte('data', dataInicio)
+      .lte('data', dataFim)
+
     if (errServicos) throw new Error(`Erro ao buscar serviços: ${errServicos.message}`)
 
     const servicosComValor = (servicos ?? []).filter(s => s.valor !== null && Number(s.valor) > 0)
@@ -449,21 +560,32 @@ export async function getResumoComissoes(params: { dataInicio: string; dataFim: 
     const comissaoServicos = valorServicos * (barbeiro.percentual_servico / 100)
 
     const { data: vendas, error: errVendas } = await supabase
-      .from('movimentacoes_estoque').select('quantidade, comissao_percentual, produtos!inner(preco_venda)')
-      .eq('barbeiro_id', barbeiro.id).eq('motivo', 'venda')
-      .gte('created_at', `${dataInicio}T00:00:00`).lte('created_at', `${dataFim}T23:59:59`)
+      .from('movimentacoes_estoque')
+      .select('quantidade, comissao_percentual, produtos!inner(preco_venda)')
+      .eq('barbeiro_id', barbeiro.id)
+      .eq('motivo', 'venda')
+      .gte('created_at', `${dataInicio}T00:00:00`)
+      .lte('created_at', `${dataFim}T23:59:59`)
+
     if (errVendas) throw new Error(`Erro ao buscar vendas: ${errVendas.message}`)
 
     const totalVendas = vendas?.length ?? 0
-    const valorVendas = vendas?.reduce((acc, v) => {
-      const produto = joinOne(v.produtos as { preco_venda: number } | { preco_venda: number }[] | null)
-      return acc + (Number(produto?.preco_venda || 0) * v.quantidade)
-    }, 0) ?? 0
-    const comissaoVendas = vendas?.reduce((acc, v) => {
-      const produto = joinOne(v.produtos as { preco_venda: number } | { preco_venda: number }[] | null)
-      const valorItem = Number(produto?.preco_venda || 0) * v.quantidade
-      return acc + (valorItem * (v.comissao_percentual ?? barbeiro.percentual_produto) / 100)
-    }, 0) ?? 0
+    const valorVendas =
+      vendas?.reduce((acc, v) => {
+        const produto = joinOne(
+          v.produtos as { preco_venda: number } | { preco_venda: number }[] | null,
+        )
+        return acc + (Number(produto?.preco_venda || 0) * v.quantidade)
+      }, 0) ?? 0
+
+    const comissaoVendas =
+      vendas?.reduce((acc, v) => {
+        const produto = joinOne(
+          v.produtos as { preco_venda: number } | { preco_venda: number }[] | null,
+        )
+        const valorItem = Number(produto?.preco_venda || 0) * v.quantidade
+        return acc + (valorItem * (v.comissao_percentual ?? barbeiro.percentual_produto) / 100)
+      }, 0) ?? 0
 
     resultado.push({
       barbeiro_id: barbeiro.id,
@@ -477,23 +599,39 @@ export async function getResumoComissoes(params: { dataInicio: string; dataFim: 
       total_a_receber: comissaoServicos + comissaoVendas,
     })
   }
+
   return resultado
 }
 
 export async function getRelatorioComissoes(params: {
-  barbeiro_id: string; dataInicio: string; dataFim: string
+  barbeiro_id: string
+  dataInicio: string
+  dataFim: string
 }): Promise<RelatorioComissaoCompleto> {
   const { barbeiro_id, dataInicio, dataFim } = params
+
   const { data: barbeiro, error: errBarbeiro } = await supabase
-    .from('barbeiros').select('id, nome, percentual_servico, percentual_produto').eq('id', barbeiro_id).single()
+    .from('barbeiros')
+    .select('id, nome, percentual_servico, percentual_produto')
+    .eq('id', barbeiro_id)
+    .single()
+
   if (errBarbeiro) throw new Error(`Barbeiro não encontrado: ${errBarbeiro.message}`)
+
   const { data: servicos, error: errServicos } = await supabase
-    .from('agendamentos').select('data, valor, servicos!inner(nome, preco)')
+    .from('agendamentos')
+    .select('data, valor, servicos!inner(nome, preco)')
     .eq('barbeiro_id', barbeiro_id)
-    .gte('data', dataInicio).lte('data', dataFim).order('data', { ascending: false })
+    .gte('data', dataInicio)
+    .lte('data', dataFim)
+    .order('data', { ascending: false })
+
   if (errServicos) throw new Error(`Erro ao buscar serviços: ${errServicos.message}`)
+
   const detalheServicos: DetalheServicoComissao[] = (servicos ?? []).map(s => {
-    const servico = joinOne(s.servicos as { nome: string; preco: number } | { nome: string; preco: number }[] | null)
+    const servico = joinOne(
+      s.servicos as { nome: string; preco: number } | { nome: string; preco: number }[] | null,
+    )
     const valor = Number(s.valor || servico?.preco || 0)
     return {
       data: s.data,
@@ -503,14 +641,22 @@ export async function getRelatorioComissoes(params: {
       valor_comissao: valor * (barbeiro.percentual_servico / 100),
     }
   })
+
   const { data: vendas, error: errVendas } = await supabase
-    .from('movimentacoes_estoque').select('created_at, quantidade, comissao_percentual, produtos!inner(nome, preco_venda)')
-    .eq('barbeiro_id', barbeiro_id).eq('motivo', 'venda')
-    .gte('created_at', `${dataInicio}T00:00:00`).lte('created_at', `${dataFim}T23:59:59`)
+    .from('movimentacoes_estoque')
+    .select('created_at, quantidade, comissao_percentual, produtos!inner(nome, preco_venda)')
+    .eq('barbeiro_id', barbeiro_id)
+    .eq('motivo', 'venda')
+    .gte('created_at', `${dataInicio}T00:00:00`)
+    .lte('created_at', `${dataFim}T23:59:59`)
     .order('created_at', { ascending: false })
+
   if (errVendas) throw new Error(`Erro ao buscar vendas: ${errVendas.message}`)
+
   const detalheVendas: DetalheVendaComissao[] = (vendas ?? []).map(v => {
-    const produto = joinOne(v.produtos as { nome: string; preco_venda: number } | { nome: string; preco_venda: number }[] | null)
+    const produto = joinOne(
+      v.produtos as { nome: string; preco_venda: number } | { nome: string; preco_venda: number }[] | null,
+    )
     const valorTotal = Number(produto?.preco_venda || 0) * v.quantidade
     const perc = v.comissao_percentual ?? barbeiro.percentual_produto
     return {
@@ -522,9 +668,11 @@ export async function getRelatorioComissoes(params: {
       valor_comissao: valorTotal * (perc / 100),
     }
   })
+
   return {
     barbeiro: {
-      id: barbeiro.id, nome: barbeiro.nome,
+      id: barbeiro.id,
+      nome: barbeiro.nome,
       percentual_servico: barbeiro.percentual_servico,
       percentual_produto: barbeiro.percentual_produto,
     },
@@ -537,8 +685,9 @@ export async function getRelatorioComissoes(params: {
       total_vendas: detalheVendas.length,
       valor_vendas: detalheVendas.reduce((a, v) => a + v.valor_total, 0),
       comissao_vendas: detalheVendas.reduce((a, v) => a + v.valor_comissao, 0),
-      total_a_receber: detalheServicos.reduce((a, s) => a + s.valor_comissao, 0)
-        + detalheVendas.reduce((a, v) => a + v.valor_comissao, 0),
+      total_a_receber:
+        detalheServicos.reduce((a, s) => a + s.valor_comissao, 0) +
+        detalheVendas.reduce((a, v) => a + v.valor_comissao, 0),
     },
   }
 }
