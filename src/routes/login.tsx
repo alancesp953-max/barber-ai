@@ -1,6 +1,5 @@
 import { createFileRoute, redirect } from '@tanstack/react-router'
-import { requireSession } from '../lib/api'
-import { supabase } from '../integrations/supabase/client'
+import { supabase } from '../services/supabaseClient'
 import Login from '../pages/Login'
 
 export const Route = createFileRoute('/login')({
