@@ -1,4 +1,4 @@
-import { Link, useRouterState } from '@tanstack/react-router'
+import { Link, useRouter, useRouterState } from '@tanstack/react-router'
 import { BarChart3, Calendar, DollarSign, LayoutDashboard, LogOut, Package, Percent, Scissors, Settings, Users } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { signOut } from '../integrations/supabase/client'
@@ -18,10 +18,11 @@ const navItems = [
 export function AdminSidebar() {
   const { t } = useTranslation()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
+  const router = useRouter()
 
   const handleLogout = async () => {
     await signOut()
-    window.location.href = '/login'
+    router.navigate({ to: '/login' })
   }
 
   const isActive = (to: string) => {
