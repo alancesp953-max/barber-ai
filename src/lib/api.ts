@@ -842,10 +842,38 @@ export async function criarAgendamento(params: {
   horario: string
   status?: string
 }) {
-  const { data, error } = await supabase.rpc('criar_agendamento', params)
+  const { data, error } = await supabase.rpc('criar_agendamento', {
+    p_cliente_nome: params.cliente_nome,
+    p_cliente_telefone: params.cliente_telefone,
+    p_barbeiro_id: params.barbeiro_id,
+    p_servico_id: params.servico_id,
+    p_data: params.data,
+    p_horario: params.horario,
+    p_cliente_email: params.cliente_email ?? null,
+    p_cliente_data_aniversario: params.cliente_data_aniversario ?? null,
+    p_status: params.status ?? 'confirmado',
+  })
   if (error) throw new Error(`Erro ao criar agendamento: ${error.message}`)
   return data
 }
 
 export async function cancelarAgendamento(id: string) {
   const { data, error } = await supabase.rpc('cancelar_agendamento', {
+    p_agendamento_id: id,
+  })
+  if (error) throw new Error(`Erro ao cancelar agendamento: ${error.message}`)
+  return data
+}
+
+export async function getServicosPrecos() {
+  const { data, error } = await supabase.rpc('get_servicos_precos')
+  if (error) throw new Error(`Erro ao buscar serviços: ${error.message}`)
+  return data ?? []
+}
+
+export async function getEstoqueProduto(produtoId: string) {
+  const { data, error } = await supabase
+    .rpc('get_estoque_produto', { p_produto_id: produtoId })
+  if (error) throw new Error(`Erro ao verificar estoque: ${error.message}`)
+  return data
+}
