@@ -50,13 +50,22 @@ export async function getDashboardStats() {
 // =====================
 
 export async function getBarbers(): Promise<Barber[]> {
-  const { data, error } = await supabase.from('barbeiros').select('*').order('created_at', { ascending: false })
+  const { data, error } = await supabase
+    .from('barbeiros')
+    .select('*')
+    .order('created_at', { ascending: false })
+
   if (error) throw new Error(`Erro ao buscar barbeiros: ${error.message}`)
   return data ?? []
 }
 
 export async function getBarber(id: string): Promise<Barber> {
-  const { data, error } = await supabase.from('barbeiros').select('*').eq('id', id).single()
+  const { data, error } = await supabase
+    .from('barbeiros')
+    .select('*')
+    .eq('id', id)
+    .single()
+
   if (error) throw new Error(`Erro ao buscar barbeiro: ${error.message}`)
   return data
 }
@@ -84,13 +93,23 @@ export async function createBarber(barber: CreateBarberInput): Promise<Barber> {
 }
 
 export async function updateBarber(id: string, updates: Partial<Barber>): Promise<Barber> {
-  const { data, error } = await supabase.from('barbeiros').update(updates).eq('id', id).select().single()
+  const { data, error } = await supabase
+    .from('barbeiros')
+    .update(updates)
+    .eq('id', id)
+    .select()
+    .single()
+
   if (error) throw new Error(`Erro ao atualizar barbeiro: ${error.message}`)
   return data
 }
 
 export async function deleteBarber(id: string) {
-  const { error } = await supabase.from('barbeiros').delete().eq('id', id)
+  const { error } = await supabase
+    .from('barbeiros')
+    .delete()
+    .eq('id', id)
+
   if (error) throw new Error(`Erro ao excluir barbeiro: ${error.message}`)
 }
 
@@ -99,19 +118,32 @@ export async function deleteBarber(id: string) {
 // =====================
 
 export async function getProducts() {
-  const { data, error } = await supabase.from('produtos').select('*').order('created_at', { ascending: false })
+  const { data, error } = await supabase
+    .from('produtos')
+    .select('*')
+    .order('created_at', { ascending: false })
+
   if (error) throw new Error(`Erro ao buscar produtos: ${error.message}`)
   return data ?? []
 }
 
 export async function createProduct(product: any) {
-  const { data, error } = await supabase.from('produtos').insert(product).select().single()
+  const { data, error } = await supabase
+    .from('produtos')
+    .insert(product)
+    .select()
+    .single()
+
   if (error) throw new Error(`Erro ao criar produto: ${error.message}`)
   return data
 }
 
 export async function deleteProduct(id: string) {
-  const { error } = await supabase.from('produtos').delete().eq('id', id)
+  const { error } = await supabase
+    .from('produtos')
+    .delete()
+    .eq('id', id)
+
   if (error) throw new Error(`Erro ao excluir produto: ${error.message}`)
 }
 
@@ -130,7 +162,12 @@ export async function getAppointments() {
 }
 
 export async function createAppointment(appointment: any) {
-  const { data, error } = await supabase.from('agendamentos').insert(appointment).select().single()
+  const { data, error } = await supabase
+    .from('agendamentos')
+    .insert(appointment)
+    .select()
+    .single()
+
   if (error) throw new Error(`Erro ao criar agendamento: ${error.message}`)
   return data
 }
@@ -148,7 +185,11 @@ export async function updateAppointmentStatus(id: string, status: string): Promi
 }
 
 export async function deleteAppointment(id: string) {
-  const { error } = await supabase.from('agendamentos').delete().eq('id', id)
+  const { error } = await supabase
+    .from('agendamentos')
+    .delete()
+    .eq('id', id)
+
   if (error) throw new Error(`Erro ao excluir agendamento: ${error.message}`)
 }
 
@@ -157,19 +198,31 @@ export async function deleteAppointment(id: string) {
 // =====================
 
 export async function getServices() {
-  const { data, error } = await supabase.from('servicos').select('*')
+  const { data, error } = await supabase
+    .from('servicos')
+    .select('*')
+
   if (error) throw new Error(`Erro ao buscar serviços: ${error.message}`)
   return data ?? []
 }
 
 export async function createService(service: any) {
-  const { data, error } = await supabase.from('servicos').insert(service).select().single()
+  const { data, error } = await supabase
+    .from('servicos')
+    .insert(service)
+    .select()
+    .single()
+
   if (error) throw new Error(`Erro ao criar serviço: ${error.message}`)
   return data
 }
 
 export async function deleteService(id: string) {
-  const { error } = await supabase.from('servicos').delete().eq('id', id)
+  const { error } = await supabase
+    .from('servicos')
+    .delete()
+    .eq('id', id)
+
   if (error) throw new Error(`Erro ao excluir serviço: ${error.message}`)
 }
 
@@ -178,7 +231,11 @@ export async function deleteService(id: string) {
 // =====================
 
 export async function getClients() {
-  const { data, error } = await supabase.from('clientes').select('*').order('created_at', { ascending: false })
+  const { data, error } = await supabase
+    .from('clientes')
+    .select('*')
+    .order('created_at', { ascending: false })
+
   if (error) throw new Error(`Erro ao buscar clientes: ${error.message}`)
   return data ?? []
 }
@@ -186,11 +243,15 @@ export async function getClients() {
 export async function findOrCreateClient(cliente: { nome: string; telefone?: string; email?: string }) {
   let query = supabase.from('clientes').select('*')
 
-  if (cliente.telefone) query = query.eq('telefone', cliente.telefone)
-  else if (cliente.email) query = query.eq('email', cliente.email)
-  else query = query.eq('nome', cliente.nome)
+  if (cliente.telefone)
+    query = query.eq('telefone', cliente.telefone)
+  else if (cliente.email)
+    query = query.eq('email', cliente.email)
+  else
+    query = query.eq('nome', cliente.nome)
 
   const { data: existing } = await query.limit(1).single()
+
   if (existing) return existing
 
   const { data, error } = await supabase
@@ -212,13 +273,23 @@ export async function findOrCreateClient(cliente: { nome: string; telefone?: str
 // =====================
 
 export async function getConfiguracoes() {
-  const { data, error } = await supabase.from('configuracoes').select('*').single()
+  const { data, error } = await supabase
+    .from('configuracoes')
+    .select('*')
+    .single()
+
   if (error) throw new Error(`Erro ao buscar configurações: ${error.message}`)
   return data
 }
 
-export async function updateConfiguracoes(config: Record<string, unknown>) {
-  const { data, error } = await supabase.from('configuracoes').update(config).eq('id', 1).select().single()
+export async function updateConfiguracoes(config: Record<string, any>) {
+  const { data, error } = await supabase
+    .from('configuracoes')
+    .update(config)
+    .eq('id', 1)
+    .select()
+    .single()
+
   if (error) throw new Error(`Erro ao atualizar configurações: ${error.message}`)
   return data
 }
@@ -245,18 +316,31 @@ export async function createPagamento(pagamento: {
   status?: string
   observacao?: string
 }) {
-  const { data, error } = await supabase.from('pagamentos').insert(pagamento).select().single()
+  const { data, error } = await supabase
+    .from('pagamentos')
+    .insert(pagamento)
+    .select()
+    .single()
+
   if (error) throw new Error(`Erro ao criar pagamento: ${error.message}`)
   return data
 }
 
 export async function updatePagamentoStatus(id: string, status: string) {
-  const { error } = await supabase.from('pagamentos').update({ status }).eq('id', id)
+  const { error } = await supabase
+    .from('pagamentos')
+    .update({ status })
+    .eq('id', id)
+
   if (error) throw new Error(`Erro ao atualizar pagamento: ${error.message}`)
 }
 
 export async function deletePagamento(id: string) {
-  const { error } = await supabase.from('pagamentos').delete().eq('id', id)
+  const { error } = await supabase
+    .from('pagamentos')
+    .delete()
+    .eq('id', id)
+
   if (error) throw new Error(`Erro ao excluir pagamento: ${error.message}`)
 }
 
@@ -307,13 +391,22 @@ export type Produto = {
 }
 
 export async function getProdutos(): Promise<Produto[]> {
-  const { data, error } = await supabase.from('produtos').select('*').order('nome')
+  const { data, error } = await supabase
+    .from('produtos')
+    .select('*')
+    .order('nome')
+
   if (error) throw new Error(`Erro ao buscar produtos: ${error.message}`)
   return data ?? []
 }
 
 export async function getProduto(id: string): Promise<Produto> {
-  const { data, error } = await supabase.from('produtos').select('*').eq('id', id).single()
+  const { data, error } = await supabase
+    .from('produtos')
+    .select('*')
+    .eq('id', id)
+    .single()
+
   if (error) throw new Error(`Erro ao buscar produto: ${error.message}`)
   return data
 }
@@ -324,19 +417,34 @@ export async function createProduto(produto: {
   estoque_atual?: number
   estoque_minimo?: number
 }): Promise<Produto> {
-  const { data, error } = await supabase.from('produtos').insert(produto).select().single()
+  const { data, error } = await supabase
+    .from('produtos')
+    .insert(produto)
+    .select()
+    .single()
+
   if (error) throw new Error(`Erro ao criar produto: ${error.message}`)
   return data
 }
 
 export async function updateProduto(id: string, updates: Partial<Produto>): Promise<Produto> {
-  const { data, error } = await supabase.from('produtos').update(updates).eq('id', id).select().single()
+  const { data, error } = await supabase
+    .from('produtos')
+    .update(updates)
+    .eq('id', id)
+    .select()
+    .single()
+
   if (error) throw new Error(`Erro ao atualizar produto: ${error.message}`)
   return data
 }
 
 export async function deleteProduto(id: string) {
-  const { error } = await supabase.from('produtos').delete().eq('id', id)
+  const { error } = await supabase
+    .from('produtos')
+    .delete()
+    .eq('id', id)
+
   if (error) throw new Error(`Erro ao excluir produto: ${error.message}`)
 }
 
@@ -393,6 +501,7 @@ export async function registrarSaidaEstoque(params: {
   }
 
   let comissaoPercentual: number | null = null
+
   if (params.barbeiro_id) {
     const { data: barbeiro, error: errBarbeiro } = await supabase
       .from('barbeiros')
@@ -570,22 +679,20 @@ export async function getResumoComissoes(params: {
     if (errVendas) throw new Error(`Erro ao buscar vendas: ${errVendas.message}`)
 
     const totalVendas = vendas?.length ?? 0
-    const valorVendas =
-      vendas?.reduce((acc, v) => {
-        const produto = joinOne(
-          v.produtos as { preco_venda: number } | { preco_venda: number }[] | null,
-        )
-        return acc + (Number(produto?.preco_venda || 0) * v.quantidade)
-      }, 0) ?? 0
+    const valorVendas = vendas?.reduce((acc, v) => {
+      const produto = joinOne<{ preco_venda: number }>(
+        v.produtos as { preco_venda: number } | { preco_venda: number }[] | null,
+      )
+      return acc + (Number(produto?.preco_venda || 0) * v.quantidade)
+    }, 0) ?? 0
 
-    const comissaoVendas =
-      vendas?.reduce((acc, v) => {
-        const produto = joinOne(
-          v.produtos as { preco_venda: number } | { preco_venda: number }[] | null,
-        )
-        const valorItem = Number(produto?.preco_venda || 0) * v.quantidade
-        return acc + (valorItem * (v.comissao_percentual ?? barbeiro.percentual_produto) / 100)
-      }, 0) ?? 0
+    const comissaoVendas = vendas?.reduce((acc, v) => {
+      const produto = joinOne<{ preco_venda: number }>(
+        v.produtos as { preco_venda: number } | { preco_venda: number }[] | null,
+      )
+      const valorItem = Number(produto?.preco_venda || 0) * v.quantidade
+      return acc + (valorItem * (v.comissao_percentual ?? barbeiro.percentual_produto) / 100)
+    }, 0) ?? 0
 
     resultado.push({
       barbeiro_id: barbeiro.id,
@@ -629,7 +736,7 @@ export async function getRelatorioComissoes(params: {
   if (errServicos) throw new Error(`Erro ao buscar serviços: ${errServicos.message}`)
 
   const detalheServicos: DetalheServicoComissao[] = (servicos ?? []).map(s => {
-    const servico = joinOne(
+    const servico = joinOne<{ nome: string; preco: number }>(
       s.servicos as { nome: string; preco: number } | { nome: string; preco: number }[] | null,
     )
     const valor = Number(s.valor || servico?.preco || 0)
@@ -654,7 +761,7 @@ export async function getRelatorioComissoes(params: {
   if (errVendas) throw new Error(`Erro ao buscar vendas: ${errVendas.message}`)
 
   const detalheVendas: DetalheVendaComissao[] = (vendas ?? []).map(v => {
-    const produto = joinOne(
+    const produto = joinOne<{ nome: string; preco_venda: number }>(
       v.produtos as { nome: string; preco_venda: number } | { nome: string; preco_venda: number }[] | null,
     )
     const valorTotal = Number(produto?.preco_venda || 0) * v.quantidade
@@ -691,3 +798,54 @@ export async function getRelatorioComissoes(params: {
     },
   }
 }
+
+// =====================
+// AGENTE WHATSAPP — Consultas e Ações
+// =====================
+
+export async function getClienteByTelefone(telefone: string) {
+  const { data, error } = await supabase
+    .from('clientes')
+    .select('*')
+    .eq('telefone', telefone)
+    .maybeSingle()
+  if (error) throw new Error(`Erro ao buscar cliente: ${error.message}`)
+  return data
+}
+
+export async function getBarbeirosDisponiveis(data: string, horario: string) {
+  const { data: barbeiros, error } = await supabase
+    .rpc('get_barbeiros_disponiveis', { p_data: data, p_horario: horario })
+  if (error) throw new Error(`Erro ao buscar barbeiros: ${error.message}`)
+  return barbeiros ?? []
+}
+
+export async function verificarDisponibilidade(barbeiroId: string, data: string, horario: string) {
+  const { data: disponivel, error } = await supabase
+    .rpc('verificar_disponibilidade', {
+      p_barbeiro_id: barbeiroId,
+      p_data: data,
+      p_horario: horario,
+    })
+  if (error) throw new Error(`Erro ao verificar disponibilidade: ${error.message}`)
+  return disponivel
+}
+
+export async function criarAgendamento(params: {
+  cliente_nome: string
+  cliente_telefone: string
+  cliente_email?: string
+  cliente_data_aniversario?: string
+  barbeiro_id: string
+  servico_id: string
+  data: string
+  horario: string
+  status?: string
+}) {
+  const { data, error } = await supabase.rpc('criar_agendamento', params)
+  if (error) throw new Error(`Erro ao criar agendamento: ${error.message}`)
+  return data
+}
+
+export async function cancelarAgendamento(id: string) {
+  const { data, error } = await supabase.rpc('cancelar_agendamento', {
