@@ -14,7 +14,24 @@ if (!isSupabaseConfigured) {
 export const supabase = createClient(
   supabaseUrl || 'https://placeholder.supabase.co',
   supabaseAnonKey || 'placeholder-key',
+  {
+    auth: {
+      autoRefreshToken: true,
+      persistSession: true,
+      detectSessionInUrl: false,
+    },
+  },
 )
+
+// Monitora mudanças na autenticação
+supabase.auth.onAuthStateChange((event, session) => {
+  if (event === 'SIGNED_OUT' || event === 'USER_DELETED') {
+    // Redireciona para o login se estiver em uma página admin
+    if (window.location.pathname.startsWith('/admin')) {
+      window.location.href = '/login'
+    }
+  }
+})
 
 /** Alias for named imports that prefer `supabaseClient`. */
 export const supabaseClient = supabase
