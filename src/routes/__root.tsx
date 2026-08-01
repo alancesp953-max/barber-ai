@@ -37,7 +37,7 @@ function RootError({ error }: { error: Error }) {
 export const Route = createRootRoute({
   errorComponent: ({ error }) => <RootError error={error} />,
   component: () => (
-    &lt;>
+    <>
       <Outlet />
       {import.meta.env.DEV && <TanStackRouterDevtools />}
     </>
