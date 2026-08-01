@@ -1,73 +1,93 @@
-# React + TypeScript + Vite
+# BarberAI
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Painel administrativo para barbearias, com gestão de agendamentos, barbeiros, serviços, produtos, financeiro, comissões e relatórios.
 
-Currently, two official plugins are available:
+## Stack
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **Frontend:** React 19, TypeScript, Vite
+- **Roteamento:** TanStack Router
+- **Estilo:** Tailwind CSS
+- **Backend:** Supabase (Auth, Postgres, RLS)
+- **i18n:** react-i18next (pt-BR)
+- **Deploy:** Vercel
 
-## React Compiler
+## Funcionalidades
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- Dashboard com métricas e exportação PDF
+- Agendamentos com check-in e controle de status
+- Cadastro de barbeiros, serviços e produtos
+- Controle de estoque e movimentações
+- Financeiro (pagamentos e resumo)
+- Comissões por barbeiro (serviços e vendas)
+- Relatórios com gráficos e exportação PDF
+- Configurações da barbearia
+- Funções de API para agente WhatsApp (agendamento, disponibilidade, estoque)
 
-## Expanding the ESLint configuration
+## Pré-requisitos
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+- Node.js 20+
+- Conta no [Supabase](https://supabase.com)
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## Instalação
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+git clone https://github.com/alancesp953-max/barber-ai.git
+cd barber-ai
+npm install
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Copie `.env.example` para `.env` e preencha as credenciais do Supabase:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```env
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key
 ```
+
+## Scripts
+
+```bash
+npm run dev      # servidor de desenvolvimento (http://localhost:5173)
+npm run build    # build de produção
+npm run preview  # preview do build local
+npm run lint     # ESLint
+```
+
+## Rotas do admin
+
+| Rota | Página |
+|------|--------|
+| `/login` | Login |
+| `/admin/dashboard` | Dashboard |
+| `/admin/appointments` | Agendamentos |
+| `/admin/barbers` | Barbeiros |
+| `/admin/services` | Serviços |
+| `/admin/produtos` | Produtos |
+| `/admin/financeiro` | Financeiro |
+| `/admin/comissoes` | Comissões |
+| `/admin/relatorios` | Relatórios |
+| `/admin/configuracoes` | Configurações |
+
+## Deploy (Vercel)
+
+1. Importe o repositório no [Vercel](https://vercel.com)
+2. Configure as variáveis de ambiente:
+   - `VITE_SUPABASE_URL`
+   - `VITE_SUPABASE_ANON_KEY`
+3. O `vercel.json` já inclui o fallback SPA para rotas client-side
+
+## Estrutura principal
+
+```
+src/
+├── components/     # UI reutilizável (sidebar, modals, headers)
+├── lib/api.ts      # funções de acesso ao Supabase
+├── pages/          # páginas do admin
+├── routes/         # rotas TanStack Router
+├── services/       # cliente Supabase
+├── types/          # tipos TypeScript
+└── utils/          # utilitários (PDF, formatação)
+```
+
+## Licença
+
+Projeto privado.
