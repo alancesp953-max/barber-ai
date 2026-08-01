@@ -24,8 +24,8 @@ export const supabase = createClient(
 )
 
 // Monitora mudanças na autenticação
-supabase.auth.onAuthStateChange((event, session) => {
-  if (event === 'SIGNED_OUT' || event === 'USER_DELETED') {
+supabase.auth.onAuthStateChange((event) => {
+  if (event === 'SIGNED_OUT') {
     // Redireciona para o login se estiver em uma página admin
     if (window.location.pathname.startsWith('/admin')) {
       window.location.href = '/login'

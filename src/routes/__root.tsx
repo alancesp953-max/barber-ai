@@ -1,4 +1,4 @@
-import { createRootRoute, Outlet, redirect, useRouter } from '@tanstack/react-router'
+import { createRootRoute, Outlet, useRouter } from '@tanstack/react-router'
 import { TanStackRouterDevtools } from '@tanstack/router-devtools'
 import { useTranslation } from 'react-i18next'
 import { useEffect } from 'react'
@@ -37,7 +37,7 @@ function RootError({ error }: { error: Error }) {
 export const Route = createRootRoute({
   errorComponent: ({ error }) => <RootError error={error} />,
   component: () => (
-    <>
+    &lt;>
       <Outlet />
       {import.meta.env.DEV && <TanStackRouterDevtools />}
     </>
