@@ -1,9 +1,11 @@
 import { supabase } from '../services/supabaseClient'
 import type { Appointment, Barber, CreateBarberInput } from '../types/database'
+
 function joinOne<T>(value: T | T[] | null | undefined): T | null {
   if (value == null) return null
   return Array.isArray(value) ? value[0] ?? null : value
 }
+
 // =====================
 // Autenticação
 // =====================
@@ -11,6 +13,7 @@ export async function requireSession() {
   const { data: { session } } = await supabase.auth.getSession()
   return session
 }
+
 export async function getCurrentUser() {
   const session = await requireSession()
   if (!session) return null
@@ -18,6 +21,7 @@ export async function getCurrentUser() {
   if (error || !data.user) return null
   return { session, user: data.user }
 }
+
 // =====================
 // Dashboard
 // =====================
@@ -35,6 +39,7 @@ export async function getDashboardStats() {
     totalClients: clientsResult.count ?? 0,
   }
 }
+
 // =====================
 // Barbeiros
 // =====================
@@ -46,6 +51,7 @@ export async function getBarbers(): Promise<Barber[]> {
   if (error) throw new Error(`Erro ao buscar barbeiros: ${error.message}`)
   return data ?? []
 }
+
 export async function getBarber(id: string): Promise<Barber> {
   const { data, error } = await supabase
     .from('barbeiros')
@@ -55,6 +61,7 @@ export async function getBarber(id: string): Promise<Barber> {
   if (error) throw new Error(`Erro ao buscar barbeiro: ${error.message}`)
   return data
 }
+
 export async function createBarber(barber: CreateBarberInput): Promise<Barber> {
   const { data, error } = await supabase
     .from('barbeiros')
@@ -75,6 +82,7 @@ export async function createBarber(barber: CreateBarberInput): Promise<Barber> {
   if (error) throw new Error(`Erro ao criar barbeiro: ${error.message}`)
   return data
 }
+
 export async function updateBarber(id: string, updates: Partial<Barber>): Promise<Barber> {
   const { data, error } = await supabase
     .from('barbeiros')
@@ -85,20 +93,36 @@ export async function updateBarber(id: string, updates: Partial<Barber>): Promis
   if (error) throw new Error(`Erro ao atualizar barbeiro: ${error.message}`)
   return data
 }
+
 export async function deleteBarber(id: string) {
-  // 1º: remove as disponibilidades ligadas ao barbeiro (evita erro de foreign key)
+  // 1º: remove as disponibilidades ligadas ao barbeiro
   await supabase
     .from('barbeiro_disponibilidade')
     .delete()
     .eq('barbeiro_id', id)
 
-  // 2º: agora sim, remove o barbeiro
+  // 2º: remove os agendamentos ligados ao barbeiro
+  // (se preferir manter o histórico, troque delete por update { barbeiro_id: null })
+  await supabase
+    .from('agendamentos')
+    .delete()
+    .eq('barbeiro_id', id)
+
+  // 3º: remove as movimentações de estoque ligadas ao barbeiro
+  await supabase
+    .from('movimentacoes_estoque')
+    .delete()
+    .eq('barbeiro_id', id)
+
+  // 4º: agora sim, remove o barbeiro
   const { error } = await supabase
     .from('barbeiros')
     .delete()
     .eq('id', id)
+
   if (error) throw new Error(`Erro ao excluir barbeiro: ${error.message}`)
 }
+
 // =====================
 // Produtos (antigo)
 // =====================
@@ -110,6 +134,7 @@ export async function getProducts() {
   if (error) throw new Error(`Erro ao buscar produtos: ${error.message}`)
   return data ?? []
 }
+
 export async function createProduct(product: any) {
   const { data, error } = await supabase
     .from('produtos')
@@ -119,6 +144,7 @@ export async function createProduct(product: any) {
   if (error) throw new Error(`Erro ao criar produto: ${error.message}`)
   return data
 }
+
 export async function deleteProduct(id: string) {
   const { error } = await supabase
     .from('produtos')
@@ -126,6 +152,7 @@ export async function deleteProduct(id: string) {
     .eq('id', id)
   if (error) throw new Error(`Erro ao excluir produto: ${error.message}`)
 }
+
 // =====================
 // Agendamentos
 // =====================
@@ -137,6 +164,7 @@ export async function getAppointments() {
   if (error) throw new Error(`Erro ao buscar agendamentos: ${error.message}`)
   return data ?? []
 }
+
 export async function createAppointment(appointment: any) {
   const { data, error } = await supabase
     .from('agendamentos')
@@ -146,6 +174,7 @@ export async function createAppointment(appointment: any) {
   if (error) throw new Error(`Erro ao criar agendamento: ${error.message}`)
   return data
 }
+
 export async function updateAppointmentStatus(id: string, status: string): Promise<Appointment> {
   const { data, error } = await supabase
     .from('agendamentos')
@@ -156,6 +185,7 @@ export async function updateAppointmentStatus(id: string, status: string): Promi
   if (error) throw new Error(`Erro ao atualizar status do agendamento: ${error.message}`)
   return data as Appointment
 }
+
 export async function deleteAppointment(id: string) {
   const { error } = await supabase
     .from('agendamentos')
@@ -163,6 +193,7 @@ export async function deleteAppointment(id: string) {
     .eq('id', id)
   if (error) throw new Error(`Erro ao excluir agendamento: ${error.message}`)
 }
+
 // =====================
 // Serviços
 // =====================
@@ -173,6 +204,7 @@ export async function getServices() {
   if (error) throw new Error(`Erro ao buscar serviços: ${error.message}`)
   return data ?? []
 }
+
 export async function createService(service: any) {
   const { data, error } = await supabase
     .from('servicos')
@@ -182,6 +214,7 @@ export async function createService(service: any) {
   if (error) throw new Error(`Erro ao criar serviço: ${error.message}`)
   return data
 }
+
 export async function deleteService(id: string) {
   const { error } = await supabase
     .from('servicos')
@@ -189,6 +222,7 @@ export async function deleteService(id: string) {
     .eq('id', id)
   if (error) throw new Error(`Erro ao excluir serviço: ${error.message}`)
 }
+
 // =====================
 // Clientes
 // =====================
@@ -200,6 +234,7 @@ export async function getClients() {
   if (error) throw new Error(`Erro ao buscar clientes: ${error.message}`)
   return data ?? []
 }
+
 export async function findOrCreateClient(cliente: { nome: string; telefone?: string; email?: string }) {
   let query = supabase.from('clientes').select('*')
   if (cliente.telefone)
@@ -222,6 +257,7 @@ export async function findOrCreateClient(cliente: { nome: string; telefone?: str
   if (error) throw new Error(`Erro ao criar cliente: ${error.message}`)
   return data
 }
+
 // =====================
 // Configurações
 // =====================
@@ -233,6 +269,7 @@ export async function getConfiguracoes() {
   if (error) throw new Error(`Erro ao buscar configurações: ${error.message}`)
   return data
 }
+
 export async function updateConfiguracoes(config: Record<string, any>) {
   const { data, error } = await supabase
     .from('configuracoes')
@@ -243,6 +280,7 @@ export async function updateConfiguracoes(config: Record<string, any>) {
   if (error) throw new Error(`Erro ao atualizar configurações: ${error.message}`)
   return data
 }
+
 // =====================
 // Pagamentos
 // =====================
@@ -254,6 +292,7 @@ export async function getPagamentos() {
   if (error) throw new Error(`Erro ao buscar pagamentos: ${error.message}`)
   return data ?? []
 }
+
 export async function createPagamento(pagamento: {
   agendamento_id: string
   cliente_id: string
@@ -270,6 +309,7 @@ export async function createPagamento(pagamento: {
   if (error) throw new Error(`Erro ao criar pagamento: ${error.message}`)
   return data
 }
+
 export async function updatePagamentoStatus(id: string, status: string) {
   const { error } = await supabase
     .from('pagamentos')
@@ -277,6 +317,7 @@ export async function updatePagamentoStatus(id: string, status: string) {
     .eq('id', id)
   if (error) throw new Error(`Erro ao atualizar pagamento: ${error.message}`)
 }
+
 export async function deletePagamento(id: string) {
   const { error } = await supabase
     .from('pagamentos')
@@ -284,6 +325,7 @@ export async function deletePagamento(id: string) {
     .eq('id', id)
   if (error) throw new Error(`Erro ao excluir pagamento: ${error.message}`)
 }
+
 export async function getPagamentosDoDia() {
   const hoje = new Date()
   hoje.setHours(0, 0, 0, 0)
@@ -296,6 +338,7 @@ export async function getPagamentosDoDia() {
   if (error) throw new Error(`Erro ao buscar pagamentos do dia: ${error.message}`)
   return data ?? []
 }
+
 export async function getResumoFinanceiro() {
   const { data, error } = await supabase
     .from('pagamentos')
@@ -309,6 +352,7 @@ export async function getResumoFinanceiro() {
   })
   return { total, porForma, quantidade: data?.length ?? 0 }
 }
+
 // =====================
 // Produtos (completas)
 // =====================
@@ -320,6 +364,7 @@ export type Produto = {
   estoque_minimo: number
   created_at: string
 }
+
 export async function getProdutos(): Promise<Produto[]> {
   const { data, error } = await supabase
     .from('produtos')
@@ -328,6 +373,7 @@ export async function getProdutos(): Promise<Produto[]> {
   if (error) throw new Error(`Erro ao buscar produtos: ${error.message}`)
   return data ?? []
 }
+
 export async function getProduto(id: string): Promise<Produto> {
   const { data, error } = await supabase
     .from('produtos')
@@ -337,6 +383,7 @@ export async function getProduto(id: string): Promise<Produto> {
   if (error) throw new Error(`Erro ao buscar produto: ${error.message}`)
   return data
 }
+
 export async function createProduto(produto: {
   nome: string
   preco_venda?: number
@@ -351,6 +398,7 @@ export async function createProduto(produto: {
   if (error) throw new Error(`Erro ao criar produto: ${error.message}`)
   return data
 }
+
 export async function updateProduto(id: string, updates: Partial<Produto>): Promise<Produto> {
   const { data, error } = await supabase
     .from('produtos')
@@ -361,6 +409,7 @@ export async function updateProduto(id: string, updates: Partial<Produto>): Prom
   if (error) throw new Error(`Erro ao atualizar produto: ${error.message}`)
   return data
 }
+
 export async function deleteProduto(id: string) {
   const { error } = await supabase
     .from('produtos')
@@ -368,6 +417,7 @@ export async function deleteProduto(id: string) {
     .eq('id', id)
   if (error) throw new Error(`Erro ao excluir produto: ${error.message}`)
 }
+
 // =====================
 // Movimentações de Estoque
 // =====================
@@ -385,6 +435,7 @@ export type MovimentacaoEstoque = {
   produtos?: { nome: string }
   barbeiros?: { nome: string; percentual_produto: number }
 }
+
 export async function getMovimentacoes(produtoId?: string): Promise<MovimentacaoEstoque[]> {
   let query = supabase
     .from('movimentacoes_estoque')
@@ -395,6 +446,7 @@ export async function getMovimentacoes(produtoId?: string): Promise<Movimentacao
   if (error) throw new Error(`Erro ao buscar movimentações: ${error.message}`)
   return data ?? []
 }
+
 export async function registrarSaidaEstoque(params: {
   produto_id: string
   quantidade: number
@@ -444,6 +496,7 @@ export async function registrarSaidaEstoque(params: {
   if (errUpdate) throw new Error(`Erro ao atualizar estoque: ${errUpdate.message}`)
   return mov
 }
+
 export async function registrarEntradaEstoque(params: {
   produto_id: string
   quantidade: number
@@ -477,6 +530,7 @@ export async function registrarEntradaEstoque(params: {
   if (errUpdate) throw new Error(`Erro ao atualizar estoque: ${errUpdate.message}`)
   return mov
 }
+
 // =====================
 // TIPOS DE COMISSÕES (exportados)
 // =====================
@@ -491,6 +545,7 @@ export type ResumoComissaoBarbeiro = {
   comissao_vendas: number
   total_a_receber: number
 }
+
 export type DetalheServicoComissao = {
   data: string
   servico_nome: string
@@ -498,6 +553,7 @@ export type DetalheServicoComissao = {
   percentual_comissao: number
   valor_comissao: number
 }
+
 export type DetalheVendaComissao = {
   data: string
   produto_nome: string
@@ -506,6 +562,7 @@ export type DetalheVendaComissao = {
   percentual_comissao: number
   valor_comissao: number
 }
+
 export type RelatorioComissaoCompleto = {
   barbeiro: {
     id: string
@@ -525,6 +582,7 @@ export type RelatorioComissaoCompleto = {
     total_a_receber: number
   }
 }
+
 // =====================
 // Comissões e Relatórios
 // =====================
@@ -587,6 +645,7 @@ export async function getResumoComissoes(params: {
   }
   return resultado
 }
+
 export async function getRelatorioComissoes(params: {
   barbeiro_id: string
   dataInicio: string
@@ -644,3 +703,26 @@ export async function getRelatorioComissoes(params: {
       valor_comissao: valorTotal * (perc / 100),
     }
   })
+
+  return {
+    barbeiro: {
+      id: barbeiro.id,
+      nome: barbeiro.nome,
+      percentual_servico: barbeiro.percentual_servico,
+      percentual_produto: barbeiro.percentual_produto,
+    },
+    servicos: detalheServicos,
+    vendas: detalheVendas,
+    totais: {
+      total_servicos: detalheServicos.length,
+      valor_servicos: detalheServicos.reduce((acc, s) => acc + s.valor_cobrado, 0),
+      comissao_servicos: detalheServicos.reduce((acc, s) => acc + s.valor_comissao, 0),
+      total_vendas: detalheVendas.length,
+      valor_vendas: detalheVendas.reduce((acc, v) => acc + v.valor_total, 0),
+      comissao_vendas: detalheVendas.reduce((acc, v) => acc + v.valor_comissao, 0),
+      total_a_receber:
+        detalheServicos.reduce((acc, s) => acc + s.valor_comissao, 0) +
+        detalheVendas.reduce((acc, v) => acc + v.valor_comissao, 0),
+    },
+  }
+}
