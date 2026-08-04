@@ -11,8 +11,13 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SignupRouteImport } from './routes/signup'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as BarberRouteImport } from './routes/barber'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as BarberLoginRouteImport } from './routes/barber/login'
+import { Route as BarberDashboardRouteImport } from './routes/barber/dashboard'
+import { Route as BarberAgendaRouteImport } from './routes/barber/agenda'
+import { Route as AdminUsuariosRouteImport } from './routes/admin/usuarios'
 import { Route as AdminServicesRouteImport } from './routes/admin/services'
 import { Route as AdminRelatoriosRouteImport } from './routes/admin/relatorios'
 import { Route as AdminProdutosRouteImport } from './routes/admin/produtos'
@@ -33,6 +38,11 @@ const LoginRoute = LoginRouteImport.update({
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
+const BarberRoute = BarberRouteImport.update({
+  id: '/barber',
+  path: '/barber',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminRoute = AdminRouteImport.update({
   id: '/admin',
   path: '/admin',
@@ -42,6 +52,26 @@ const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
+} as any)
+const BarberLoginRoute = BarberLoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => BarberRoute,
+} as any)
+const BarberDashboardRoute = BarberDashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
+  getParentRoute: () => BarberRoute,
+} as any)
+const BarberAgendaRoute = BarberAgendaRouteImport.update({
+  id: '/agenda',
+  path: '/agenda',
+  getParentRoute: () => BarberRoute,
+} as any)
+const AdminUsuariosRoute = AdminUsuariosRouteImport.update({
+  id: '/usuarios',
+  path: '/usuarios',
+  getParentRoute: () => AdminRoute,
 } as any)
 const AdminServicesRoute = AdminServicesRouteImport.update({
   id: '/services',
@@ -92,6 +122,7 @@ const AdminAppointmentsRoute = AdminAppointmentsRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteWithChildren
+  '/barber': typeof BarberRouteWithChildren
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
   '/admin/appointments': typeof AdminAppointmentsRoute
@@ -103,10 +134,15 @@ export interface FileRoutesByFullPath {
   '/admin/produtos': typeof AdminProdutosRoute
   '/admin/relatorios': typeof AdminRelatoriosRoute
   '/admin/services': typeof AdminServicesRoute
+  '/admin/usuarios': typeof AdminUsuariosRoute
+  '/barber/agenda': typeof BarberAgendaRoute
+  '/barber/dashboard': typeof BarberDashboardRoute
+  '/barber/login': typeof BarberLoginRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteWithChildren
+  '/barber': typeof BarberRouteWithChildren
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
   '/admin/appointments': typeof AdminAppointmentsRoute
@@ -118,11 +154,16 @@ export interface FileRoutesByTo {
   '/admin/produtos': typeof AdminProdutosRoute
   '/admin/relatorios': typeof AdminRelatoriosRoute
   '/admin/services': typeof AdminServicesRoute
+  '/admin/usuarios': typeof AdminUsuariosRoute
+  '/barber/agenda': typeof BarberAgendaRoute
+  '/barber/dashboard': typeof BarberDashboardRoute
+  '/barber/login': typeof BarberLoginRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteWithChildren
+  '/barber': typeof BarberRouteWithChildren
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
   '/admin/appointments': typeof AdminAppointmentsRoute
@@ -134,12 +175,17 @@ export interface FileRoutesById {
   '/admin/produtos': typeof AdminProdutosRoute
   '/admin/relatorios': typeof AdminRelatoriosRoute
   '/admin/services': typeof AdminServicesRoute
+  '/admin/usuarios': typeof AdminUsuariosRoute
+  '/barber/agenda': typeof BarberAgendaRoute
+  '/barber/dashboard': typeof BarberDashboardRoute
+  '/barber/login': typeof BarberLoginRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
     | '/admin'
+    | '/barber'
     | '/login'
     | '/signup'
     | '/admin/appointments'
@@ -151,10 +197,15 @@ export interface FileRouteTypes {
     | '/admin/produtos'
     | '/admin/relatorios'
     | '/admin/services'
+    | '/admin/usuarios'
+    | '/barber/agenda'
+    | '/barber/dashboard'
+    | '/barber/login'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/admin'
+    | '/barber'
     | '/login'
     | '/signup'
     | '/admin/appointments'
@@ -166,10 +217,15 @@ export interface FileRouteTypes {
     | '/admin/produtos'
     | '/admin/relatorios'
     | '/admin/services'
+    | '/admin/usuarios'
+    | '/barber/agenda'
+    | '/barber/dashboard'
+    | '/barber/login'
   id:
     | '__root__'
     | '/'
     | '/admin'
+    | '/barber'
     | '/login'
     | '/signup'
     | '/admin/appointments'
@@ -181,11 +237,16 @@ export interface FileRouteTypes {
     | '/admin/produtos'
     | '/admin/relatorios'
     | '/admin/services'
+    | '/admin/usuarios'
+    | '/barber/agenda'
+    | '/barber/dashboard'
+    | '/barber/login'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRouteWithChildren
+  BarberRoute: typeof BarberRouteWithChildren
   LoginRoute: typeof LoginRoute
   SignupRoute: typeof SignupRoute
 }
@@ -206,6 +267,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/barber': {
+      id: '/barber'
+      path: '/barber'
+      fullPath: '/barber'
+      preLoaderRoute: typeof BarberRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin': {
       id: '/admin'
       path: '/admin'
@@ -219,6 +287,34 @@ declare module '@tanstack/react-router' {
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/barber/login': {
+      id: '/barber/login'
+      path: '/login'
+      fullPath: '/barber/login'
+      preLoaderRoute: typeof BarberLoginRouteImport
+      parentRoute: typeof BarberRoute
+    }
+    '/barber/dashboard': {
+      id: '/barber/dashboard'
+      path: '/dashboard'
+      fullPath: '/barber/dashboard'
+      preLoaderRoute: typeof BarberDashboardRouteImport
+      parentRoute: typeof BarberRoute
+    }
+    '/barber/agenda': {
+      id: '/barber/agenda'
+      path: '/agenda'
+      fullPath: '/barber/agenda'
+      preLoaderRoute: typeof BarberAgendaRouteImport
+      parentRoute: typeof BarberRoute
+    }
+    '/admin/usuarios': {
+      id: '/admin/usuarios'
+      path: '/usuarios'
+      fullPath: '/admin/usuarios'
+      preLoaderRoute: typeof AdminUsuariosRouteImport
+      parentRoute: typeof AdminRoute
     }
     '/admin/services': {
       id: '/admin/services'
@@ -296,6 +392,7 @@ interface AdminRouteChildren {
   AdminProdutosRoute: typeof AdminProdutosRoute
   AdminRelatoriosRoute: typeof AdminRelatoriosRoute
   AdminServicesRoute: typeof AdminServicesRoute
+  AdminUsuariosRoute: typeof AdminUsuariosRoute
 }
 
 const AdminRouteChildren: AdminRouteChildren = {
@@ -308,13 +405,30 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminProdutosRoute: AdminProdutosRoute,
   AdminRelatoriosRoute: AdminRelatoriosRoute,
   AdminServicesRoute: AdminServicesRoute,
+  AdminUsuariosRoute: AdminUsuariosRoute,
 }
 
 const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
 
+interface BarberRouteChildren {
+  BarberAgendaRoute: typeof BarberAgendaRoute
+  BarberDashboardRoute: typeof BarberDashboardRoute
+  BarberLoginRoute: typeof BarberLoginRoute
+}
+
+const BarberRouteChildren: BarberRouteChildren = {
+  BarberAgendaRoute: BarberAgendaRoute,
+  BarberDashboardRoute: BarberDashboardRoute,
+  BarberLoginRoute: BarberLoginRoute,
+}
+
+const BarberRouteWithChildren =
+  BarberRoute._addFileChildren(BarberRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRouteWithChildren,
+  BarberRoute: BarberRouteWithChildren,
   LoginRoute: LoginRoute,
   SignupRoute: SignupRoute,
 }

@@ -1,5 +1,5 @@
 import { Link, useRouter, useRouterState } from '@tanstack/react-router'
-import { BarChart3, Calendar, DollarSign, LayoutDashboard, LogOut, Package, Percent, Scissors, Settings, Users } from 'lucide-react'
+import { BarChart3, Calendar, DollarSign, LayoutDashboard, LogOut, Package, Percent, Scissors, Settings, UserPlus, Users } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { signOut } from '../integrations/supabase/client'
 
@@ -9,6 +9,7 @@ const navItems = [
   { to: '/admin/produtos', labelKey: 'nav.products', icon: Package },
   { to: '/admin/appointments', labelKey: 'nav.appointments', icon: Calendar },
   { to: '/admin/barbers', labelKey: 'nav.barbers', icon: Users },
+  { to: '/admin/usuarios', label: 'Usuários', icon: UserPlus },
   { to: '/admin/financeiro', label: 'Financeiro', icon: DollarSign },
   { to: '/admin/comissoes', label: 'Comissões', icon: Percent },
   { to: '/admin/relatorios', labelKey: 'nav.reports', icon: BarChart3 },

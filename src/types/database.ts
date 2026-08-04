@@ -12,6 +12,7 @@ export interface Barber {
   especialidades: string | null
   avaliacao: number
   foto_url: string | null
+  user_id?: string | null
   ativo?: boolean
   active?: boolean
   created_at: string

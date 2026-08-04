@@ -102,7 +102,6 @@ export async function deleteBarber(id: string) {
     .eq('barbeiro_id', id)
 
   // 2º: remove os agendamentos ligados ao barbeiro
-  // (se preferir manter o histórico, troque delete por update { barbeiro_id: null })
   await supabase
     .from('agendamentos')
     .delete()
@@ -121,6 +120,68 @@ export async function deleteBarber(id: string) {
     .eq('id', id)
 
   if (error) throw new Error(`Erro ao excluir barbeiro: ${error.message}`)
+}
+
+// =====================
+// Usuários (barbeiros com login)
+// =====================
+export async function createBarberUser(params: {
+  nome: string
+  email: string
+  senha: string
+  avaliacao?: number
+  foto_url?: string | null
+}) {
+  // 1. Cria a conta de login (auth do Supabase)
+  const { data: authData, error: authError } = await supabase.auth.signUp({
+    email: params.email,
+    password: params.senha,
+  })
+  if (authError) throw new Error(`Erro ao criar usuário: ${authError.message}`)
+  const userId = authData.user?.id
+  if (!userId) throw new Error('Não foi possível criar a conta de login. Verifique se o e-mail já não está cadastrado.')
+
+  // 2. Cria o barbeiro ligado à conta de login
+  const { data, error } = await supabase
+    .from('barbeiros')
+    .insert({
+      nome: params.nome,
+      email: params.email,
+      telefone: null,
+      especialidades: null,
+      percentual_servico: 0,
+      percentual_produto: 0,
+      comissao_servico_tipo: 'porcentagem',
+      comissao_produto_tipo: 'porcentagem',
+      avaliacao: params.avaliacao ?? 5,
+      foto_url: params.foto_url || null,
+      user_id: userId,
+    })
+    .select()
+    .single()
+  if (error) throw new Error(`Erro ao criar barbeiro: ${error.message}`)
+  return data
+}
+
+export async function getUsers() {
+  // Barbeiros que têm conta de login
+  const { data, error } = await supabase
+    .from('barbeiros')
+    .select('*')
+    .not('user_id', 'is', null)
+    .order('nome')
+  if (error) throw new Error(`Erro ao buscar usuários: ${error.message}`)
+  return data ?? []
+}
+
+export async function getBarbeiroByUserId(userId: string) {
+  const { data, error } = await supabase
+    .from('barbeiros')
+    .select('*')
+    .eq('user_id', userId)
+    .maybeSingle()
+  if (error) throw new Error(`Erro ao buscar barbeiro: ${error.message}`)
+  return data
 }
 
 // =====================
@@ -192,6 +253,21 @@ export async function deleteAppointment(id: string) {
     .delete()
     .eq('id', id)
   if (error) throw new Error(`Erro ao excluir agendamento: ${error.message}`)
+}
+
+export async function getAgendaBarbeiro(barbeiroId: string) {
+  // Agendamentos de HOJE em diante (amanhã e próximos dias)
+  const hoje = new Date()
+  hoje.setHours(0, 0, 0, 0)
+  const dataInicial = hoje.toISOString().slice(0, 10)
+  const { data, error } = await supabase
+    .from('agendamentos')
+    .select('*, servicos(nome, duracao_minutos, preco), clientes(nome, telefone)')
+    .eq('barbeiro_id', barbeiroId)
+    .gte('data', dataInicial)
+    .order('data', { ascending: true })
+  if (error) throw new Error(`Erro ao buscar agenda: ${error.message}`)
+  return data ?? []
 }
 
 // =====================
