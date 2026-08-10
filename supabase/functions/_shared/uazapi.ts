@@ -9,38 +9,70 @@ export type UazapiConfig = {
 }
 
 export function getUazapiConfig(): UazapiConfig {
-  const baseUrl = (Deno.env.get('UAZAPI_BASE_URL') || '').replace(/\/$/, '')
-  const token = Deno.env.get('UAZAPI_INSTANCE_TOKEN') || ''
+  let baseUrl = (Deno.env.get('UAZAPI_BASE_URL') || '').trim().replace(/\/$/, '')
+  const token = (Deno.env.get('UAZAPI_INSTANCE_TOKEN') || '').trim()
   if (!baseUrl || !token) {
     throw new Error('UAZAPI_BASE_URL e UAZAPI_INSTANCE_TOKEN devem ser configurados nos secrets')
+  }
+  if (!/^https?:\/\//i.test(baseUrl)) {
+    baseUrl = `https://${baseUrl}`
   }
   return { baseUrl, token }
 }
 
 async function uazRequest(
   path: string,
-  options: { method?: string; body?: unknown } = {},
+  options: { method?: string; body?: unknown; skipBody?: boolean } = {},
   config?: UazapiConfig,
 ): Promise<{ ok: boolean; data?: unknown; error?: string; status: number }> {
   const cfg = config ?? getUazapiConfig()
-  const res = await fetch(`${cfg.baseUrl}${path}`, {
-    method: options.method || 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      token: cfg.token,
-    },
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-  })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) {
+  const method = options.method || 'GET'
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    token: cfg.token,
+    // alguns gateways aceitam Authorization
+    Authorization: `Bearer ${cfg.token}`,
+  }
+
+  let body: string | undefined
+  if (method !== 'GET' && method !== 'HEAD' && !options.skipBody) {
+    headers['Content-Type'] = 'application/json'
+    body = JSON.stringify(options.body ?? {})
+  }
+
+  const url = `${cfg.baseUrl}${path.startsWith('/') ? path : `/${path}`}`
+  let res: Response
+  try {
+    res = await fetch(url, { method, headers, body })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
     return {
       ok: false,
-      status: res.status,
-      error: typeof data === 'object' && data && 'message' in data
-        ? String((data as { message: unknown }).message)
-        : `UAZAPI HTTP ${res.status}`,
-      data,
+      status: 0,
+      error: `Não foi possível contatar UAZAPI (${cfg.baseUrl}): ${msg}. Verifique UAZAPI_BASE_URL.`,
     }
+  }
+
+  const text = await res.text()
+  let data: unknown = {}
+  if (text) {
+    try {
+      data = JSON.parse(text)
+    } catch {
+      data = { raw: text.slice(0, 500) }
+    }
+  }
+
+  if (!res.ok) {
+    let errMsg = `UAZAPI HTTP ${res.status} em ${path}`
+    if (data && typeof data === 'object') {
+      const o = data as Record<string, unknown>
+      const m = o.message ?? o.error ?? o.msg ?? o.detail
+      if (m) errMsg = `${errMsg}: ${String(m)}`
+    } else if (text) {
+      errMsg = `${errMsg}: ${text.slice(0, 200)}`
+    }
+    return { ok: false, status: res.status, error: errMsg, data }
   }
   return { ok: true, status: res.status, data }
 }
@@ -61,35 +93,55 @@ export async function sendText(
 
 /**
  * POST /instance/connect
- * Sem `phone` → retorna QR code (base64). Com `phone` → pair code.
- * Docs: https://docs.uazapi.com/
+ * Sem `phone` → QR code. Com `phone` → pair code.
  */
 export async function connectInstance(
   phone?: string,
   config?: UazapiConfig,
 ): Promise<{ ok: boolean; data?: unknown; error?: string }> {
-  const body = phone ? { phone: normalizePhone(phone) } : {}
-  const result = await uazRequest(
-    '/instance/connect',
-    { method: 'POST', body },
-    config,
-  )
-  return { ok: result.ok, data: result.data, error: result.error }
+  const tries: Array<{ path: string; body?: unknown; skipBody?: boolean }> = phone
+    ? [{ path: '/instance/connect', body: { phone: normalizePhone(phone) } }]
+    : [
+      { path: '/instance/connect', skipBody: true },
+      { path: '/instance/connect', body: {} },
+    ]
+
+  let last: { ok: boolean; data?: unknown; error?: string } = { ok: false, error: 'connect falhou' }
+  for (const t of tries) {
+    const result = await uazRequest(
+      t.path,
+      { method: 'POST', body: t.body, skipBody: t.skipBody },
+      config,
+    )
+    last = result
+    if (result.ok) return { ok: true, data: result.data }
+  }
+  return last
 }
 
-/** GET /instance/status */
+/** GET /instance/status (fallback em outros paths comuns) */
 export async function getInstanceStatus(
   config?: UazapiConfig,
 ): Promise<{ ok: boolean; data?: unknown; error?: string }> {
-  const result = await uazRequest('/instance/status', { method: 'GET' }, config)
-  return { ok: result.ok, data: result.data, error: result.error }
+  const paths = ['/instance/status', '/instance/connectionState', '/status']
+  let last: { ok: boolean; data?: unknown; error?: string } = { ok: false, error: 'status falhou' }
+  for (const path of paths) {
+    const result = await uazRequest(path, { method: 'GET' }, config)
+    last = result
+    if (result.ok) return { ok: true, data: result.data }
+  }
+  return last
 }
 
 /** POST /instance/disconnect */
 export async function disconnectInstance(
   config?: UazapiConfig,
 ): Promise<{ ok: boolean; data?: unknown; error?: string }> {
-  const result = await uazRequest('/instance/disconnect', { method: 'POST', body: {} }, config)
+  const result = await uazRequest(
+    '/instance/disconnect',
+    { method: 'POST', body: {} },
+    config,
+  )
   return { ok: result.ok, data: result.data, error: result.error }
 }
 

@@ -292,35 +292,69 @@ export type WhatsAppInstanceResult = {
   status?: string | null
   data?: unknown
   error?: string
+  details?: unknown
+}
+
+async function invokeWhatsAppInstance(
+  body: { action: string; phone?: string },
+): Promise<WhatsAppInstanceResult> {
+  const { data, error } = await supabase.functions.invoke('whatsapp-instance', { body })
+
+  if (error) {
+    let detail = error.message || 'Edge Function returned a non-2xx status code'
+    try {
+      const ctx = (error as { context?: Response }).context
+      if (ctx) {
+        const clone = ctx.clone?.() ?? ctx
+        const text = await clone.text()
+        if (text) {
+          try {
+            const j = JSON.parse(text) as { error?: string; message?: string; details?: unknown }
+            detail = j.error || j.message || text
+            return {
+              ok: false,
+              error: detail,
+              details: j.details ?? j,
+            }
+          } catch {
+            detail = text.slice(0, 400)
+          }
+        }
+      }
+    } catch {
+      /* ignore parse failures */
+    }
+    return { ok: false, error: detail }
+  }
+
+  if (!data) {
+    return { ok: false, error: 'Resposta vazia da Edge Function' }
+  }
+
+  if (data.ok === false || data.error) {
+    return {
+      ok: false,
+      error: String(data.error || 'Falha na função whatsapp-instance'),
+      details: data.details,
+      data,
+    }
+  }
+
+  return data as WhatsAppInstanceResult
 }
 
 /** Status / QR da instância UAZAPI via Edge Function whatsapp-instance */
 export async function getWhatsAppInstanceStatus(): Promise<WhatsAppInstanceResult> {
-  const { data, error } = await supabase.functions.invoke('whatsapp-instance', {
-    body: { action: 'status' },
-  })
-  if (error) return { ok: false, error: error.message }
-  if (data?.error) return { ok: false, error: String(data.error), data }
-  return data as WhatsAppInstanceResult
+  return invokeWhatsAppInstance({ action: 'status' })
 }
 
 /** Gera QR code (POST /instance/connect sem phone) */
 export async function connectWhatsAppInstance(phone?: string): Promise<WhatsAppInstanceResult> {
-  const { data, error } = await supabase.functions.invoke('whatsapp-instance', {
-    body: { action: 'connect', phone },
-  })
-  if (error) return { ok: false, error: error.message }
-  if (data?.error) return { ok: false, error: String(data.error), data }
-  return data as WhatsAppInstanceResult
+  return invokeWhatsAppInstance({ action: 'connect', phone })
 }
 
 export async function disconnectWhatsAppInstance(): Promise<WhatsAppInstanceResult> {
-  const { data, error } = await supabase.functions.invoke('whatsapp-instance', {
-    body: { action: 'disconnect' },
-  })
-  if (error) return { ok: false, error: error.message }
-  if (data?.error) return { ok: false, error: String(data.error), data }
-  return data as WhatsAppInstanceResult
+  return invokeWhatsAppInstance({ action: 'disconnect' })
 }
 
 export async function updateAppointmentStatus(id: string, status: string): Promise<Appointment> {
