@@ -123,7 +123,28 @@ A function chama a API UAZAPI:
 - `GET {UAZAPI_BASE_URL}/instance/status`
 - `POST {UAZAPI_BASE_URL}/instance/disconnect`
 
-### 3.3 Conferir no Dashboard
+### 3.5 IA MiMo no bot WhatsApp
+
+O `whatsapp-webhook` usa **Xiaomi MiMo** (`mimo-v2.5-pro`) com *function calling* para:
+
+- listar serviços / barbeiros / horários da loja  
+- consultar slots livres  
+- criar e cancelar agendamentos  
+- listar horários do cliente  
+
+Config (tabela `whatsapp_secrets`, só service role, ou secrets Edge):
+
+| Campo / Secret | Exemplo |
+|----------------|---------|
+| `mimo_api_key` / `MIMO_API_KEY` | token `tp-...` |
+| `mimo_base_url` / `MIMO_BASE_URL` | `https://token-plan-sgp.xiaomimimo.com/v1` |
+| `mimo_model` / `MIMO_MODEL` | `mimo-v2.5-pro` |
+
+SQL: `supabase/whatsapp_mimo.sql`  
+
+Se a IA falhar, o menu numérico clássico (1/2/3) continua como fallback.
+
+### 3.6 Conferir no Dashboard
 
 1. Menu → **Edge Functions**
 2. Deve aparecer:

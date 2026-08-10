@@ -10,6 +10,8 @@ import {
   resetSession,
   saveSession,
 } from '../_shared/db.ts'
+import { BARBER_TOOLS, runBarberTool, systemPromptBarber } from '../_shared/barber-tools.ts'
+import { loadMimoConfig, mimoChat, type ChatMessage } from '../_shared/mimo.ts'
 import { normalizePhone, sendText } from '../_shared/uazapi.ts'
 
 type UazMessage = {
@@ -525,6 +527,104 @@ async function handleConfirm(
   ].join('\n')
 }
 
+async function processWithMimo(
+  db: ReturnType<typeof getServiceClient>,
+  phone: string,
+  text: string,
+  senderName?: string,
+): Promise<string | null> {
+  const config = await loadMimoConfig(db)
+  if (!config) return null
+
+  const session = await getSession(db, phone)
+  const prevHistory = Array.isArray(session.context.history)
+    ? (session.context.history as ChatMessage[])
+    : []
+
+  // Compact prior turns (drop huge reasoning)
+  const prior = prevHistory
+    .filter((m) => m && m.role)
+    .map((m) => {
+      const out: ChatMessage = { role: m.role }
+      if (m.content != null) out.content = m.content
+      if (m.tool_calls) out.tool_calls = m.tool_calls
+      if (m.tool_call_id) out.tool_call_id = m.tool_call_id
+      if (m.name) out.name = m.name
+      return out
+    })
+    .slice(-14)
+
+  const messages: ChatMessage[] = [
+    { role: 'system', content: systemPromptBarber() },
+    ...prior,
+    {
+      role: 'user',
+      content: senderName ? `[Cliente: ${senderName} | tel: ${phone}] ${text}` : text,
+    },
+  ]
+
+  for (let round = 0; round < 6; round++) {
+    const res = await mimoChat({
+      config,
+      messages,
+      tools: BARBER_TOOLS,
+      tool_choice: 'auto',
+      temperature: 0.5,
+      max_completion_tokens: 900,
+    })
+
+    if (!res.ok || !res.message) {
+      console.error('MiMo error', res.error)
+      return null
+    }
+
+    const msg = res.message
+    const assistantMsg: ChatMessage = {
+      role: 'assistant',
+      content: msg.content ?? null,
+    }
+    if (msg.tool_calls?.length) {
+      assistantMsg.tool_calls = msg.tool_calls
+    }
+    messages.push(assistantMsg)
+
+    if (msg.tool_calls?.length) {
+      for (const tc of msg.tool_calls) {
+        const fnName = tc.function?.name || ''
+        const fnArgs = tc.function?.arguments || '{}'
+        const toolResult = await runBarberTool(db, phone, fnName, fnArgs, senderName)
+        messages.push({
+          role: 'tool',
+          tool_call_id: tc.id,
+          name: fnName,
+          content: toolResult,
+        })
+      }
+      continue
+    }
+
+    const answer = String(msg.content || '').trim() ||
+      'Não entendi bem. Posso agendar, ver seus horários ou cancelar — o que prefere?'
+
+    const toStore = messages
+      .filter((m) => m.role !== 'system')
+      .map((m) => {
+        const out: ChatMessage = { role: m.role }
+        if (m.content != null) out.content = typeof m.content === 'string' ? m.content.slice(0, 4000) : m.content
+        if (m.tool_calls) out.tool_calls = m.tool_calls
+        if (m.tool_call_id) out.tool_call_id = m.tool_call_id
+        if (m.name) out.name = m.name
+        return out
+      })
+      .slice(-16)
+
+    await saveSession(db, phone, 'menu', { history: toStore, mode: 'mimo' })
+    return answer
+  }
+
+  return 'Tive muitas etapas nessa conversa. Envie de novo o que precisa (ex: "quero agendar corte amanhã às 15h").'
+}
+
 async function processMessage(
   db: ReturnType<typeof getServiceClient>,
   phone: string,
@@ -536,15 +636,52 @@ async function processMessage(
     return menuText()
   }
 
-  // Global shortcuts
-  if (['0', 'menu', 'oi', 'olá', 'ola', 'help', 'ajuda', 'start', '/start'].includes(trimmed.toLowerCase())) {
+  // Clear conversation
+  if (['menu', 'ajuda', 'help', 'start', '/start', 'reset', 'limpar'].includes(trimmed.toLowerCase())) {
     await resetSession(db, phone)
-    return menuText()
+    // tenta resposta com IA + menu como âncora
+    const withAi = await processWithMimo(db, phone, 'Oi, me mostre o que você pode fazer na barbearia.', senderName)
+    return withAi || menuText()
   }
 
   const session = await getSession(db, phone)
   const { step, context } = session
 
+  // Continua fluxo numérico legado se estiver no meio de um wizard
+  const wizardSteps = [
+    'choose_service',
+    'choose_barber',
+    'choose_date',
+    'choose_time',
+    'confirm',
+    'cancel_pick',
+  ]
+  if (wizardSteps.includes(step) && context.mode !== 'mimo') {
+    switch (step) {
+      case 'choose_service':
+        return handleChooseService(db, phone, trimmed, context)
+      case 'choose_barber':
+        return handleChooseBarber(db, phone, trimmed, context)
+      case 'choose_date':
+        return handleChooseDate(db, phone, trimmed, context)
+      case 'choose_time':
+        return handleChooseTime(db, phone, trimmed, context)
+      case 'confirm':
+        return handleConfirm(db, phone, trimmed, context, senderName)
+      case 'cancel_pick':
+        return handleCancelPick(db, phone, trimmed, context)
+    }
+  }
+
+  // MiMo (IA) primeiro
+  try {
+    const ai = await processWithMimo(db, phone, trimmed, senderName)
+    if (ai) return ai
+  } catch (e) {
+    console.error('processWithMimo failed', e)
+  }
+
+  // Fallback menu numérico clássico
   switch (step) {
     case 'choose_service':
       return handleChooseService(db, phone, trimmed, context)
@@ -573,7 +710,7 @@ Deno.serve(async (req) => {
 
   // Health check
   if (req.method === 'GET') {
-    return jsonResponse({ ok: true, service: 'whatsapp-webhook' })
+    return jsonResponse({ ok: true, service: 'whatsapp-webhook', ai: 'mimo' })
   }
 
   if (req.method !== 'POST') {
@@ -643,6 +780,7 @@ Deno.serve(async (req) => {
       }
 
       const senderName = msg.senderName || undefined
+      // "typing" presence would be nice but optional
       const answer = await processMessage(db, phone, text, senderName)
       await reply(phone, answer)
       results.push({ phone, ok: true })

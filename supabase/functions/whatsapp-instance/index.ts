@@ -85,13 +85,11 @@ async function requireUser(req: Request) {
 }
 
 async function resolveUazConfig(): Promise<{ config?: UazapiConfig; error?: string; source?: string }> {
-  const token = (Deno.env.get('UAZAPI_INSTANCE_TOKEN') || '').trim()
-  if (!token) {
-    return { error: 'Secret UAZAPI_INSTANCE_TOKEN não configurado.' }
-  }
-
-  const envBase = normalizeBase(Deno.env.get('UAZAPI_BASE_URL') || '')
+  let envToken = (Deno.env.get('UAZAPI_INSTANCE_TOKEN') || '').trim()
+  let envBase = normalizeBase(Deno.env.get('UAZAPI_BASE_URL') || '')
   let dbBase = ''
+  let dbToken = ''
+  let source = 'secret'
 
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
@@ -99,42 +97,62 @@ async function resolveUazConfig(): Promise<{ config?: UazapiConfig; error?: stri
     const admin = createClient(supabaseUrl, serviceKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     })
-    const { data } = await admin
+
+    const { data: cfg } = await admin
       .from('configuracoes')
       .select('uazapi_base_url')
       .eq('id', 1)
       .maybeSingle()
-    dbBase = normalizeBase(String(data?.uazapi_base_url || ''))
-  } catch {
-    /* ignore DB errors; fall back to secret */
-  }
+    dbBase = normalizeBase(String(cfg?.uazapi_base_url || ''))
 
-  // Prefer DB when secret looks like UUID (instance id mistaken for base URL)
-  let baseUrl = envBase
-  let source = 'secret'
-  if (dbBase && (!envBase || isUuidHost(envBase) || isUuidHost(dbBase) === false && dbBase.includes('uazapi.com'))) {
-    if (!envBase || isUuidHost(envBase)) {
-      baseUrl = dbBase
-      source = 'configuracoes.uazapi_base_url'
-    } else if (dbBase.includes('uazapi.com') && !envBase.includes('uazapi.com')) {
-      baseUrl = dbBase
-      source = 'configuracoes.uazapi_base_url'
+    // Table readable only via service role (no anon policies)
+    const { data: sec } = await admin
+      .from('whatsapp_secrets')
+      .select('instance_token, base_url')
+      .eq('id', 1)
+      .maybeSingle()
+    if (sec?.instance_token) dbToken = String(sec.instance_token).trim()
+    if (sec?.base_url) {
+      const b = normalizeBase(String(sec.base_url))
+      if (b) dbBase = b
     }
-  }
-  if (!baseUrl && dbBase) {
-    baseUrl = dbBase
-    source = 'configuracoes.uazapi_base_url'
+  } catch {
+    /* fall back to env only */
   }
 
+  // Prefer DB base when secret looks like instance UUID used as host by mistake
+  let baseUrl = envBase
+  if (dbBase && (!envBase || isUuidHost(envBase) || (!envBase.includes('uazapi.com') && dbBase.includes('uazapi.com')))) {
+    baseUrl = dbBase
+    source = 'db'
+  } else if (!baseUrl && dbBase) {
+    baseUrl = dbBase
+    source = 'db'
+  }
+
+  // Prefer DB token when present (CLI often can't rotate secrets)
+  let token = envToken
+  if (dbToken) {
+    // If env token failed patterns or is empty, use DB. Prefer DB UUID instance token when env is different wrong token.
+    if (!token || isUuidHost(`https://${token}`) || token.length !== dbToken.length) {
+      // always prefer whatsapp_secrets when set
+    }
+    token = dbToken
+    source = source === 'db' ? 'db' : 'db+secret'
+  }
+
+  if (!token) {
+    return { error: 'UAZAPI_INSTANCE_TOKEN ausente (secret ou tabela whatsapp_secrets).' }
+  }
   if (!baseUrl) {
     return {
       error:
-        'UAZAPI_BASE_URL ausente. Configure o secret ou Configurações → URL base UAZAPI (ex: https://barberai.uazapi.com).',
+        'UAZAPI_BASE_URL ausente. Configure secret ou Configurações / whatsapp_secrets (ex: https://barberai.uazapi.com).',
     }
   }
   if (isUuidHost(baseUrl)) {
     return {
-      error: `UAZAPI_BASE_URL inválida (${baseUrl}): parece UUID da instância. Use https://barberai.uazapi.com`,
+      error: `UAZAPI_BASE_URL inválida (${baseUrl}): parece UUID. Use https://barberai.uazapi.com`,
     }
   }
 
