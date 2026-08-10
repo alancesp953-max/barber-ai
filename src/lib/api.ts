@@ -284,6 +284,45 @@ export async function notifyAppointmentWhatsApp(params: {
   return { ok: true }
 }
 
+export type WhatsAppInstanceResult = {
+  ok: boolean
+  action?: string
+  qrcode?: string | null
+  paircode?: string | null
+  status?: string | null
+  data?: unknown
+  error?: string
+}
+
+/** Status / QR da instância UAZAPI via Edge Function whatsapp-instance */
+export async function getWhatsAppInstanceStatus(): Promise<WhatsAppInstanceResult> {
+  const { data, error } = await supabase.functions.invoke('whatsapp-instance', {
+    body: { action: 'status' },
+  })
+  if (error) return { ok: false, error: error.message }
+  if (data?.error) return { ok: false, error: String(data.error), data }
+  return data as WhatsAppInstanceResult
+}
+
+/** Gera QR code (POST /instance/connect sem phone) */
+export async function connectWhatsAppInstance(phone?: string): Promise<WhatsAppInstanceResult> {
+  const { data, error } = await supabase.functions.invoke('whatsapp-instance', {
+    body: { action: 'connect', phone },
+  })
+  if (error) return { ok: false, error: error.message }
+  if (data?.error) return { ok: false, error: String(data.error), data }
+  return data as WhatsAppInstanceResult
+}
+
+export async function disconnectWhatsAppInstance(): Promise<WhatsAppInstanceResult> {
+  const { data, error } = await supabase.functions.invoke('whatsapp-instance', {
+    body: { action: 'disconnect' },
+  })
+  if (error) return { ok: false, error: error.message }
+  if (data?.error) return { ok: false, error: String(data.error), data }
+  return data as WhatsAppInstanceResult
+}
+
 export async function updateAppointmentStatus(id: string, status: string): Promise<Appointment> {
   const { data, error } = await supabase
     .from('agendamentos')
