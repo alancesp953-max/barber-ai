@@ -5,30 +5,69 @@ import {
   disconnectInstance,
   extractQrFromResponse,
   getInstanceStatus,
+  getUazapiConfig,
+  type UazapiConfig,
 } from '../_shared/uazapi.ts'
 
 /**
  * POST /functions/v1/whatsapp-instance
- * Body: { action: "connect" | "status" | "disconnect", phone?: string }
+ * Body: { action: "connect" | "status" | "disconnect" | "diagnose", phone?: string }
  *
- * Requer Authorization Bearer (JWT do admin no painel).
- * Secrets: UAZAPI_BASE_URL, UAZAPI_INSTANCE_TOKEN
+ * Auth: JWT do admin, service_role, ou x-webhook-secret.
+ * Base URL: secret UAZAPI_BASE_URL ou configuracoes.uazapi_base_url
+ * Token: secret UAZAPI_INSTANCE_TOKEN
  */
+
+function isUuidHost(baseUrl: string): boolean {
+  try {
+    const host = new URL(/^https?:\/\//i.test(baseUrl) ? baseUrl : `https://${baseUrl}`).hostname
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(host)
+  } catch {
+    return false
+  }
+}
+
+function normalizeBase(url: string): string {
+  let base = url.trim().replace(/\/$/, '')
+  if (!base) return ''
+  if (!/^https?:\/\//i.test(base)) base = `https://${base}`
+  return base
+}
+
 async function requireUser(req: Request) {
   const authHeader = req.headers.get('Authorization') || ''
   if (!authHeader.startsWith('Bearer ')) {
-    return { user: null, error: 'Faça login no painel (token ausente).' }
+    return { user: null as null, error: 'Faça login no painel (token ausente).' }
   }
 
   const jwt = authHeader.replace(/^Bearer\s+/i, '').trim()
   if (!jwt || jwt.length < 20) {
-    return { user: null, error: 'Sessão inválida. Faça login novamente.' }
+    return { user: null as null, error: 'Sessão inválida. Faça login novamente.' }
+  }
+
+  try {
+    const payloadB64 = jwt.split('.')[1]
+    if (payloadB64) {
+      const json = atob(payloadB64.replace(/-/g, '+').replace(/_/g, '/'))
+      const payload = JSON.parse(json) as { role?: string }
+      if (payload.role === 'service_role') {
+        return { user: { id: 'service_role', role: 'service_role' }, error: null }
+      }
+    }
+  } catch {
+    /* continue */
+  }
+
+  const webhookSecret = Deno.env.get('WEBHOOK_SECRET') || ''
+  const headerSecret = req.headers.get('x-webhook-secret') || ''
+  if (webhookSecret && headerSecret && headerSecret === webhookSecret) {
+    return { user: { id: 'webhook_secret', role: 'secret' }, error: null }
   }
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL')
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
   if (!supabaseUrl || !serviceKey) {
-    return { user: null, error: 'Supabase env ausente na Edge Function.' }
+    return { user: null as null, error: 'Supabase env ausente na Edge Function.' }
   }
 
   const admin = createClient(supabaseUrl, serviceKey, {
@@ -38,20 +77,91 @@ async function requireUser(req: Request) {
   const { data, error } = await admin.auth.getUser(jwt)
   if (error || !data.user) {
     return {
-      user: null,
+      user: null as null,
       error: error?.message || 'Não autorizado. Saia e entre de novo no admin.',
     }
   }
   return { user: data.user, error: null }
 }
 
-function uazSecretsOk(): string | null {
-  const base = Deno.env.get('UAZAPI_BASE_URL')
-  const token = Deno.env.get('UAZAPI_INSTANCE_TOKEN')
-  if (!base || !token) {
-    return 'Secrets UAZAPI_BASE_URL e UAZAPI_INSTANCE_TOKEN não configurados no Supabase.'
+async function resolveUazConfig(): Promise<{ config?: UazapiConfig; error?: string; source?: string }> {
+  const token = (Deno.env.get('UAZAPI_INSTANCE_TOKEN') || '').trim()
+  if (!token) {
+    return { error: 'Secret UAZAPI_INSTANCE_TOKEN não configurado.' }
   }
-  return null
+
+  const envBase = normalizeBase(Deno.env.get('UAZAPI_BASE_URL') || '')
+  let dbBase = ''
+
+  try {
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    const admin = createClient(supabaseUrl, serviceKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    })
+    const { data } = await admin
+      .from('configuracoes')
+      .select('uazapi_base_url')
+      .eq('id', 1)
+      .maybeSingle()
+    dbBase = normalizeBase(String(data?.uazapi_base_url || ''))
+  } catch {
+    /* ignore DB errors; fall back to secret */
+  }
+
+  // Prefer DB when secret looks like UUID (instance id mistaken for base URL)
+  let baseUrl = envBase
+  let source = 'secret'
+  if (dbBase && (!envBase || isUuidHost(envBase) || isUuidHost(dbBase) === false && dbBase.includes('uazapi.com'))) {
+    if (!envBase || isUuidHost(envBase)) {
+      baseUrl = dbBase
+      source = 'configuracoes.uazapi_base_url'
+    } else if (dbBase.includes('uazapi.com') && !envBase.includes('uazapi.com')) {
+      baseUrl = dbBase
+      source = 'configuracoes.uazapi_base_url'
+    }
+  }
+  if (!baseUrl && dbBase) {
+    baseUrl = dbBase
+    source = 'configuracoes.uazapi_base_url'
+  }
+
+  if (!baseUrl) {
+    return {
+      error:
+        'UAZAPI_BASE_URL ausente. Configure o secret ou Configurações → URL base UAZAPI (ex: https://barberai.uazapi.com).',
+    }
+  }
+  if (isUuidHost(baseUrl)) {
+    return {
+      error: `UAZAPI_BASE_URL inválida (${baseUrl}): parece UUID da instância. Use https://barberai.uazapi.com`,
+    }
+  }
+
+  try {
+    const config = getUazapiConfig({ baseUrl, token })
+    return { config, source }
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+function secretsDiag(source?: string, config?: UazapiConfig) {
+  const base = config?.baseUrl || Deno.env.get('UAZAPI_BASE_URL') || ''
+  const token = config?.token || Deno.env.get('UAZAPI_INSTANCE_TOKEN') || ''
+  let host = ''
+  try {
+    host = new URL(normalizeBase(base)).host
+  } catch {
+    host = base.slice(0, 60)
+  }
+  return {
+    uazapi_host: host || null,
+    base_source: source || null,
+    token_len: token.length,
+    token_prefix: token ? `${token.slice(0, 4)}…` : null,
+    webhook_secret_set: Boolean(Deno.env.get('WEBHOOK_SECRET')),
+  }
 }
 
 Deno.serve(async (req) => {
@@ -69,25 +179,36 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: false, error: authError || 'Unauthorized' }, 401)
     }
 
-    const secretErr = uazSecretsOk()
-    if (secretErr) {
-      // 200 so functions.invoke delivers body to the client
-      return jsonResponse({ ok: false, error: secretErr })
-    }
-
+    const resolved = await resolveUazConfig()
     const body = (await req.json().catch(() => ({}))) as {
       action?: string
       phone?: string
     }
     const action = (body.action || 'status').toLowerCase()
 
+    if (action === 'diagnose') {
+      return jsonResponse({
+        ok: !resolved.error,
+        action: 'diagnose',
+        error: resolved.error || null,
+        ...secretsDiag(resolved.source, resolved.config),
+      })
+    }
+
+    if (resolved.error || !resolved.config) {
+      return jsonResponse({ ok: false, error: resolved.error || 'Config UAZAPI inválida' })
+    }
+
+    const cfg = resolved.config
+
     if (action === 'connect') {
-      const result = await connectInstance(body.phone)
+      const result = await connectInstance(body.phone, cfg)
       if (!result.ok) {
         return jsonResponse({
           ok: false,
           error: result.error || 'Falha no POST /instance/connect',
           details: result.data,
+          ...secretsDiag(resolved.source, cfg),
         })
       }
       const parsed = extractQrFromResponse(result.data)
@@ -98,16 +219,18 @@ Deno.serve(async (req) => {
         paircode: parsed.paircode || null,
         status: parsed.status || null,
         data: result.data,
+        ...secretsDiag(resolved.source, cfg),
       })
     }
 
     if (action === 'status') {
-      const result = await getInstanceStatus()
+      const result = await getInstanceStatus(cfg)
       if (!result.ok) {
         return jsonResponse({
           ok: false,
           error: result.error || 'Falha no GET /instance/status',
           details: result.data,
+          ...secretsDiag(resolved.source, cfg),
         })
       }
       const parsed = extractQrFromResponse(result.data)
@@ -118,11 +241,12 @@ Deno.serve(async (req) => {
         paircode: parsed.paircode || null,
         status: parsed.status || null,
         data: result.data,
+        ...secretsDiag(resolved.source, cfg),
       })
     }
 
     if (action === 'disconnect') {
-      const result = await disconnectInstance()
+      const result = await disconnectInstance(cfg)
       if (!result.ok) {
         return jsonResponse({
           ok: false,
@@ -135,7 +259,7 @@ Deno.serve(async (req) => {
 
     return jsonResponse({
       ok: false,
-      error: 'action inválida. Use: connect | status | disconnect',
+      error: 'action inválida. Use: connect | status | disconnect | diagnose',
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

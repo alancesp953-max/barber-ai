@@ -8,14 +8,29 @@ export type UazapiConfig = {
   token: string
 }
 
-export function getUazapiConfig(): UazapiConfig {
-  let baseUrl = (Deno.env.get('UAZAPI_BASE_URL') || '').trim().replace(/\/$/, '')
-  const token = (Deno.env.get('UAZAPI_INSTANCE_TOKEN') || '').trim()
+export function getUazapiConfig(overrides?: Partial<UazapiConfig>): UazapiConfig {
+  let baseUrl = (
+    overrides?.baseUrl ||
+    Deno.env.get('UAZAPI_BASE_URL') ||
+    ''
+  ).trim().replace(/\/$/, '')
+  const token = (overrides?.token || Deno.env.get('UAZAPI_INSTANCE_TOKEN') || '').trim()
   if (!baseUrl || !token) {
     throw new Error('UAZAPI_BASE_URL e UAZAPI_INSTANCE_TOKEN devem ser configurados nos secrets')
   }
   if (!/^https?:\/\//i.test(baseUrl)) {
     baseUrl = `https://${baseUrl}`
+  }
+  // UUID-only "host" is never valid (instance id mistaken for base URL)
+  try {
+    const host = new URL(baseUrl).hostname
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(host)) {
+      throw new Error(
+        `UAZAPI_BASE_URL inválida (${host}). Use a URL do servidor, ex: https://barberai.uazapi.com`,
+      )
+    }
+  } catch (e) {
+    if (e instanceof Error && e.message.includes('UAZAPI_BASE_URL inválida')) throw e
   }
   return { baseUrl, token }
 }
@@ -27,11 +42,10 @@ async function uazRequest(
 ): Promise<{ ok: boolean; data?: unknown; error?: string; status: number }> {
   const cfg = config ?? getUazapiConfig()
   const method = options.method || 'GET'
+  // UAZAPI instance auth is header "token" only (not Bearer) — see docs.uazapi.com
   const headers: Record<string, string> = {
     Accept: 'application/json',
     token: cfg.token,
-    // alguns gateways aceitam Authorization
-    Authorization: `Bearer ${cfg.token}`,
   }
 
   let body: string | undefined
@@ -63,6 +77,23 @@ async function uazRequest(
     }
   }
 
+  // Server-level health payload (invalid or admin token / wrong base) is not instance QR
+  if (data && typeof data === 'object') {
+    const o = data as Record<string, unknown>
+    if (
+      typeof o.info === 'string' &&
+      o.info.toLowerCase().includes('server is up')
+    ) {
+      return {
+        ok: false,
+        status: res.status,
+        error:
+          'A UAZAPI devolveu status do SERVIDOR (não da instância). Confira se UAZAPI_INSTANCE_TOKEN é o token da INSTÂNCIA (header token), não o admintoken do servidor, e se UAZAPI_BASE_URL é https://seu-subdominio.uazapi.com',
+        data,
+      }
+    }
+  }
+
   if (!res.ok) {
     let errMsg = `UAZAPI HTTP ${res.status} em ${path}`
     if (data && typeof data === 'object') {
@@ -76,6 +107,7 @@ async function uazRequest(
   }
   return { ok: true, status: res.status, data }
 }
+
 
 export async function sendText(
   number: string,
@@ -119,12 +151,16 @@ export async function connectInstance(
   return last
 }
 
-/** GET /instance/status (fallback em outros paths comuns) */
+/** GET /instance/status — poll QR updates while connecting */
 export async function getInstanceStatus(
   config?: UazapiConfig,
 ): Promise<{ ok: boolean; data?: unknown; error?: string }> {
-  const paths = ['/instance/status', '/instance/connectionState', '/status']
-  let last: { ok: boolean; data?: unknown; error?: string } = { ok: false, error: 'status falhou' }
+  // Do NOT call bare /status — that is server health, not instance
+  const paths = ['/instance/status', '/instance/connectionState']
+  let last: { ok: boolean; data?: unknown; error?: string } = {
+    ok: false,
+    error: 'status da instância falhou',
+  }
   for (const path of paths) {
     const result = await uazRequest(path, { method: 'GET' }, config)
     last = result
