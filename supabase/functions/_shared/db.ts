@@ -30,11 +30,11 @@ export async function getSession(db: SupabaseClient, phone: string): Promise<Ses
   if (data) {
     return {
       phone: data.phone,
-      step: data.step || 'menu',
+      step: data.step || 'chat',
       context: (data.context as Record<string, unknown>) || {},
     }
   }
-  return { phone: p, step: 'menu', context: {} }
+  return { phone: p, step: 'chat', context: {} }
 }
 
 export async function saveSession(
@@ -53,7 +53,7 @@ export async function saveSession(
 }
 
 export async function resetSession(db: SupabaseClient, phone: string): Promise<void> {
-  await saveSession(db, phone, 'menu', {})
+  await saveSession(db, phone, 'chat', {})
 }
 
 export async function findOrCreateClientByPhone(
@@ -104,17 +104,97 @@ export async function isBotActive(db: SupabaseClient): Promise<boolean> {
   return data?.whatsapp_bot_ativo === true
 }
 
+export function greetingText(): string {
+  return 'Oi! Tudo bem? Em que posso te ajudar?'
+}
+
+/** @deprecated use greetingText — kept as alias for internal redirects */
 export function menuText(): string {
-  return [
-    '*BarberAI* — como posso ajudar?',
-    '',
-    '1️⃣ Agendar horário',
-    '2️⃣ Meus horários',
-    '3️⃣ Cancelar agendamento',
-    '0️⃣ Menu / ajuda',
-    '',
-    'Envie o *número* da opção.',
-  ].join('\n')
+  return greetingText()
+}
+
+/** Short closer after a finished action. */
+export function aftercareText(): string {
+  return 'Qualquer coisa, me chama aqui.'
+}
+
+/** Normalize for name matching (lowercase, no accents). */
+export function normalizeMatch(s: string): string {
+  return s
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+}
+
+/**
+ * Match user text to an item by name.
+ * Exact → startsWith → includes; pure digit 1..n still accepted for compat.
+ */
+export function matchByName<T extends { nome: string }>(
+  text: string,
+  items: T[],
+): T | null {
+  if (!items.length) return null
+  const raw = text.trim()
+  if (!raw) return null
+
+  // Compat: pure digit index still works if customer types it unprompted
+  if (/^\d+$/.test(raw)) {
+    const idx = parseInt(raw, 10) - 1
+    if (idx >= 0 && idx < items.length) return items[idx]
+  }
+
+  const q = normalizeMatch(raw)
+  const exact = items.find((it) => normalizeMatch(it.nome) === q)
+  if (exact) return exact
+
+  const starts = items.filter((it) => normalizeMatch(it.nome).startsWith(q))
+  if (starts.length === 1) return starts[0]
+
+  const includes = items.filter((it) => {
+    const n = normalizeMatch(it.nome)
+    return n.includes(q) || q.includes(n)
+  })
+  if (includes.length === 1) return includes[0]
+  return null
+}
+
+/** Match a time slot: "15:00", "15h", "15", index digit, or substring. */
+export function matchSlot(text: string, slots: string[]): string | null {
+  if (!slots.length) return null
+  const raw = text.trim()
+  if (!raw) return null
+
+  if (/^\d+$/.test(raw) && !raw.includes(':') && raw.length <= 2 && parseInt(raw, 10) <= slots.length) {
+    const idx = parseInt(raw, 10) - 1
+    if (idx >= 0 && idx < slots.length) return slots[idx].slice(0, 5)
+  }
+
+  // HH:MM or HHh or HHhMM
+  let want = raw.replace(/\s/g, '').toLowerCase()
+  const hm = want.match(/^(\d{1,2})(?::|h)?(\d{2})?h?$/)
+  if (hm) {
+    const h = hm[1].padStart(2, '0')
+    const m = (hm[2] || '00').padStart(2, '0')
+    want = `${h}:${m}`
+  }
+
+  const exact = slots.find((s) => s.slice(0, 5) === want)
+  if (exact) return exact.slice(0, 5)
+
+  // "15" alone → unique slot starting with 15:
+  if (/^\d{1,2}$/.test(raw)) {
+    const hour = raw.padStart(2, '0')
+    const matches = slots.filter((s) => s.slice(0, 2) === hour)
+    if (matches.length === 1) return matches[0].slice(0, 5)
+  }
+
+  return null
+}
+
+export function formatNameList(names: string[]): string {
+  return names.map((n) => `• ${n}`).join('\n')
 }
 
 export function parseDateBR(input: string): string | null {

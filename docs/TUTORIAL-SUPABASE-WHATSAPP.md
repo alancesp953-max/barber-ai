@@ -142,7 +142,9 @@ Config (tabela `whatsapp_secrets`, só service role, ou secrets Edge):
 
 SQL: `supabase/whatsapp_mimo.sql`  
 
-Se a IA falhar, o menu numérico clássico (1/2/3) continua como fallback.
+O bot conversa como recepção humana (sem menu, sem opções 1/2/3). Usa o histórico da conversa para manter contexto. Antes de cada resposta, envia presence `composing` (digitando) e um pequeno delay proporcional ao tamanho do texto.
+
+Se a IA falhar, há só um fallback leve por intenções em prosa (ainda sem menu).
 
 ### 3.6 Conferir no Dashboard
 

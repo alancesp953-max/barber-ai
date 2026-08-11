@@ -109,6 +109,62 @@ async function uazRequest(
 }
 
 
+export type PresenceType = 'composing' | 'paused' | 'recording'
+
+/** POST /message/presence — typing / recording indicator in chat */
+export async function sendPresence(
+  number: string,
+  presence: PresenceType,
+  config?: UazapiConfig,
+): Promise<{ ok: boolean; data?: unknown; error?: string }> {
+  const phone = normalizePhone(number)
+  const result = await uazRequest(
+    '/message/presence',
+    { method: 'POST', body: { number: phone, presence } },
+    config,
+  )
+  return { ok: result.ok, data: result.data, error: result.error }
+}
+
+/** Delay that feels like typing without blocking the Edge Function too long */
+export function typingDelayMs(text: string): number {
+  return Math.min(2800, Math.max(600, text.length * 25))
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Simulate human typing: compose presence → wait → send text.
+ * Presence failures never block the actual message.
+ */
+export async function humanReply(
+  number: string,
+  text: string,
+  config?: UazapiConfig,
+): Promise<{ ok: boolean; data?: unknown; error?: string }> {
+  const phone = normalizePhone(number)
+
+  try {
+    await sendPresence(phone, 'composing', config)
+  } catch {
+    /* best-effort */
+  }
+
+  await sleep(typingDelayMs(text))
+
+  const result = await sendText(phone, text, config)
+
+  try {
+    await sendPresence(phone, 'paused', config)
+  } catch {
+    /* best-effort */
+  }
+
+  return result
+}
+
 export async function sendText(
   number: string,
   text: string,
@@ -117,7 +173,15 @@ export async function sendText(
   const phone = normalizePhone(number)
   const result = await uazRequest(
     '/send/text',
-    { method: 'POST', body: { number: phone, text } },
+    {
+      method: 'POST',
+      body: {
+        number: phone,
+        text,
+        readchat: true,
+        readmessages: true,
+      },
+    },
     config,
   )
   return { ok: result.ok, data: result.data, error: result.error }

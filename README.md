@@ -127,15 +127,16 @@ Em **Admin → Configurações → Bot WhatsApp**: ligue o bot. O token **não**
 
 ### Fluxo do bot
 
-| Opção | Ação |
-|-------|------|
-| 1 | Agendar (serviço → barbeiro → data → horário → confirmar) |
-| 2 | Listar horários futuros |
-| 3 | Cancelar agendamento |
-| 0 | Menu / ajuda |
+Atendimento 100% conversacional: a IA (MiMo) lidera com memória do chat — sem “menu”, sem lista de opções. O cliente fala o que precisa e o bot continua de onde parou.
 
-Horários livres usam `get_available_slots` + horários em Configurações.  
-Ao criar agendamento no admin com telefone do cliente, o painel tenta enviar confirmação via `whatsapp-send`.
+| Intenção | Exemplos | Comportamento |
+|----------|----------|----------------|
+| Cumprimento | “oi”, “e aí” | Cumprimenta e espera |
+| Agendar | “quero corte amanhã 15h” | Entende contexto e confirma o que faltar |
+| Consultar | “quais meus horários?” | Lista em prosa |
+| Cancelar | “cancela o de sexta” | Resolve pelo papo |
+
+Horários livres via tools. Confirmação admin via `whatsapp-send` com digitação simulada.
 
 ## Estrutura principal
 

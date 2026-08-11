@@ -1,6 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1'
 import { corsHeaders, jsonResponse } from '../_shared/cors.ts'
-import { normalizePhone, sendText } from '../_shared/uazapi.ts'
+import { humanReply, normalizePhone } from '../_shared/uazapi.ts'
 
 /**
  * POST /functions/v1/whatsapp-send
@@ -61,7 +61,7 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: 'number e text são obrigatórios' }, 400)
     }
 
-    const result = await sendText(normalizePhone(number), text)
+    const result = await humanReply(normalizePhone(number), text)
     if (!result.ok) {
       return jsonResponse({ error: result.error, details: result.data }, 502)
     }

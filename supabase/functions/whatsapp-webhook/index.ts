@@ -1,11 +1,16 @@
 import { corsHeaders, jsonResponse } from '../_shared/cors.ts'
 import {
+  aftercareText,
   findOrCreateClientByPhone,
   formatDateBR,
+  formatNameList,
   getServiceClient,
   getSession,
+  greetingText,
   isBotActive,
-  menuText,
+  matchByName,
+  matchSlot,
+  normalizeMatch,
   parseDateBR,
   resetSession,
   saveSession,
@@ -19,7 +24,7 @@ import {
   filterPastSlots,
   todaySaoPaulo,
 } from '../_shared/slots.ts'
-import { normalizePhone, sendText } from '../_shared/uazapi.ts'
+import { humanReply, normalizePhone } from '../_shared/uazapi.ts'
 
 type UazMessage = {
   messageid?: string
@@ -180,59 +185,91 @@ async function reply(phone: string, text: string, db: ReturnType<typeof getServi
     console.error('reply uaz config', resolved.error)
     throw new Error(resolved.error || 'UAZAPI não configurada para enviar mensagens')
   }
-  const result = await sendText(phone, text, resolved.config)
+  const result = await humanReply(phone, text, resolved.config)
   if (!result.ok) {
     console.error('reply send failed', result.error)
     throw new Error(result.error || 'Falha ao enviar WhatsApp')
   }
 }
 
-// ─── Flow handlers ───────────────────────────────────────────────────────────
+function wantsRestart(text: string): boolean {
+  const t = normalizeMatch(text)
+  return [
+    'recomecar',
+    'comecar de novo',
+    'esquece',
+    'deixa pra la',
+    'deixa pra la',
+    'voltar',
+    'cancela tudo',
+  ].includes(t)
+}
 
-async function handleMenu(
+// ─── Flow handlers (só se a IA estiver indisponível) ─────────────────────────
+
+async function handleFallbackIntent(
   db: ReturnType<typeof getServiceClient>,
   phone: string,
   text: string,
 ): Promise<string> {
-  const t = text.trim().toLowerCase()
+  const t = normalizeMatch(text)
 
-  if (t === '1' || t.includes('agendar')) {
-    const { data: services } = await db
-      .from('servicos')
-      .select('id, nome, preco, duracao_minutos')
-      .order('nome')
-
-    const list = (services || []).filter((s: { ativo?: boolean }) => s.ativo !== false)
-    if (!list.length) {
-      await resetSession(db, phone)
-      return 'Nenhum serviço disponível no momento. Tente mais tarde.'
-    }
-
-    await saveSession(db, phone, 'choose_service', {
-      services: list.map((s: { id: string; nome: string; preco: number; duracao_minutos: number }) => ({
-        id: s.id,
-        nome: s.nome,
-        preco: s.preco,
-        duracao: s.duracao_minutos,
-      })),
-    })
-
-    const lines = list.map(
-      (s: { nome: string; preco: number; duracao_minutos: number }, i: number) =>
-        `${i + 1}. ${s.nome} — R$ ${Number(s.preco).toFixed(2)} (${s.duracao_minutos} min)`,
-    )
-    return ['Qual *serviço*?', '', ...lines, '', 'Responda com o *número*.', '0️⃣ Menu'].join('\n')
+  if (
+    t.includes('agendar') ||
+    t.includes('marcar') ||
+    t.includes('quero marcar') ||
+    (t.includes('horario') && !t.includes('meus') && !t.includes('ver'))
+  ) {
+    return startBooking(db, phone)
   }
 
-  if (t === '2' || t.includes('meus')) {
+  if (t.includes('meus') || t.includes('consult') || t.includes('ver meu')) {
     return await listAppointments(db, phone)
   }
 
-  if (t === '3' || t.includes('cancel')) {
+  if (t.includes('cancel') || t.includes('desmarcar')) {
     return await startCancel(db, phone)
   }
 
-  return menuText()
+  // Não inventar "menu": só pede de volta o que a pessoa precisa
+  return 'Oi! Me conta o que você precisa — marcar horário, ver o que já tem ou cancelar algo.'
+}
+
+async function startBooking(
+  db: ReturnType<typeof getServiceClient>,
+  phone: string,
+): Promise<string> {
+  const { data: services } = await db
+    .from('servicos')
+    .select('id, nome, preco, duracao_minutos')
+    .order('nome')
+
+  const list = (services || []).filter((s: { ativo?: boolean }) => s.ativo !== false)
+  if (!list.length) {
+    await resetSession(db, phone)
+    return 'No momento não tenho serviços disponíveis. Tenta mais tarde?'
+  }
+
+  await saveSession(db, phone, 'choose_service', {
+    services: list.map((s: { id: string; nome: string; preco: number; duracao_minutos: number }) => ({
+      id: s.id,
+      nome: s.nome,
+      preco: s.preco,
+      duracao: s.duracao_minutos,
+    })),
+  })
+
+  const lines = list.map(
+    (s: { nome: string; preco: number; duracao_minutos: number }) =>
+      `• *${s.nome}* — R$ ${Number(s.preco).toFixed(2)} (${s.duracao_minutos} min)`,
+  )
+  return [
+    'Beleza. Qual serviço você quer?',
+    '',
+    ...lines,
+    '',
+    'Pode falar o nome (tipo "corte").',
+  ].join('\n')
 }
 
 async function listAppointments(
@@ -254,7 +291,7 @@ async function listAppointments(
   await resetSession(db, phone)
 
   if (!data?.length) {
-    return 'Você não tem horários futuros.\n\n' + menuText()
+    return 'Você não tem horários futuros marcados.\n\n' + aftercareText()
   }
 
   const lines = data.map((a: {
@@ -263,13 +300,13 @@ async function listAppointments(
     status: string
     servicos: { nome: string } | { nome: string }[] | null
     barbeiros: { nome: string } | { nome: string }[] | null
-  }, i: number) => {
+  }) => {
     const serv = Array.isArray(a.servicos) ? a.servicos[0] : a.servicos
     const barb = Array.isArray(a.barbeiros) ? a.barbeiros[0] : a.barbeiros
-    return `${i + 1}. ${formatDateBR(a.data)} ${String(a.horario).slice(0, 5)} — ${serv?.nome || 'Serviço'}${barb?.nome ? ` com ${barb.nome}` : ''} (${a.status})`
+    return `• ${formatDateBR(a.data)} às ${String(a.horario).slice(0, 5)} — ${serv?.nome || 'Serviço'}${barb?.nome ? ` com ${barb.nome}` : ''} (${a.status})`
   })
 
-  return ['*Seus horários:*', '', ...lines, '', menuText()].join('\n')
+  return ['Seus horários:', '', ...lines, '', aftercareText()].join('\n')
 }
 
 async function startCancel(
@@ -290,7 +327,7 @@ async function startCancel(
 
   if (!data?.length) {
     await resetSession(db, phone)
-    return 'Nada para cancelar.\n\n' + menuText()
+    return 'Não achei nada pra cancelar.\n\n' + aftercareText()
   }
 
   const items = data.map((a: {
@@ -300,16 +337,24 @@ async function startCancel(
     servicos: { nome: string } | { nome: string }[] | null
   }) => {
     const serv = Array.isArray(a.servicos) ? a.servicos[0] : a.servicos
+    const label = `${formatDateBR(a.data)} ${String(a.horario).slice(0, 5)} — ${serv?.nome || 'Serviço'}`
     return {
       id: a.id,
-      label: `${formatDateBR(a.data)} ${String(a.horario).slice(0, 5)} — ${serv?.nome || 'Serviço'}`,
+      label,
+      nome: label,
     }
   })
 
   await saveSession(db, phone, 'cancel_pick', { cancelItems: items })
 
-  const lines = items.map((it: { label: string }, i: number) => `${i + 1}. ${it.label}`)
-  return ['Qual agendamento cancelar?', '', ...lines, '', 'Responda com o *número*.', '0️⃣ Menu'].join('\n')
+  const lines = items.map((it: { label: string }) => `• ${it.label}`)
+  return [
+    'Qual desses você quer cancelar?',
+    '',
+    ...lines,
+    '',
+    'Me diga a *data*, o *horário* ou o *serviço* do agendamento.',
+  ].join('\n')
 }
 
 async function handleCancelPick(
@@ -318,50 +363,44 @@ async function handleCancelPick(
   text: string,
   context: Record<string, unknown>,
 ): Promise<string> {
-  if (text.trim() === '0') {
+  if (wantsRestart(text)) {
     await resetSession(db, phone)
-    return menuText()
+    return greetingText()
   }
 
-  const items = (context.cancelItems as { id: string; label: string }[]) || []
-  const idx = parseInt(text.trim(), 10) - 1
-  if (Number.isNaN(idx) || idx < 0 || idx >= items.length) {
-    return 'Número inválido. Escolha um da lista ou 0 para o menu.'
+  const items = (context.cancelItems as { id: string; label: string; nome: string }[]) || []
+  const matched = matchByName(text, items)
+  if (!matched) {
+    const names = items.map((it) => it.label)
+    return [
+      'Não achei esse agendamento. Temos:',
+      '',
+      formatNameList(names),
+      '',
+      'Qual prefere cancelar?',
+    ].join('\n')
   }
 
-  const item = items[idx]
   const { error } = await db
     .from('agendamentos')
     .update({ status: 'cancelado' })
-    .eq('id', item.id)
+    .eq('id', matched.id)
 
   await resetSession(db, phone)
 
   if (error) {
-    return `Não consegui cancelar: ${error.message}\n\n` + menuText()
+    return `Não consegui cancelar: ${error.message}\n\n` + aftercareText()
   }
 
-  return `✅ Cancelado:\n${item.label}\n\n` + menuText()
+  return `Pronto, cancelei:\n${matched.label}\n\n` + aftercareText()
 }
 
-async function handleChooseService(
+async function proceedAfterService(
   db: ReturnType<typeof getServiceClient>,
   phone: string,
-  text: string,
   context: Record<string, unknown>,
+  service: { id: string; nome: string; preco: number; duracao: number },
 ): Promise<string> {
-  if (text.trim() === '0') {
-    await resetSession(db, phone)
-    return menuText()
-  }
-
-  const services = (context.services as { id: string; nome: string; preco: number; duracao: number }[]) || []
-  const idx = parseInt(text.trim(), 10) - 1
-  if (Number.isNaN(idx) || idx < 0 || idx >= services.length) {
-    return 'Número inválido. Escolha o serviço ou 0 para o menu.'
-  }
-
-  const service = services[idx]
   const { data: barbers } = await db
     .from('barbeiros')
     .select('id, nome')
@@ -371,7 +410,6 @@ async function handleChooseService(
     b.ativo !== false && b.active !== false
   )
 
-  // Nenhum barbeiro: segue sem preferência
   if (!list.length) {
     await saveSession(db, phone, 'choose_date', {
       ...context,
@@ -381,14 +419,12 @@ async function handleChooseService(
       barbeiro_nome: null,
     })
     return [
-      `Serviço: *${service.nome}*`,
+      `Show, *${service.nome}*.`,
       '',
-      'Envie a *data* (ex: 15/08 ou 15/08/2026)',
-      '0️⃣ Menu',
+      'Pra qual *data*? (ex.: 15/08 ou 15/08/2026)',
     ].join('\n')
   }
 
-  // Só 1 cadastrado: não pergunta, já usa esse barbeiro
   if (list.length === 1) {
     const only = list[0]
     await saveSession(db, phone, 'choose_date', {
@@ -400,15 +436,12 @@ async function handleChooseService(
       barbers: list.map((b: { id: string; nome: string }) => ({ id: b.id, nome: b.nome })),
     })
     return [
-      `Serviço: *${service.nome}*`,
-      `Barbeiro: *${only.nome}*`,
+      `*${service.nome}* com *${only.nome}*.`,
       '',
-      'Envie a *data* (ex: 15/08 ou 15/08/2026)',
-      '0️⃣ Menu',
+      'Pra qual *data*? (ex.: 15/08 ou 15/08/2026)',
     ].join('\n')
   }
 
-  // Vários: cliente escolhe
   await saveSession(db, phone, 'choose_barber', {
     ...context,
     servico_id: service.id,
@@ -416,19 +449,40 @@ async function handleChooseService(
     barbers: list.map((b: { id: string; nome: string }) => ({ id: b.id, nome: b.nome })),
   })
 
-  const lines = list.map((b: { nome: string }, i: number) => `${i + 1}. ${b.nome}`)
-  lines.push(`${list.length + 1}. Qualquer barbeiro disponível`)
-
+  const names = list.map((b: { nome: string }) => b.nome)
   return [
-    `Serviço: *${service.nome}*`,
+    `*${service.nome}* — ótima escolha.`,
     '',
-    'Qual *barbeiro*?',
+    'Com quem prefere? Ou diga *qualquer* se não tiver preferência.',
     '',
-    ...lines,
-    '',
-    'Responda com o *número*.',
-    '0️⃣ Menu',
+    formatNameList(names),
   ].join('\n')
+}
+
+async function handleChooseService(
+  db: ReturnType<typeof getServiceClient>,
+  phone: string,
+  text: string,
+  context: Record<string, unknown>,
+): Promise<string> {
+  if (wantsRestart(text)) {
+    await resetSession(db, phone)
+    return greetingText()
+  }
+
+  const services = (context.services as { id: string; nome: string; preco: number; duracao: number }[]) || []
+  const service = matchByName(text, services)
+  if (!service) {
+    return [
+      'Não achei esse serviço. Temos:',
+      '',
+      formatNameList(services.map((s) => s.nome)),
+      '',
+      'Qual prefere?',
+    ].join('\n')
+  }
+
+  return proceedAfterService(db, phone, context, service)
 }
 
 async function handleChooseBarber(
@@ -437,25 +491,34 @@ async function handleChooseBarber(
   text: string,
   context: Record<string, unknown>,
 ): Promise<string> {
-  if (text.trim() === '0') {
+  if (wantsRestart(text)) {
     await resetSession(db, phone)
-    return menuText()
+    return greetingText()
   }
 
   const barbers = (context.barbers as { id: string; nome: string }[]) || []
-  const idx = parseInt(text.trim(), 10) - 1
-  const anyOption = barbers.length
-
-  if (Number.isNaN(idx) || idx < 0 || idx > anyOption) {
-    return 'Número inválido. Escolha o barbeiro ou 0 para o menu.'
-  }
+  const t = normalizeMatch(text)
 
   let barbeiro_id: string | null = null
   let barbeiro_nome: string | null = 'Qualquer'
 
-  if (idx < barbers.length) {
-    barbeiro_id = barbers[idx].id
-    barbeiro_nome = barbers[idx].nome
+  const anyKeywords = ['qualquer', 'tanto faz', 'sem preferencia', 'sem preferência', 'indiferente', 'qualquer um']
+  if (anyKeywords.some((k) => t.includes(normalizeMatch(k))) || t === String(barbers.length + 1)) {
+    barbeiro_id = null
+    barbeiro_nome = 'Qualquer'
+  } else {
+    const matched = matchByName(text, barbers)
+    if (!matched) {
+      return [
+        'Não achei esse barbeiro. Temos:',
+        '',
+        formatNameList(barbers.map((b) => b.nome)),
+        '',
+        'Ou diga *qualquer*.',
+      ].join('\n')
+    }
+    barbeiro_id = matched.id
+    barbeiro_nome = matched.nome
   }
 
   await saveSession(db, phone, 'choose_date', {
@@ -465,10 +528,11 @@ async function handleChooseBarber(
   })
 
   return [
-    `Barbeiro: *${barbeiro_nome}*`,
+    barbeiro_nome && barbeiro_nome !== 'Qualquer'
+      ? `Beleza, *${barbeiro_nome}*.`
+      : 'Beleza, qualquer barbeiro disponível.',
     '',
-    'Envie a *data* (ex: 15/08 ou 15/08/2026)',
-    '0️⃣ Menu',
+    'Pra qual *data*? (ex.: 15/08 ou 15/08/2026)',
   ].join('\n')
 }
 
@@ -478,19 +542,19 @@ async function handleChooseDate(
   text: string,
   context: Record<string, unknown>,
 ): Promise<string> {
-  if (text.trim() === '0') {
+  if (wantsRestart(text)) {
     await resetSession(db, phone)
-    return menuText()
+    return greetingText()
   }
 
   const data = parseDateBR(text)
   if (!data) {
-    return 'Data inválida. Use DD/MM ou DD/MM/AAAA. Ou 0 para o menu.'
+    return 'Não entendi a data. Manda no formato *15/08* ou *15/08/2026*.'
   }
 
   const today = todaySaoPaulo()
   if (data < today) {
-    return 'A data não pode ser no passado. Envie outra data.'
+    return 'Essa data já passou. Me passa outra, por favor?'
   }
 
   const servico_id = context.servico_id as string
@@ -504,10 +568,10 @@ async function handleChooseDate(
       return [
         `Sem horários livres em *${formatDateBR(data)}*`,
         barbeiro_id && context.barbeiro_nome
-          ? `(barbeiro *${context.barbeiro_nome}*)`
+          ? `(com *${context.barbeiro_nome}*)`
           : '',
         '',
-        'Envie *outra data* ou 0 para o menu.',
+        'Quer tentar *outra data*?',
       ].filter(Boolean).join('\n')
     }
     await saveSession(db, phone, 'choose_time', {
@@ -521,10 +585,10 @@ async function handleChooseDate(
   if (!list.length) {
     return [
       `Sem horários livres em *${formatDateBR(data)}*`,
-      context.barbeiro_nome ? `para *${context.barbeiro_nome}*.` : '.',
+      context.barbeiro_nome ? `pra *${context.barbeiro_nome}*.` : '.',
       'Podem estar todos ocupados ou (hoje) já ter passado o horário.',
       '',
-      'Envie *outra data* ou 0 para o menu.',
+      'Quer tentar *outra data*?',
     ].join('\n')
   }
 
@@ -562,17 +626,15 @@ async function fallbackSlots(
 }
 
 function formatSlotList(data: string, slots: string[], barbeiroNome?: string): string {
-  const lines = slots.map((h, i) => `${i + 1}. ${h.slice(0, 5)}`)
+  const hours = slots.map((h) => h.slice(0, 5)).join(', ')
   const who = barbeiroNome && barbeiroNome !== 'Qualquer'
-    ? ` com *${barbeiroNome}*`
+    ? ` com ${barbeiroNome}`
     : ''
   return [
-    `Horários livres em *${formatDateBR(data)}*${who}:`,
+    `Em *${formatDateBR(data)}*${who} ainda rola:`,
+    hours,
     '',
-    ...lines,
-    '',
-    'Responda com o *número* do horário.',
-    '0️⃣ Menu',
+    'Qual horário fica melhor pra você?',
   ].join('\n')
 }
 
@@ -582,18 +644,22 @@ async function handleChooseTime(
   text: string,
   context: Record<string, unknown>,
 ): Promise<string> {
-  if (text.trim() === '0') {
+  if (wantsRestart(text)) {
     await resetSession(db, phone)
-    return menuText()
+    return greetingText()
   }
 
   const slots = (context.slots as string[]) || []
-  const idx = parseInt(text.trim(), 10) - 1
-  if (Number.isNaN(idx) || idx < 0 || idx >= slots.length) {
-    return 'Número inválido. Escolha o horário ou 0 para o menu.'
+  const horario = matchSlot(text, slots)
+  if (!horario) {
+    return [
+      'Não achei esse horário. Disponíveis:',
+      '',
+      ...slots.map((h) => `• ${h.slice(0, 5)}`),
+      '',
+      'Qual prefere?',
+    ].join('\n')
   }
-
-  const horario = slots[idx].slice(0, 5)
 
   const check = await checkSlotAvailability(db, {
     data: String(context.data),
@@ -604,7 +670,6 @@ async function handleChooseTime(
   })
 
   if (!check.ok) {
-    // refresh slots
     const { slots: refreshed } = await fetchAvailableSlots(
       db,
       String(context.data),
@@ -620,7 +685,7 @@ async function handleChooseTime(
       ].join('\n')
     }
     await saveSession(db, phone, 'choose_date', context)
-    return check.message + '\n\nEnvie *outra data* ou 0 para o menu.'
+    return check.message + '\n\nQuer tentar *outra data*?'
   }
 
   await saveSession(db, phone, 'confirm', {
@@ -631,15 +696,14 @@ async function handleChooseTime(
   })
 
   return [
-    '*Confirmar agendamento?*',
+    'Posso fechar assim?',
     '',
     `Serviço: ${context.servico_nome}`,
     `Barbeiro: ${check.barbeiro_nome || context.barbeiro_nome || 'A definir'}`,
     `Data: ${formatDateBR(String(context.data))}`,
     `Horário: ${horario}`,
     '',
-    '1️⃣ Sim, confirmar',
-    '2️⃣ Não, cancelar',
+    'Se tiver certo, me confirma com um *sim*.',
   ].join('\n')
 }
 
@@ -650,15 +714,36 @@ async function handleConfirm(
   context: Record<string, unknown>,
   senderName?: string,
 ): Promise<string> {
-  const t = text.trim().toLowerCase()
+  const t = normalizeMatch(text)
 
-  if (t === '2' || t === 'n' || t === 'nao' || t === 'não' || t.includes('cancel')) {
+  if (
+    t === '2' ||
+    t === 'n' ||
+    t === 'nao' ||
+    t === 'no' ||
+    t.includes('cancel') ||
+    t.includes('nao quero') ||
+    t.includes('desisto')
+  ) {
     await resetSession(db, phone)
-    return 'Agendamento não criado.\n\n' + menuText()
+    return 'Beleza, não marquei nada.\n\n' + aftercareText()
   }
 
-  if (!(t === '1' || t === 's' || t === 'sim' || t.includes('confirm'))) {
-    return 'Responda *1* para confirmar ou *2* para cancelar.'
+  const yes =
+    t === '1' ||
+    t === 's' ||
+    t === 'sim' ||
+    t === 'yes' ||
+    t === 'ok' ||
+    t === 'pode' ||
+    t === 'fechado' ||
+    t === 'confirmo' ||
+    t.includes('confirm') ||
+    t.includes('pode sim') ||
+    t.includes('pode marcar')
+
+  if (!yes) {
+    return 'Posso confirmar? Responde *sim* ou *não*.'
   }
 
   // Revalida no momento do commit (evita corrida / horário que encheu)
@@ -686,7 +771,7 @@ async function handleConfirm(
       return [
         check.message,
         '',
-        'Escolha outro horário da lista:',
+        'Que tal outro horário?',
         '',
         formatSlotList(String(context.data), refreshed, context.barbeiro_nome as string | undefined),
       ].join('\n')
@@ -696,7 +781,7 @@ async function handleConfirm(
       horario: undefined,
       slots: undefined,
     })
-    return check.message + '\n\nEnvie *outra data* ou 0 para o menu.'
+    return check.message + '\n\nQuer tentar *outra data*?'
   }
 
   const client = await findOrCreateClientByPhone(db, phone, senderName)
@@ -719,7 +804,7 @@ async function handleConfirm(
   await resetSession(db, phone)
 
   if (error) {
-    return `Não foi possível agendar: ${error.message}\n\n` + menuText()
+    return `Não deu pra agendar: ${error.message}\n\n` + aftercareText()
   }
 
   return [
@@ -731,7 +816,7 @@ async function handleConfirm(
     `Horário: ${String(context.horario).slice(0, 5)}`,
     `Cód: ${String(appt?.id || '').slice(0, 8)}`,
     '',
-    menuText(),
+    aftercareText(),
   ].join('\n')
 }
 
@@ -749,7 +834,7 @@ async function processWithMimo(
     ? (session.context.history as ChatMessage[])
     : []
 
-  // Compact prior turns (drop huge reasoning)
+  // Compact prior turns — keep more history so o contexto da conversa se mantém
   const prior = prevHistory
     .filter((m) => m && m.role)
     .map((m) => {
@@ -760,24 +845,42 @@ async function processWithMimo(
       if (m.name) out.name = m.name
       return out
     })
-    .slice(-14)
+    .slice(-24)
+
+  // Resumo do que já foi falado no fallback wizard (se existir), para a IA não “zerar”
+  const ctxLines: string[] = []
+  const c = session.context
+  if (c.servico_nome) ctxLines.push(`serviço em papo: ${c.servico_nome}`)
+  if (c.barbeiro_nome) ctxLines.push(`barbeiro: ${c.barbeiro_nome}`)
+  if (c.data) ctxLines.push(`data: ${c.data}`)
+  if (c.horario) ctxLines.push(`horário: ${c.horario}`)
+  if (session.step && session.step !== 'menu' && session.step !== 'chat') {
+    ctxLines.push(`estava no passo interno: ${session.step}`)
+  }
+
+  const system = systemPromptBarber() +
+    (ctxLines.length
+      ? `\nContexto parcial já conhecido desta conversa (não pergunte de novo se já souber):\n- ${ctxLines.join('\n- ')}`
+      : '')
 
   const messages: ChatMessage[] = [
-    { role: 'system', content: systemPromptBarber() },
+    { role: 'system', content: system },
     ...prior,
     {
       role: 'user',
-      content: senderName ? `[Cliente: ${senderName} | tel: ${phone}] ${text}` : text,
+      content: senderName
+        ? `[Cliente se chama ${senderName}. Tel ${phone}. Responda só a mensagem:]\n${text}`
+        : text,
     },
   ]
 
-  for (let round = 0; round < 6; round++) {
+  for (let round = 0; round < 8; round++) {
     const res = await mimoChat({
       config,
       messages,
       tools: BARBER_TOOLS,
       tool_choice: 'auto',
-      temperature: 0.5,
+      temperature: 0.65,
       max_completion_tokens: 900,
     })
 
@@ -811,9 +914,12 @@ async function processWithMimo(
       continue
     }
 
-    const answer = String(msg.content || '').trim() ||
-      'Não entendi bem. Posso agendar, ver seus horários ou cancelar — o que prefere?'
+    let answer = String(msg.content || '').trim()
+    if (!answer) {
+      answer = 'Desculpa, não entendi. Pode falar de outro jeito?'
+    }
 
+    // Guarda só turnos user/assistant/tool limpos; mode mimo + step chat (sem “menu”)
     const toStore = messages
       .filter((m) => m.role !== 'system')
       .map((m) => {
@@ -824,13 +930,27 @@ async function processWithMimo(
         if (m.name) out.name = m.name
         return out
       })
-      .slice(-16)
+      .slice(-28)
 
-    await saveSession(db, phone, 'menu', { history: toStore, mode: 'mimo' })
+    await saveSession(db, phone, 'chat', {
+      history: toStore,
+      mode: 'mimo',
+      // limpa rastros de wizard legado para não “segurar” passo de formulário
+      servico_id: undefined,
+      servico_nome: undefined,
+      barbeiro_id: undefined,
+      barbeiro_nome: undefined,
+      data: undefined,
+      horario: undefined,
+      slots: undefined,
+      services: undefined,
+      barbers: undefined,
+      cancelItems: undefined,
+    })
     return answer
   }
 
-  return 'Tive muitas etapas nessa conversa. Envie de novo o que precisa (ex: "quero agendar corte amanhã às 15h").'
+  return 'Poxa, me confundi um pouco. Pode me dizer de novo o que você precisa?'
 }
 
 async function processMessage(
@@ -841,21 +961,29 @@ async function processMessage(
 ): Promise<string> {
   const trimmed = text.trim()
   if (!trimmed) {
-    return menuText()
+    const withAi = await processWithMimo(db, phone, 'oi', senderName)
+    return withAi || greetingText()
   }
 
-  // Clear conversation
-  if (['menu', 'ajuda', 'help', 'start', '/start', 'reset', 'limpar'].includes(trimmed.toLowerCase())) {
+  // Cliente pediu pra zerar o papo
+  if (wantsRestart(trimmed) || ['reset', 'limpar', '/start'].includes(trimmed.toLowerCase())) {
     await resetSession(db, phone)
-    // tenta resposta com IA + menu como âncora
-    const withAi = await processWithMimo(db, phone, 'Oi, me mostre o que você pode fazer na barbearia.', senderName)
-    return withAi || menuText()
+    const withAi = await processWithMimo(db, phone, 'oi', senderName)
+    return withAi || greetingText()
   }
 
   const session = await getSession(db, phone)
   const { step, context } = session
 
-  // Continua fluxo numérico legado se estiver no meio de um wizard
+  // SEMPRE tenta a IA primeiro — contexto e memória do chat
+  try {
+    const ai = await processWithMimo(db, phone, trimmed, senderName)
+    if (ai) return ai
+  } catch (e) {
+    console.error('processWithMimo failed', e)
+  }
+
+  // Sem IA: só então usa fluxo guiado por intent / passo (ainda em prosa)
   const wizardSteps = [
     'choose_service',
     'choose_barber',
@@ -864,6 +992,7 @@ async function processMessage(
     'confirm',
     'cancel_pick',
   ]
+
   if (wizardSteps.includes(step) && context.mode !== 'mimo') {
     switch (step) {
       case 'choose_service':
@@ -881,15 +1010,6 @@ async function processMessage(
     }
   }
 
-  // MiMo (IA) primeiro
-  try {
-    const ai = await processWithMimo(db, phone, trimmed, senderName)
-    if (ai) return ai
-  } catch (e) {
-    console.error('processWithMimo failed', e)
-  }
-
-  // Fallback menu numérico clássico
   switch (step) {
     case 'choose_service':
       return handleChooseService(db, phone, trimmed, context)
@@ -903,9 +1023,8 @@ async function processMessage(
       return handleConfirm(db, phone, trimmed, context, senderName)
     case 'cancel_pick':
       return handleCancelPick(db, phone, trimmed, context)
-    case 'menu':
     default:
-      return handleMenu(db, phone, trimmed)
+      return handleFallbackIntent(db, phone, trimmed)
   }
 }
 
@@ -990,7 +1109,7 @@ Deno.serve(async (req) => {
 
       const text = extractText(msg)
       if (!text) {
-        await reply(phone, menuText(), db)
+        await reply(phone, greetingText(), db)
         results.push({ phone, ok: true })
         continue
       }

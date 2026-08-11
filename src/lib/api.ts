@@ -264,7 +264,7 @@ export async function notifyAppointmentWhatsApp(params: {
     `Data: ${dateBr}`,
     `Horário: ${time}`,
     '',
-    'Envie *0* no WhatsApp da barbearia para o menu do bot.',
+    'Responda no WhatsApp da barbearia se precisar remarcar ou cancelar.',
   ]
     .filter(Boolean)
     .join('\n')
