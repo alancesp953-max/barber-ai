@@ -19,9 +19,9 @@ type UazMessage = {
   messageid?: string
   messageidHex?: string
   chatid?: string
-  fromMe?: boolean
-  wasSentByApi?: boolean
-  isGroup?: boolean
+  fromMe?: boolean | string
+  wasSentByApi?: boolean | string
+  isGroup?: boolean | string
   sender?: string
   senderName?: string
   sender_pn?: string
@@ -35,6 +35,13 @@ type UazMessage = {
     listResponseMessage?: { title?: string; singleSelectReply?: { selectedRowId?: string } }
   }
   buttonOrListid?: string
+  [key: string]: unknown
+}
+
+function asBool(v: unknown): boolean {
+  if (v === true || v === 1) return true
+  if (typeof v === 'string') return ['true', '1', 'yes'].includes(v.toLowerCase())
+  return false
 }
 
 function extractText(msg: UazMessage): string {
@@ -56,29 +63,109 @@ function extractText(msg: UazMessage): string {
   return ''
 }
 
+/** Digits only if looks like a real MSISDN (skip long @lid internal ids). */
+function jidToPhone(raw: unknown): string {
+  if (raw == null) return ''
+  const s = String(raw).trim()
+  if (!s) return ''
+  // Prefer real WhatsApp phone JIDs; pure @lid is not a dialable number for /send/text
+  if (s.includes('@lid') && !s.includes('@s.whatsapp.net')) return ''
+  const local = s.split('@')[0]
+  if (!local || !/\d/.test(local)) return ''
+  const phone = normalizePhone(local)
+  // LID digit blobs are often 15+ without country structure; keep 10–15
+  if (phone.length < 10 || phone.length > 15) return ''
+  return phone
+}
+
+/**
+ * Destino da resposta = conversa (chatid), NUNCA owner da instância.
+ * payload.phone / payload.owner costumam ser o número conectado (você) — não o cliente.
+ */
 function extractPhone(msg: UazMessage, payload: Record<string, unknown>): string {
-  const candidates = [
+  const chat =
+    payload.chat && typeof payload.chat === 'object'
+      ? (payload.chat as Record<string, unknown>)
+      : {}
+
+  // chatid = conversa com quem deve receber a resposta
+  const candidates: unknown[] = [
+    msg.chatid,
     msg.sender_pn,
     msg.sender,
-    msg.chatid,
-    payload.chatid as string | undefined,
-    payload.phone as string | undefined,
+    chat.wa_chatid,
+    chat.phone,
+    chat.id,
+    // NÃO usar payload.owner / payload.phone / instance phone
   ]
+
   for (const c of candidates) {
-    if (!c) continue
-    const raw = String(c).split('@')[0]
-    if (raw && /\d/.test(raw)) return normalizePhone(raw)
+    const phone = jidToPhone(c)
+    if (phone) return phone
   }
   return ''
 }
 
+function instanceOwnerPhone(payload: Record<string, unknown>): string {
+  const inst =
+    payload.instance && typeof payload.instance === 'object'
+      ? (payload.instance as Record<string, unknown>)
+      : {}
+  return (
+    jidToPhone(payload.owner) ||
+    jidToPhone(payload.ownerJid) ||
+    jidToPhone(inst.owner) ||
+    jidToPhone(inst.phone) ||
+    jidToPhone(inst.wid) ||
+    ''
+  )
+}
+
 function shouldIgnore(msg: UazMessage): boolean {
-  if (msg.fromMe === true) return true
-  if (msg.wasSentByApi === true) return true
-  if (msg.isGroup === true) return true
-  const chat = String(msg.chatid || '')
+  if (asBool(msg.fromMe)) return true
+  if (asBool(msg.wasSentByApi)) return true
+  if (asBool(msg.isGroup)) return true
+  const chat = String(msg.chatid || msg.sender || '')
   if (chat.includes('@g.us')) return true
+  if (chat.includes('status@broadcast')) return true
   return false
+}
+
+/** Normaliza o objeto de mensagem real da UAZAPI (nested em message / data). */
+function collectMessages(payload: Record<string, unknown>): UazMessage[] {
+  if (Array.isArray(payload.messages)) {
+    return payload.messages as UazMessage[]
+  }
+
+  const nested = payload.message
+  if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+    const n = nested as UazMessage
+    // Objeto UAZ completo (tem chatid/sender/text/messageType)
+    if (n.chatid || n.sender || n.messageid || n.messageType || typeof n.text === 'string') {
+      return [n]
+    }
+    // Baileys-style: payload com chatid no root + message.conversation
+    if (n.conversation || n.extendedTextMessage) {
+      return [{ ...(payload as UazMessage), message: n as UazMessage['message'] }]
+    }
+  }
+
+  if (payload.data && typeof payload.data === 'object') {
+    const d = payload.data as Record<string, unknown>
+    if (Array.isArray(d.messages)) return d.messages as UazMessage[]
+    if (d.message && typeof d.message === 'object' && !Array.isArray(d.message)) {
+      return collectMessages(d)
+    }
+    if ((d as UazMessage).chatid || (d as UazMessage).sender || (d as UazMessage).text) {
+      return [d as UazMessage]
+    }
+  }
+
+  if ((payload as UazMessage).chatid || (payload as UazMessage).sender || (payload as UazMessage).text) {
+    return [payload as UazMessage]
+  }
+
+  return []
 }
 
 async function reply(phone: string, text: string, db: ReturnType<typeof getServiceClient>) {
@@ -744,29 +831,19 @@ Deno.serve(async (req) => {
 
     // UAZAPI may wrap event
     const event = String(payload.EventType || payload.event || payload.type || 'messages')
-    if (event && !['messages', 'message', 'Messages', ''].includes(event) && payload.message == null && payload.data == null) {
+    if (
+      event &&
+      !['messages', 'message', 'Messages', ''].includes(event) &&
+      payload.message == null &&
+      payload.data == null &&
+      !Array.isArray(payload.messages)
+    ) {
       // Ignore non-message events quietly
       return jsonResponse({ ok: true, ignored: event })
     }
 
-    // Normalize message object from various payload shapes
-    let messages: UazMessage[] = []
-
-    if (Array.isArray(payload.messages)) {
-      messages = payload.messages as UazMessage[]
-    } else if (payload.message && typeof payload.message === 'object' && !Array.isArray(payload.message)) {
-      // might be chat message wrapper
-      const pm = payload as UazMessage & Record<string, unknown>
-      if (pm.text || pm.chatid || pm.sender || (payload.message as UazMessage).conversation) {
-        messages = [pm as UazMessage]
-      }
-    } else if (payload.data && typeof payload.data === 'object') {
-      const d = payload.data as Record<string, unknown>
-      if (Array.isArray(d.messages)) messages = d.messages as UazMessage[]
-      else messages = [d as UazMessage]
-    } else {
-      messages = [payload as UazMessage]
-    }
+    const messages = collectMessages(payload)
+    const ownerPhone = instanceOwnerPhone(payload)
 
     const db = getServiceClient()
     const active = await isBotActive(db)
@@ -774,13 +851,31 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: true, bot: 'disabled' })
     }
 
-    const results: { phone: string; ok: boolean }[] = []
+    const results: { phone: string; ok: boolean; note?: string }[] = []
 
     for (const msg of messages) {
-      if (shouldIgnore(msg)) continue
+      if (shouldIgnore(msg)) {
+        results.push({ phone: '', ok: true, note: 'ignored_fromMe_or_group' })
+        continue
+      }
 
       const phone = extractPhone(msg, payload)
-      if (!phone) continue
+      if (!phone) {
+        console.warn('whatsapp-webhook: no customer phone', {
+          chatid: msg.chatid,
+          sender: msg.sender,
+          sender_pn: msg.sender_pn,
+          owner: ownerPhone,
+        })
+        results.push({ phone: '', ok: false, note: 'no_phone' })
+        continue
+      }
+
+      // Só responder no número da instância se a conversa for realmente com ele
+      // (teste do dono). Nunca usar owner só porque veio no root do payload.
+      if (ownerPhone && phone === ownerPhone) {
+        console.info('whatsapp-webhook: reply to instance owner (self-test or same number)', phone)
+      }
 
       const text = extractText(msg)
       if (!text) {
@@ -789,14 +884,18 @@ Deno.serve(async (req) => {
         continue
       }
 
-      const senderName = msg.senderName || undefined
-      // "typing" presence would be nice but optional
+      const senderName = typeof msg.senderName === 'string' ? msg.senderName : undefined
       const answer = await processMessage(db, phone, text, senderName)
       await reply(phone, answer, db)
       results.push({ phone, ok: true })
     }
 
-    return jsonResponse({ ok: true, processed: results.length, results })
+    return jsonResponse({
+      ok: true,
+      processed: results.filter((r) => r.ok && r.phone).length,
+      owner: ownerPhone || null,
+      results,
+    })
   } catch (err) {
     console.error('whatsapp-webhook error', err)
     const message = err instanceof Error ? err.message : String(err)
