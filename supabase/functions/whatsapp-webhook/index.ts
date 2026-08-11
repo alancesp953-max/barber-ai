@@ -13,6 +13,12 @@ import {
 import { BARBER_TOOLS, runBarberTool, systemPromptBarber } from '../_shared/barber-tools.ts'
 import { loadMimoConfig, mimoChat, type ChatMessage } from '../_shared/mimo.ts'
 import { resolveUazConfig } from '../_shared/resolve-uaz.ts'
+import {
+  checkSlotAvailability,
+  fetchAvailableSlots,
+  filterPastSlots,
+  todaySaoPaulo,
+} from '../_shared/slots.ts'
 import { normalizePhone, sendText } from '../_shared/uazapi.ts'
 
 type UazMessage = {
@@ -234,7 +240,7 @@ async function listAppointments(
   phone: string,
 ): Promise<string> {
   const client = await findOrCreateClientByPhone(db, phone)
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todaySaoPaulo()
 
   const { data } = await db
     .from('agendamentos')
@@ -271,7 +277,7 @@ async function startCancel(
   phone: string,
 ): Promise<string> {
   const client = await findOrCreateClientByPhone(db, phone)
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todaySaoPaulo()
 
   const { data } = await db
     .from('agendamentos')
@@ -365,6 +371,7 @@ async function handleChooseService(
     b.ativo !== false && b.active !== false
   )
 
+  // Nenhum barbeiro: segue sem preferência
   if (!list.length) {
     await saveSession(db, phone, 'choose_date', {
       ...context,
@@ -381,6 +388,27 @@ async function handleChooseService(
     ].join('\n')
   }
 
+  // Só 1 cadastrado: não pergunta, já usa esse barbeiro
+  if (list.length === 1) {
+    const only = list[0]
+    await saveSession(db, phone, 'choose_date', {
+      ...context,
+      servico_id: service.id,
+      servico_nome: service.nome,
+      barbeiro_id: only.id,
+      barbeiro_nome: only.nome,
+      barbers: list.map((b: { id: string; nome: string }) => ({ id: b.id, nome: b.nome })),
+    })
+    return [
+      `Serviço: *${service.nome}*`,
+      `Barbeiro: *${only.nome}*`,
+      '',
+      'Envie a *data* (ex: 15/08 ou 15/08/2026)',
+      '0️⃣ Menu',
+    ].join('\n')
+  }
+
+  // Vários: cliente escolhe
   await saveSession(db, phone, 'choose_barber', {
     ...context,
     servico_id: service.id,
@@ -389,7 +417,7 @@ async function handleChooseService(
   })
 
   const lines = list.map((b: { nome: string }, i: number) => `${i + 1}. ${b.nome}`)
-  lines.push(`${list.length + 1}. Qualquer barbeiro`)
+  lines.push(`${list.length + 1}. Qualquer barbeiro disponível`)
 
   return [
     `Serviço: *${service.nome}*`,
@@ -460,39 +488,44 @@ async function handleChooseDate(
     return 'Data inválida. Use DD/MM ou DD/MM/AAAA. Ou 0 para o menu.'
   }
 
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const chosen = new Date(data + 'T12:00:00')
-  if (chosen < today) {
+  const today = todaySaoPaulo()
+  if (data < today) {
     return 'A data não pode ser no passado. Envie outra data.'
   }
 
   const servico_id = context.servico_id as string
   const barbeiro_id = (context.barbeiro_id as string) || null
 
-  const { data: slots, error } = await db.rpc('get_available_slots', {
-    p_data: data,
-    p_servico_id: servico_id,
-    p_barbeiro_id: barbeiro_id,
-  })
+  const { slots: list, error } = await fetchAvailableSlots(db, data, servico_id, barbeiro_id)
 
   if (error) {
-    // Fallback: simple generation if RPC missing
-    const fallback = await fallbackSlots(db, data)
+    const fallback = filterPastSlots(data, await fallbackSlots(db, data, barbeiro_id))
     if (!fallback.length) {
-      return `Sem horários em ${formatDateBR(data)}. Envie *outra data* ou 0 para menu.`
+      return [
+        `Sem horários livres em *${formatDateBR(data)}*`,
+        barbeiro_id && context.barbeiro_nome
+          ? `(barbeiro *${context.barbeiro_nome}*)`
+          : '',
+        '',
+        'Envie *outra data* ou 0 para o menu.',
+      ].filter(Boolean).join('\n')
     }
     await saveSession(db, phone, 'choose_time', {
       ...context,
       data,
       slots: fallback,
     })
-    return formatSlotList(data, fallback)
+    return formatSlotList(data, fallback, context.barbeiro_nome as string | undefined)
   }
 
-  const list = (slots as { horario: string }[] | null)?.map((s) => s.horario) || []
   if (!list.length) {
-    return `Sem horários em ${formatDateBR(data)}. Envie *outra data* ou 0 para menu.`
+    return [
+      `Sem horários livres em *${formatDateBR(data)}*`,
+      context.barbeiro_nome ? `para *${context.barbeiro_nome}*.` : '.',
+      'Podem estar todos ocupados ou (hoje) já ter passado o horário.',
+      '',
+      'Envie *outra data* ou 0 para o menu.',
+    ].join('\n')
   }
 
   await saveSession(db, phone, 'choose_time', {
@@ -501,30 +534,40 @@ async function handleChooseDate(
     slots: list,
   })
 
-  return formatSlotList(data, list)
+  return formatSlotList(data, list, context.barbeiro_nome as string | undefined)
 }
 
 async function fallbackSlots(
   db: ReturnType<typeof getServiceClient>,
   data: string,
+  barbeiroId?: string | null,
 ): Promise<string[]> {
-  const slotHours = ['09:00', '09:30', '10:00', '10:30', '11:00', '11:30', '14:00', '14:30', '15:00', '15:30', '16:00', '16:30', '17:00', '17:30']
-  const { data: busy } = await db
+  const slotHours = [
+    '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
+    '14:00', '14:30', '15:00', '15:30', '16:00', '16:30', '17:00', '17:30',
+  ]
+  let q = db
     .from('agendamentos')
-    .select('horario')
+    .select('horario, barbeiro_id')
     .eq('data', data)
     .in('status', ['pendente', 'confirmado'])
+  const { data: busy } = await q
 
-  const taken = new Set(
-    (busy || []).map((b: { horario: string }) => String(b.horario).slice(0, 5)),
-  )
+  const taken = new Set<string>()
+  for (const b of busy || []) {
+    if (barbeiroId && b.barbeiro_id && b.barbeiro_id !== barbeiroId) continue
+    taken.add(String(b.horario).slice(0, 5))
+  }
   return slotHours.filter((h) => !taken.has(h))
 }
 
-function formatSlotList(data: string, slots: string[]): string {
+function formatSlotList(data: string, slots: string[], barbeiroNome?: string): string {
   const lines = slots.map((h, i) => `${i + 1}. ${h.slice(0, 5)}`)
+  const who = barbeiroNome && barbeiroNome !== 'Qualquer'
+    ? ` com *${barbeiroNome}*`
+    : ''
   return [
-    `Horários livres em *${formatDateBR(data)}*:`,
+    `Horários livres em *${formatDateBR(data)}*${who}:`,
     '',
     ...lines,
     '',
@@ -552,16 +595,46 @@ async function handleChooseTime(
 
   const horario = slots[idx].slice(0, 5)
 
+  const check = await checkSlotAvailability(db, {
+    data: String(context.data),
+    servicoId: String(context.servico_id),
+    horario,
+    barbeiroId: (context.barbeiro_id as string) || null,
+    barbeiroNome: (context.barbeiro_nome as string) || null,
+  })
+
+  if (!check.ok) {
+    // refresh slots
+    const { slots: refreshed } = await fetchAvailableSlots(
+      db,
+      String(context.data),
+      String(context.servico_id),
+      (context.barbeiro_id as string) || null,
+    )
+    if (refreshed.length) {
+      await saveSession(db, phone, 'choose_time', { ...context, slots: refreshed })
+      return [
+        check.message,
+        '',
+        formatSlotList(String(context.data), refreshed, context.barbeiro_nome as string | undefined),
+      ].join('\n')
+    }
+    await saveSession(db, phone, 'choose_date', context)
+    return check.message + '\n\nEnvie *outra data* ou 0 para o menu.'
+  }
+
   await saveSession(db, phone, 'confirm', {
     ...context,
     horario,
+    barbeiro_id: check.barbeiro_id,
+    barbeiro_nome: check.barbeiro_nome || context.barbeiro_nome,
   })
 
   return [
     '*Confirmar agendamento?*',
     '',
     `Serviço: ${context.servico_nome}`,
-    `Barbeiro: ${context.barbeiro_nome || 'Qualquer'}`,
+    `Barbeiro: ${check.barbeiro_nome || context.barbeiro_nome || 'A definir'}`,
     `Data: ${formatDateBR(String(context.data))}`,
     `Horário: ${horario}`,
     '',
@@ -588,12 +661,50 @@ async function handleConfirm(
     return 'Responda *1* para confirmar ou *2* para cancelar.'
   }
 
+  // Revalida no momento do commit (evita corrida / horário que encheu)
+  const check = await checkSlotAvailability(db, {
+    data: String(context.data),
+    servicoId: String(context.servico_id),
+    horario: String(context.horario),
+    barbeiroId: (context.barbeiro_id as string) || null,
+    barbeiroNome: (context.barbeiro_nome as string) || null,
+  })
+
+  if (!check.ok) {
+    const { slots: refreshed } = await fetchAvailableSlots(
+      db,
+      String(context.data),
+      String(context.servico_id),
+      (context.barbeiro_id as string) || null,
+    )
+    if (refreshed.length) {
+      await saveSession(db, phone, 'choose_time', {
+        ...context,
+        slots: refreshed,
+        horario: undefined,
+      })
+      return [
+        check.message,
+        '',
+        'Escolha outro horário da lista:',
+        '',
+        formatSlotList(String(context.data), refreshed, context.barbeiro_nome as string | undefined),
+      ].join('\n')
+    }
+    await saveSession(db, phone, 'choose_date', {
+      ...context,
+      horario: undefined,
+      slots: undefined,
+    })
+    return check.message + '\n\nEnvie *outra data* ou 0 para o menu.'
+  }
+
   const client = await findOrCreateClientByPhone(db, phone, senderName)
 
   const payload = {
     cliente_id: client.id,
     servico_id: context.servico_id as string,
-    barbeiro_id: (context.barbeiro_id as string) || null,
+    barbeiro_id: check.barbeiro_id,
     data: context.data as string,
     horario: context.horario as string,
     status: 'pendente',
@@ -615,7 +726,7 @@ async function handleConfirm(
     '✅ *Agendamento confirmado!*',
     '',
     `Serviço: ${context.servico_nome}`,
-    `Barbeiro: ${context.barbeiro_nome || 'A definir'}`,
+    `Barbeiro: ${check.barbeiro_nome || context.barbeiro_nome || 'A definir'}`,
     `Data: ${formatDateBR(String(context.data))}`,
     `Horário: ${String(context.horario).slice(0, 5)}`,
     `Cód: ${String(appt?.id || '').slice(0, 8)}`,

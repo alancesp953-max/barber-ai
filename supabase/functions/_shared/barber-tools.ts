@@ -4,6 +4,11 @@
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1'
 import { findOrCreateClientByPhone, formatDateBR, parseDateBR } from './db.ts'
 import type { ToolDef } from './mimo.ts'
+import {
+  checkSlotAvailability,
+  fetchAvailableSlots,
+  todaySaoPaulo,
+} from './slots.ts'
 
 export const BARBER_TOOLS: ToolDef[] = [
   {
@@ -161,39 +166,45 @@ export async function runBarberTool(
         if (!data || !servico_id) {
           return JSON.stringify({ error: 'data e servico_id são obrigatórios' })
         }
-        const { data: slots, error } = await db.rpc('get_available_slots', {
-          p_data: data,
-          p_servico_id: servico_id,
-          p_barbeiro_id: barbeiro_id,
-        })
+        const { slots: horarios, error } = await fetchAvailableSlots(db, data, servico_id, barbeiro_id)
         if (error) {
-          // fallback: simple free times
-          const hours = ['09:00', '10:00', '11:00', '14:00', '15:00', '16:00', '17:00']
-          const { data: busy } = await db
-            .from('agendamentos')
-            .select('horario')
-            .eq('data', data)
-            .in('status', ['pendente', 'confirmado'])
-          const taken = new Set((busy || []).map((b) => String(b.horario).slice(0, 5)))
           return JSON.stringify({
             data,
             data_br: formatDateBR(data),
-            horarios: hours.filter((h) => !taken.has(h)),
-            aviso: `rpc falhou: ${error.message}; fallback simples`,
+            horarios,
+            aviso: `rpc: ${error}`,
           })
         }
-        const horarios = ((slots as { horario: string }[]) || []).map((s) => String(s.horario).slice(0, 5))
-        return JSON.stringify({ data, data_br: formatDateBR(data), horarios })
+        return JSON.stringify({
+          data,
+          data_br: formatDateBR(data),
+          barbeiro_id,
+          horarios,
+          dica:
+            horarios.length === 0
+              ? 'Sem horários livres (ocupados ou já passaram no dia de hoje). Peça outra data ou barbeiro.'
+              : 'Só liste horários desta lista ao cliente. Horários passados não aparecem.',
+        })
       }
 
       case 'create_appointment': {
         const servico_id = String(args.servico_id || '')
         const data = normalizeDate(String(args.data || ''))
         const horario = String(args.horario || '').slice(0, 5)
-        const barbeiro_id = args.barbeiro_id ? String(args.barbeiro_id) : null
+        let barbeiro_id = args.barbeiro_id ? String(args.barbeiro_id) : null
         if (!servico_id || !data || !horario) {
           return JSON.stringify({ error: 'servico_id, data e horario são obrigatórios' })
         }
+        const check = await checkSlotAvailability(db, {
+          data,
+          servicoId: servico_id,
+          horario,
+          barbeiroId: barbeiro_id,
+        })
+        if (!check.ok) {
+          return JSON.stringify({ error: check.message, ok: false })
+        }
+        barbeiro_id = check.barbeiro_id
         const nome = args.cliente_nome ? String(args.cliente_nome) : senderName
         const client = await findOrCreateClientByPhone(db, phone, nome)
         const { data: appt, error } = await db
@@ -206,7 +217,7 @@ export async function runBarberTool(
             horario,
             status: 'pendente',
           })
-          .select('id, data, horario, status')
+          .select('id, data, horario, status, barbeiro_id')
           .single()
         if (error) return JSON.stringify({ error: error.message })
         return JSON.stringify({
@@ -217,6 +228,8 @@ export async function runBarberTool(
             data_br: formatDateBR(String(appt.data)),
             horario: String(appt.horario).slice(0, 5),
             status: appt.status,
+            barbeiro_id: appt.barbeiro_id,
+            barbeiro_nome: check.barbeiro_nome,
           },
           mensagem: 'Agendamento criado com sucesso',
         })
@@ -224,7 +237,7 @@ export async function runBarberTool(
 
       case 'list_my_appointments': {
         const client = await findOrCreateClientByPhone(db, phone, senderName)
-        const today = new Date().toISOString().slice(0, 10)
+        const today = todaySaoPaulo()
         const { data, error } = await db
           .from('agendamentos')
           .select('id, data, horario, status, servicos(nome), barbeiros(nome)')
@@ -277,15 +290,18 @@ export async function runBarberTool(
 }
 
 export function systemPromptBarber(): string {
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todaySaoPaulo()
   return [
     'Você é o assistente virtual da barbearia no WhatsApp (BarberAI).',
     'Fale em português do Brasil, de forma curta, amigável e objetiva.',
     'Use as ferramentas para consultar serviços, horários, criar e cancelar agendamentos.',
     'Nunca invente IDs de serviço/barbeiro — sempre busque com as tools.',
     'Datas: aceite DD/MM e converta; ao chamar tools use data no formato YYYY-MM-DD quando possível.',
-    `Hoje é ${today}.`,
-    'Para agendar: descubra serviço, data, horário (e barbeiro se o cliente quiser) e confirme com create_appointment.',
+    `Hoje é ${today} (fuso America/Sao_Paulo).`,
+    'Fluxo de agendamento: (1) list_services (2) list_barbers — se só houver 1, use-o sem perguntar; se vários, deixe o cliente escolher (3) data (4) get_available_slots com barbeiro_id quando souber (5) criar com create_appointment.',
+    'Nunca ofereça horários que a tool não retornou. Horários do passado no dia de hoje não existem na lista.',
+    'Se create_appointment ou get_available_slots indicar conflito, avise claramente que aquele barbeiro não tem o horário e ofereça alternativas.',
+    'Não invente disponibilidade. Não marque em cima de horário ocupado.',
     'Se faltar dado, pergunte em uma mensagem curta.',
     'Respostas no WhatsApp: sem markdown pesado; use *negrito* e listas simples se precisar.',
     'Se o cliente mandar só "oi" ou "menu", apresente opções: agendar, ver horários, cancelar, horários da loja.',
