@@ -213,10 +213,24 @@ export function extractQrFromResponse(data: unknown): {
     }
   }
 
+  // Prefer explicit instance.status; fallback status.connected object
+  let status = pick('status', 'state', 'instanceStatus')
+  if (!status || status === 'object') {
+    const st = root.status
+    if (st && typeof st === 'object') {
+      const o = st as Record<string, unknown>
+      if (o.connected === true || o.loggedIn === true) status = 'connected'
+      else if (o.connected === false) status = 'disconnected'
+    }
+    if (typeof nested.status === 'string') status = nested.status
+  }
+  if (root.connected === true) status = 'connected'
+  if (root.connected === false && !status) status = 'disconnected'
+
   return {
     qrcode,
     paircode: pick('paircode', 'pairCode', 'pairingCode', 'code'),
-    status: pick('status', 'state', 'instanceStatus'),
+    status,
     raw: data,
   }
 }

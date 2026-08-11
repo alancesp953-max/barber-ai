@@ -112,26 +112,59 @@ const errorMsgStyle: React.CSSProperties = {
   border: '1px solid #ff6b6b',
 }
 
-function statusLabel(status?: string | null): { text: string; color: string } {
+function isConnectedStatus(status?: string | null): boolean {
   const s = (status || '').toLowerCase()
-  if (s.includes('connect') && !s.includes('disconnect') && !s.includes('connecting')) {
-    return { text: status || 'connected', color: '#4caf50' }
+  if (!s) return false
+  if (s === 'connected' || s === 'open' || s === 'online') return true
+  if (s.includes('connecting')) return false
+  if (s.includes('disconnect')) return false
+  return s.includes('connected') || s.includes('logged')
+}
+
+function statusLabel(status?: string | null): { text: string; color: string; connected: boolean } {
+  const s = (status || '').toLowerCase()
+  if (isConnectedStatus(status)) {
+    return { text: 'Conectado', color: '#4caf50', connected: true }
   }
-  if (s.includes('connecting')) return { text: status || 'connecting', color: '#ff9800' }
-  if (s.includes('disconnect') || s.includes('close')) {
-    return { text: status || 'disconnected', color: '#ff6b6b' }
+  if (s.includes('connecting')) {
+    return { text: 'Conectando… escaneie o QR', color: '#ff9800', connected: false }
   }
-  if (s.includes('hibern')) return { text: status || 'hibernated', color: '#888' }
-  return { text: status || 'desconhecido', color: '#aaa' }
+  if (s.includes('disconnect') || s.includes('close') || s === 'offline') {
+    return { text: 'Desconectado', color: '#ff6b6b', connected: false }
+  }
+  if (s.includes('hibern')) {
+    return { text: 'Hibernado', color: '#888', connected: false }
+  }
+  return { text: status || 'Desconhecido', color: '#aaa', connected: false }
 }
 
 function resolveStatusFromResult(result: WhatsAppInstanceResult): string | null {
   if (result.status) return result.status
   const data = result.data as Record<string, unknown> | undefined
   if (!data) return null
+
+  const statusObj = data.status
+  if (statusObj && typeof statusObj === 'object') {
+    const st = statusObj as Record<string, unknown>
+    if (st.connected === true || st.loggedIn === true) return 'connected'
+    if (st.connected === false) return 'disconnected'
+  }
+
   const inst = (data.instance || data) as Record<string, unknown>
-  const s = inst.status ?? inst.state ?? data.status
-  return typeof s === 'string' ? s : null
+  const s = inst.status ?? inst.state
+  if (typeof s === 'string') return s
+  if (typeof data.connected === 'boolean') return data.connected ? 'connected' : 'disconnected'
+  return null
+}
+
+function resolveProfileFromResult(result: WhatsAppInstanceResult): { name?: string; owner?: string } {
+  const data = result.data as Record<string, unknown> | undefined
+  if (!data) return {}
+  const inst = (data.instance || data) as Record<string, unknown>
+  return {
+    name: typeof inst.profileName === 'string' ? inst.profileName : typeof inst.name === 'string' ? inst.name : undefined,
+    owner: typeof inst.owner === 'string' ? inst.owner : undefined,
+  }
 }
 
 export default function Configuracoes() {
@@ -143,6 +176,8 @@ export default function Configuracoes() {
   const [waStatus, setWaStatus] = useState<string | null>(null)
   const [qrcode, setQrcode] = useState<string | null>(null)
   const [paircode, setPaircode] = useState<string | null>(null)
+  const [profileName, setProfileName] = useState<string | null>(null)
+  const [profileOwner, setProfileOwner] = useState<string | null>(null)
   const [waLoading, setWaLoading] = useState(false)
   const [waError, setWaError] = useState<string | null>(null)
 
@@ -168,9 +203,19 @@ export default function Configuracoes() {
         setWaError(result.error || 'Falha ao consultar status')
         return
       }
-      setWaStatus(resolveStatusFromResult(result))
-      if (result.qrcode) setQrcode(result.qrcode)
-      if (result.paircode) setPaircode(result.paircode)
+      const status = resolveStatusFromResult(result)
+      setWaStatus(status)
+      const profile = resolveProfileFromResult(result)
+      if (profile.name) setProfileName(profile.name)
+      if (profile.owner) setProfileOwner(profile.owner)
+
+      if (isConnectedStatus(status)) {
+        setQrcode(null)
+        setPaircode(null)
+      } else {
+        if (result.qrcode) setQrcode(result.qrcode)
+        if (result.paircode) setPaircode(result.paircode)
+      }
     } catch (err) {
       setWaError(err instanceof Error ? err.message : 'Erro ao consultar status')
     }
@@ -180,14 +225,15 @@ export default function Configuracoes() {
     void refreshStatus()
   }, [refreshStatus])
 
-  // Poll status while waiting for QR scan
+  // Poll while not connected (QR pending or connecting)
   useEffect(() => {
-    if (!qrcode) return
-    const s = (waStatus || '').toLowerCase()
-    if (s.includes('connected') && !s.includes('disconnect')) return
+    const connected = isConnectedStatus(waStatus)
+    if (connected) return
+    // poll if showing QR or waiting for connection
+    if (!qrcode && waStatus && !String(waStatus).toLowerCase().includes('connecting')) return
     const id = window.setInterval(() => {
       void refreshStatus()
-    }, 5000)
+    }, 3000)
     return () => window.clearInterval(id)
   }, [qrcode, waStatus, refreshStatus])
 
@@ -218,16 +264,23 @@ export default function Configuracoes() {
         setWaError(result.error || 'Não foi possível gerar o QR')
         return
       }
-      setWaStatus(resolveStatusFromResult(result))
+      const status = resolveStatusFromResult(result)
+      setWaStatus(status)
+      const profile = resolveProfileFromResult(result)
+      if (profile.name) setProfileName(profile.name)
+      if (profile.owner) setProfileOwner(profile.owner)
+
+      if (isConnectedStatus(status)) {
+        setQrcode(null)
+        setPaircode(null)
+        setMessage({ tipo: 'sucesso', texto: 'WhatsApp já está conectado.' })
+        return
+      }
+
       setQrcode(result.qrcode || null)
       setPaircode(result.paircode || null)
       if (!result.qrcode && !result.paircode) {
-        const s = resolveStatusFromResult(result)
-        if (s && s.toLowerCase().includes('connected')) {
-          setMessage({ tipo: 'sucesso', texto: 'WhatsApp já está conectado.' })
-        } else {
-          setWaError('A UAZAPI não retornou QR code. Confira secrets e status da instância.')
-        }
+        setWaError('A UAZAPI não retornou QR code. Confira secrets e status da instância.')
       }
     } catch (err) {
       setWaError(err instanceof Error ? err.message : 'Erro ao gerar QR')
@@ -248,6 +301,8 @@ export default function Configuracoes() {
       }
       setQrcode(null)
       setPaircode(null)
+      setProfileName(null)
+      setProfileOwner(null)
       setWaStatus('disconnected')
       setMessage({ tipo: 'sucesso', texto: 'Instância desconectada.' })
     } catch (err) {
@@ -266,6 +321,8 @@ export default function Configuracoes() {
   }
 
   const statusUi = statusLabel(waStatus)
+  const connected = statusUi.connected
+  const showQr = !connected && !!qrcode
 
   return (
     <div style={containerStyle}>
@@ -320,9 +377,8 @@ export default function Configuracoes() {
       <div style={cardStyle}>
         <h2 style={sectionTitleStyle}>Bot WhatsApp (UAZAPI)</h2>
         <p style={{ color: '#888', fontSize: 13, marginBottom: 16, marginTop: 0 }}>
-          Token e URL da instância ficam nos Secrets do Supabase.
-          Escaneie o QR abaixo no WhatsApp do celular (Aparelhos conectados).
-          Preferir WhatsApp Business. API: POST /instance/connect · GET /instance/status
+          Escaneie o QR no celular (WhatsApp → Aparelhos conectados). Preferir WhatsApp Business.
+          Mensagens são respondidas pela IA MiMo via Edge Function.
         </p>
         <div style={formGridStyle}>
           <label style={labelStyle}>
@@ -342,7 +398,7 @@ export default function Configuracoes() {
               style={inputStyle}
               value={form.uazapi_base_url || ''}
               onChange={(e) => handleChange('uazapi_base_url', e.target.value)}
-              placeholder="https://seudominio.uazapi.com"
+              placeholder="https://barberai.uazapi.com"
             />
           </label>
         </div>
@@ -351,14 +407,50 @@ export default function Configuracoes() {
           style={{
             marginTop: 20,
             padding: 16,
-            border: '1px solid #333',
+            border: connected ? '1px solid #4caf50' : '1px solid #333',
             borderRadius: 8,
-            background: '#0d0d0d',
+            background: connected ? '#0f1a0f' : '#0d0d0d',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
-            <span style={{ fontSize: 14, color: '#aaa' }}>Status da instância:</span>
-            <strong style={{ color: statusUi.color }}>{statusUi.text}</strong>
+          {/* Visual status banner */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              marginBottom: 16,
+              padding: '12px 14px',
+              borderRadius: 8,
+              background: connected ? 'rgba(76,175,80,0.15)' : 'rgba(255,152,0,0.1)',
+              border: connected ? '1px solid #4caf50' : '1px solid #ff9800',
+            }}
+          >
+            <span
+              style={{
+                width: 12,
+                height: 12,
+                borderRadius: '50%',
+                background: statusUi.color,
+                boxShadow: connected ? '0 0 8px #4caf50' : 'none',
+                flexShrink: 0,
+              }}
+            />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, color: statusUi.color, fontSize: 15 }}>
+                {connected ? 'WhatsApp conectado' : statusUi.text}
+              </div>
+              {connected && (
+                <div style={{ color: '#aaa', fontSize: 13, marginTop: 2 }}>
+                  {profileName ? `Perfil: ${profileName}` : 'Instância online'}
+                  {profileOwner ? ` · ${profileOwner}` : ''}
+                </div>
+              )}
+              {!connected && (
+                <div style={{ color: '#888', fontSize: 12, marginTop: 2 }}>
+                  Gere o QR e escaneie no celular. Ao conectar, o QR some automaticamente.
+                </div>
+              )}
+            </div>
           </div>
 
           {waError && (
@@ -366,14 +458,16 @@ export default function Configuracoes() {
           )}
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
-            <button
-              type="button"
-              style={buttonSecondaryStyle}
-              onClick={() => void handleGenerateQr()}
-              disabled={waLoading}
-            >
-              {waLoading ? 'Aguarde...' : 'Gerar / renovar QR code'}
-            </button>
+            {!connected && (
+              <button
+                type="button"
+                style={buttonSecondaryStyle}
+                onClick={() => void handleGenerateQr()}
+                disabled={waLoading}
+              >
+                {waLoading ? 'Aguarde...' : 'Gerar / renovar QR code'}
+              </button>
+            )}
             <button
               type="button"
               style={buttonSecondaryStyle}
@@ -382,17 +476,19 @@ export default function Configuracoes() {
             >
               Atualizar status
             </button>
-            <button
-              type="button"
-              style={buttonDangerStyle}
-              onClick={() => void handleDisconnect()}
-              disabled={waLoading}
-            >
-              Desconectar
-            </button>
+            {connected && (
+              <button
+                type="button"
+                style={buttonDangerStyle}
+                onClick={() => void handleDisconnect()}
+                disabled={waLoading}
+              >
+                Desconectar
+              </button>
+            )}
           </div>
 
-          {qrcode && (
+          {showQr && (
             <div style={{ textAlign: 'center' }}>
               <p style={{ color: '#cfcfcf', fontSize: 14, marginBottom: 12 }}>
                 Abra o WhatsApp → Aparelhos conectados → Conectar um aparelho e escaneie:
@@ -406,28 +502,26 @@ export default function Configuracoes() {
                 }}
               >
                 <img
-                  src={qrcode.startsWith('data:') || qrcode.startsWith('http') ? qrcode : `data:image/png;base64,${qrcode}`}
+                  src={qrcode!.startsWith('data:') || qrcode!.startsWith('http') ? qrcode! : `data:image/png;base64,${qrcode}`}
                   alt="QR Code WhatsApp UAZAPI"
                   style={{ width: 260, height: 260, display: 'block' }}
                 />
               </div>
               <p style={{ color: '#888', fontSize: 12, marginTop: 10 }}>
-                O status atualiza sozinho a cada 5s enquanto o QR estiver visível.
+                Atualiza sozinho a cada 3s. Quando conectar, esta área some.
               </p>
             </div>
           )}
 
-          {paircode && (
+          {!connected && paircode && (
             <p style={{ color: '#D4AF37', fontSize: 16, marginTop: 12 }}>
               Código de pareamento: <strong>{paircode}</strong>
             </p>
           )}
 
-          {!qrcode && !paircode && !waError && (
+          {!connected && !showQr && !paircode && !waError && (
             <p style={{ color: '#666', fontSize: 13, margin: 0 }}>
-              Clique em <strong>Gerar / renovar QR code</strong> para conectar o WhatsApp no painel.
-              Os secrets <code>UAZAPI_BASE_URL</code> e <code>UAZAPI_INSTANCE_TOKEN</code> precisam
-              estar configurados no Supabase.
+              Clique em <strong>Gerar / renovar QR code</strong> para conectar o WhatsApp.
             </p>
           )}
         </div>

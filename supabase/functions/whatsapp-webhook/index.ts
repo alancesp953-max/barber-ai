@@ -12,6 +12,7 @@ import {
 } from '../_shared/db.ts'
 import { BARBER_TOOLS, runBarberTool, systemPromptBarber } from '../_shared/barber-tools.ts'
 import { loadMimoConfig, mimoChat, type ChatMessage } from '../_shared/mimo.ts'
+import { resolveUazConfig } from '../_shared/resolve-uaz.ts'
 import { normalizePhone, sendText } from '../_shared/uazapi.ts'
 
 type UazMessage = {
@@ -80,8 +81,17 @@ function shouldIgnore(msg: UazMessage): boolean {
   return false
 }
 
-async function reply(phone: string, text: string) {
-  await sendText(phone, text)
+async function reply(phone: string, text: string, db: ReturnType<typeof getServiceClient>) {
+  const resolved = await resolveUazConfig(db)
+  if (!resolved.config) {
+    console.error('reply uaz config', resolved.error)
+    throw new Error(resolved.error || 'UAZAPI não configurada para enviar mensagens')
+  }
+  const result = await sendText(phone, text, resolved.config)
+  if (!result.ok) {
+    console.error('reply send failed', result.error)
+    throw new Error(result.error || 'Falha ao enviar WhatsApp')
+  }
 }
 
 // ─── Flow handlers ───────────────────────────────────────────────────────────
@@ -774,7 +784,7 @@ Deno.serve(async (req) => {
 
       const text = extractText(msg)
       if (!text) {
-        await reply(phone, menuText())
+        await reply(phone, menuText(), db)
         results.push({ phone, ok: true })
         continue
       }
@@ -782,7 +792,7 @@ Deno.serve(async (req) => {
       const senderName = msg.senderName || undefined
       // "typing" presence would be nice but optional
       const answer = await processMessage(db, phone, text, senderName)
-      await reply(phone, answer)
+      await reply(phone, answer, db)
       results.push({ phone, ok: true })
     }
 
