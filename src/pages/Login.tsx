@@ -17,12 +17,36 @@ export default function Login() {
     setLoading(true)
     setError(null)
 
-    const { error: authError } = await supabase.auth.signInWithPassword({ email, password })
+    const { data, error: authError } = await supabase.auth.signInWithPassword({ email, password })
 
     if (authError) {
       setError(authError.message)
       setLoading(false)
       return
+    }
+
+    // Verifica se a conta é um administrador cadastrado
+    const userId = data.user?.id
+    if (userId) {
+      const { data: adminRow, error: adminError } = await supabase
+        .from('admin_users')
+        .select('user_id')
+        .eq('user_id', userId)
+        .maybeSingle()
+
+      if (adminError) {
+        setError('Erro ao verificar permissões de administrador.')
+        setLoading(false)
+        return
+      }
+
+      if (!adminRow) {
+        // Não é admin: desloga e bloqueia o acesso ao painel
+        await supabase.auth.signOut()
+        setError('Esta conta não tem acesso administrativo. Se você é um barbeiro, use o acesso do barbeiro.')
+        setLoading(false)
+        return
+      }
     }
 
     navigate({ to: '/admin/dashboard' })
