@@ -11,6 +11,7 @@ export interface Barber {
   comissao_produto_tipo: string
   especialidades: string | null
   avaliacao: number
+  avaliacao_count?: number
   foto_url: string | null
   user_id?: string | null
   ativo?: boolean
@@ -48,6 +49,8 @@ export interface Client {
   nome: string
   telefone?: string | null
   email?: string | null
+  data_nascimento?: string | null
+  whatsapp_opt_in?: boolean
   created_at?: string
 }
 

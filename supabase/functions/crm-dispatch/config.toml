@@ -1,0 +1,2 @@
+[functions.crm-dispatch]
+verify_jwt = false

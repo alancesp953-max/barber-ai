@@ -372,6 +372,32 @@ export async function notifyAppointmentWhatsApp(params: {
   return { ok: true }
 }
 
+/** Pede avaliação no WhatsApp após concluir atendimento. Falhas não bloqueiam. */
+export async function notifyRatingAskWhatsApp(
+  agendamentoId: string,
+): Promise<{ ok: boolean; skipped?: boolean; error?: string }> {
+  if (!agendamentoId) return { ok: false, error: 'agendamento_id vazio' }
+  try {
+    const { data, error } = await supabase.functions.invoke('rating-ask', {
+      body: { agendamento_id: agendamentoId },
+    })
+    if (error) {
+      console.warn('rating-ask failed:', error.message)
+      return { ok: false, error: error.message }
+    }
+    if (data?.error) {
+      console.warn('rating-ask error:', data.error)
+      return { ok: false, error: String(data.error) }
+    }
+    if (data?.skipped) return { ok: false, skipped: true }
+    return { ok: true }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.warn('rating-ask exception:', msg)
+    return { ok: false, error: msg }
+  }
+}
+
 export type WhatsAppInstanceResult = {
   ok: boolean
   action?: string
@@ -453,6 +479,9 @@ export async function updateAppointmentStatus(id: string, status: string): Promi
     .select('*, barbeiros(nome), servicos(nome, duracao_minutos, preco), clientes(nome, email)')
     .single()
   if (error) throw new Error(`Erro ao atualizar status do agendamento: ${error.message}`)
+  if (status === 'concluido') {
+    void notifyRatingAskWhatsApp(id)
+  }
   return data as Appointment
 }
 
@@ -550,7 +579,12 @@ export async function getClients() {
   return data ?? []
 }
 
-export async function findOrCreateClient(cliente: { nome: string; telefone?: string; email?: string }) {
+export async function findOrCreateClient(cliente: {
+  nome: string
+  telefone?: string
+  email?: string
+  data_nascimento?: string | null
+}) {
   let query = supabase.from('clientes').select('*')
   if (cliente.telefone)
     query = query.eq('telefone', cliente.telefone)
@@ -558,19 +592,76 @@ export async function findOrCreateClient(cliente: { nome: string; telefone?: str
     query = query.eq('email', cliente.email)
   else
     query = query.eq('nome', cliente.nome)
-  const { data: existing } = await query.limit(1).single()
-  if (existing) return existing
+  const { data: existing } = await query.limit(1).maybeSingle()
+  if (existing) {
+    if (cliente.data_nascimento && !existing.data_nascimento) {
+      const { data: updated } = await supabase
+        .from('clientes')
+        .update({ data_nascimento: cliente.data_nascimento })
+        .eq('id', existing.id)
+        .select()
+        .single()
+      if (updated) return updated
+    }
+    return existing
+  }
   const { data, error } = await supabase
     .from('clientes')
     .insert({
       nome: cliente.nome,
       telefone: cliente.telefone || null,
       email: cliente.email || null,
+      data_nascimento: cliente.data_nascimento || null,
     })
     .select()
     .single()
   if (error) throw new Error(`Erro ao criar cliente: ${error.message}`)
   return data
+}
+
+export async function updateClient(
+  id: string,
+  updates: {
+    nome?: string
+    telefone?: string | null
+    email?: string | null
+    data_nascimento?: string | null
+    whatsapp_opt_in?: boolean
+  },
+) {
+  const { data, error } = await supabase
+    .from('clientes')
+    .update(updates)
+    .eq('id', id)
+    .select()
+    .single()
+  if (error) throw new Error(`Erro ao atualizar cliente: ${error.message}`)
+  return data
+}
+
+/** Dispara automações CRM (ausência / aniversário) agora. */
+export async function runCrmDispatch(): Promise<{
+  ok: boolean
+  ausencia?: number
+  aniversario?: number
+  skipped?: number
+  erros?: string[]
+  error?: string
+}> {
+  const { data, error } = await supabase.functions.invoke('crm-dispatch', { body: {} })
+  if (error) {
+    return { ok: false, error: error.message }
+  }
+  if (data?.error) {
+    return { ok: false, error: String(data.error) }
+  }
+  return {
+    ok: true,
+    ausencia: data?.ausencia ?? 0,
+    aniversario: data?.aniversario ?? 0,
+    skipped: data?.skipped ?? 0,
+    erros: data?.erros ?? [],
+  }
 }
 
 // =====================
@@ -640,6 +731,8 @@ export async function createPagamento(pagamento: {
       `Pagamento registrado, mas falhou ao concluir o agendamento: ${errAppt.message}`,
     )
   }
+
+  void notifyRatingAskWhatsApp(pagamento.agendamento_id)
 
   return data
 }

@@ -7,9 +7,12 @@ import {
   Image,
   Loader,
   NativeSelect,
+  NumberInput,
   SimpleGrid,
   Stack,
+  Switch,
   Text,
+  Textarea,
   TextInput,
   Title,
 } from '@mantine/core'
@@ -19,6 +22,7 @@ import {
   disconnectWhatsAppInstance,
   getConfiguracoes,
   getWhatsAppInstanceStatus,
+  runCrmDispatch,
   updateConfiguracoes,
   type WhatsAppInstanceResult,
 } from '../../lib/api'
@@ -104,6 +108,7 @@ export default function Configuracoes() {
   const [profileOwner, setProfileOwner] = useState<string | null>(null)
   const [waLoading, setWaLoading] = useState(false)
   const [waError, setWaError] = useState<string | null>(null)
+  const [crmRunning, setCrmRunning] = useState(false)
 
   useEffect(() => {
     async function load() {
@@ -233,6 +238,33 @@ export default function Configuracoes() {
       setWaError(err instanceof Error ? err.message : 'Erro ao desconectar')
     } finally {
       setWaLoading(false)
+    }
+  }
+
+  async function handleRunCrm() {
+    setCrmRunning(true)
+    setMessage(null)
+    try {
+      const result = await runCrmDispatch()
+      if (!result.ok) {
+        setMessage({ tipo: 'erro', texto: result.error || 'Falha ao rodar automações' })
+        return
+      }
+      const errHint =
+        result.erros && result.erros.length > 0
+          ? ` · ${result.erros.length} erro(s)`
+          : ''
+      setMessage({
+        tipo: 'sucesso',
+        texto: `Automações: ${result.ausencia ?? 0} ausência(s), ${result.aniversario ?? 0} aniversário(s), ${result.skipped ?? 0} ignorado(s)${errHint}`,
+      })
+    } catch (err) {
+      setMessage({
+        tipo: 'erro',
+        texto: err instanceof Error ? err.message : 'Erro ao rodar automações',
+      })
+    } finally {
+      setCrmRunning(false)
     }
   }
 
@@ -450,6 +482,84 @@ export default function Configuracoes() {
             </Text>
           )}
         </Card>
+      </Card>
+
+      <Card withBorder padding="lg" radius="lg">
+        <Title order={4} c="gold" mb="xs">
+          Automações WhatsApp
+        </Title>
+        <Text size="sm" c="dimmed" mb="md">
+          Disparos diários (job ~10h BRT): clientes sem visita há X dias e aniversariantes.
+          Use {'{nome}'}, {'{dias}'} e {'{barbearia}'} nos textos. Deixe em branco para a mensagem padrão.
+        </Text>
+
+        <Stack gap="lg">
+          <Card withBorder padding="md" radius="md" bg="dark.8">
+            <Group justify="space-between" mb="sm">
+              <Text fw={600}>Reengajamento (ausência)</Text>
+              <Switch
+                checked={form.auto_ausencia_ativo === true}
+                onChange={(e) => handleChange('auto_ausencia_ativo', e.currentTarget.checked)}
+                color="gold"
+              />
+            </Group>
+            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+              <NumberInput
+                label="Dias sem visita (concluída)"
+                min={7}
+                max={365}
+                value={Number(form.auto_ausencia_dias) || 45}
+                onChange={(v) => handleChange('auto_ausencia_dias', Number(v) || 45)}
+                disabled={!form.auto_ausencia_ativo}
+                styles={inputStyles}
+              />
+              <Textarea
+                label="Mensagem"
+                minRows={3}
+                value={form.auto_ausencia_mensagem || ''}
+                onChange={(e) => handleChange('auto_ausencia_mensagem', e.currentTarget.value)}
+                placeholder="Oi, {nome}! Faz {dias} dias que você não aparece na {barbearia}…"
+                disabled={!form.auto_ausencia_ativo}
+                styles={inputStyles}
+                style={{ gridColumn: '1 / -1' }}
+              />
+            </SimpleGrid>
+          </Card>
+
+          <Card withBorder padding="md" radius="md" bg="dark.8">
+            <Group justify="space-between" mb="sm">
+              <Text fw={600}>Aniversário</Text>
+              <Switch
+                checked={form.auto_aniversario_ativo === true}
+                onChange={(e) => handleChange('auto_aniversario_ativo', e.currentTarget.checked)}
+                color="gold"
+              />
+            </Group>
+            <Textarea
+              label="Mensagem"
+              minRows={3}
+              value={form.auto_aniversario_mensagem || ''}
+              onChange={(e) => handleChange('auto_aniversario_mensagem', e.currentTarget.value)}
+              placeholder="Feliz aniversário, {nome}! Abraço da {barbearia}."
+              disabled={!form.auto_aniversario_ativo}
+              styles={inputStyles}
+            />
+          </Card>
+
+          <Group>
+            <Button
+              variant="outline"
+              color="gold"
+              onClick={() => void handleRunCrm()}
+              loading={crmRunning}
+            >
+              Rodar agora (teste)
+            </Button>
+            <Text size="xs" c="dimmed">
+              Envia só quem ainda não recebeu nesta janela (idempotente).
+            </Text>
+          </Group>
+        </Stack>
       </Card>
 
       <Card withBorder padding="lg" radius="lg">

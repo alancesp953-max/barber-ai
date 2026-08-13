@@ -3,6 +3,7 @@ import {
   aftercareText,
   afterNameGreeting,
   appointmentsContextLines,
+  applyBarberRating,
   askNameText,
   fetchShopName,
   fetchShopPublicInfo,
@@ -16,14 +17,17 @@ import {
   greetingText,
   greetingWithAppointments,
   humanizeOutbound,
+  isAffirmative,
   isBotActive,
   isGreetingOnly,
   isKnownLeadName,
+  isNegative,
   isPlausiblePersonName,
   matchByName,
   matchSlot,
   normalizeMatch,
   parseDateBR,
+  parseRatingScore,
   resetSession,
   saveLeadName,
   saveSession,
@@ -243,6 +247,98 @@ function wantsRestart(text: string): boolean {
     'voltar',
     'cancela tudo',
   ].includes(t)
+}
+
+async function handleRateAsk(
+  db: ReturnType<typeof getServiceClient>,
+  phone: string,
+  text: string,
+  context: Record<string, unknown>,
+  leadName?: string | null,
+): Promise<string> {
+  const barberName = String(context.barbeiro_nome || 'seu barbeiro')
+
+  if (isNegative(text)) {
+    await resetSession(db, phone)
+    const name =
+      leadName && isKnownLeadName(leadName) ? leadName.trim().split(/\s+/)[0] : null
+    return name
+      ? `Tranquilo, ${name}. Obrigado pela visita — qualquer coisa, me chama por aqui.`
+      : 'Tranquilo. Obrigado pela visita — qualquer coisa, me chama por aqui.'
+  }
+
+  if (isAffirmative(text)) {
+    await saveSession(db, phone, 'rate_score', {
+      ...context,
+      mode: 'rating',
+    })
+    return [
+      `Fechou! Então me conta: de *1 a 5*, como foi o atendimento com o *${barberName}*?`,
+      '',
+      'Pode mandar só o número, tipo *5* se foi top.',
+    ].join('\n')
+  }
+
+  return [
+    `Sem problema nenhum se preferir não avaliar — é só falar *não*.`,
+    `Se quiser deixar uma notinha do *${barberName}*, responde *sim*.`,
+  ].join('\n')
+}
+
+async function handleRateScore(
+  db: ReturnType<typeof getServiceClient>,
+  phone: string,
+  text: string,
+  context: Record<string, unknown>,
+  leadName?: string | null,
+): Promise<string> {
+  if (isNegative(text)) {
+    await resetSession(db, phone)
+    return 'Beleza, sem avaliação mesmo. Valeu pela visita!'
+  }
+
+  const nota = parseRatingScore(text)
+  if (nota == null) {
+    return 'Me manda uma nota de *1* a *5*? Pode ser só o número.'
+  }
+
+  const agendamentoId = String(context.agendamento_id || '')
+  const barbeiroId = String(context.barbeiro_id || '')
+  if (!agendamentoId || !barbeiroId) {
+    await resetSession(db, phone)
+    return 'Deu um probleminha pra registrar a nota. Valeu mesmo assim!'
+  }
+
+  const result = await applyBarberRating(db, {
+    agendamentoId,
+    barbeiroId,
+    clienteId: (context.cliente_id as string) || null,
+    nota,
+    origem: 'whatsapp',
+  })
+
+  await resetSession(db, phone)
+
+  const name =
+    leadName && isKnownLeadName(leadName) ? leadName.trim().split(/\s+/)[0] : null
+  const barberName = String(context.barbeiro_nome || 'barbeiro')
+
+  if (!result.ok) {
+    if (result.error === 'Já avaliado') {
+      return name
+        ? `Essa visita já tinha nota, ${name}. Valeu demais!`
+        : 'Essa visita já tinha nota. Valeu demais!'
+    }
+    console.error('applyBarberRating', result.error)
+    return 'Não consegui salvar agora, mas obrigado pelo feedback!'
+  }
+
+  const thanks =
+    nota >= 4
+      ? `Nota *${nota}* registrada — o ${barberName} vai ficar feliz.`
+      : `Anotei a nota *${nota}*. Obrigado pela sinceridade, ajuda a gente a melhorar.`
+
+  return name ? `${name}, ${thanks}\n\nQualquer coisa, tô por aqui.` : `${thanks}\n\nQualquer coisa, tô por aqui.`
 }
 
 // ─── Flow handlers (só se a IA estiver indisponível) ─────────────────────────
@@ -1093,6 +1189,14 @@ async function processMessage(
       })
       return ask
     }
+  }
+
+  // ── Avaliação pós-corte (antes da IA / cumprimentos) ───────────────────────
+  if (session.step === 'rate_ask') {
+    return handleRateAsk(db, phone, trimmed, session.context, leadName)
+  }
+  if (session.step === 'rate_score') {
+    return handleRateScore(db, phone, trimmed, session.context, leadName)
   }
 
   // ── Cumprimento puro com nome já salvo ────────────────────────────────────

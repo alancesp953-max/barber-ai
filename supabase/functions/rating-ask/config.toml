@@ -1,0 +1,2 @@
+[functions.rating-ask]
+verify_jwt = false

@@ -1,6 +1,6 @@
 import { Box, Flex, Stack, Text, Title, Badge, Group, Paper } from '@mantine/core'
-import { IconScissors } from '@tabler/icons-react'
 import type { ReactNode } from 'react'
+import { BrandLogo } from './BrandLogo'
 
 const HERO_IMAGE =
   'https://images.unsplash.com/photo-1585747860715-2ba37e788b70?auto=format&fit=crop&w=1600&q=80'
@@ -29,17 +29,7 @@ export function AuthShell({
         style={{ display: 'flex', flexDirection: 'column' }}
       >
         <Group gap="sm" mb="xl">
-          <Box
-            w={36}
-            h={36}
-            bg="gold.5"
-            style={{ borderRadius: 10, display: 'grid', placeItems: 'center' }}
-          >
-            <IconScissors size={20} color="#0A0A0A" stroke={2} />
-          </Box>
-          <Text fw={700} fz="lg">
-            BarberAI
-          </Text>
+          <BrandLogo height={44} maw={220} />
         </Group>
 
         <Flex flex={1} align="center" justify="center">
@@ -47,7 +37,7 @@ export function AuthShell({
         </Flex>
 
         <Text size="xs" c="dimmed" mt="xl">
-          © {new Date().getFullYear()} BarberAI
+          © {new Date().getFullYear()} BARBERIA
         </Text>
       </Box>
 
@@ -80,7 +70,7 @@ export function AuthShell({
             {heroSubtitle}
           </Text>
           <Text size="xs" c="dimmed" mt="xs">
-            BarberAI — gestão e WhatsApp para barbearias
+            BARBERIA — gestão e WhatsApp para barbearias
           </Text>
         </Stack>
       </Box>

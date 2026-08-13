@@ -644,3 +644,139 @@ export function todaySaoPauloISO(): string {
     day: '2-digit',
   }).format(new Date())
 }
+
+export function isAffirmative(text: string): boolean {
+  const t = normalizeMatch(text)
+  if (!t) return false
+  if (
+    t === '1' ||
+    t === 's' ||
+    t === 'sim' ||
+    t === 'yes' ||
+    t === 'ok' ||
+    t === 'pode' ||
+    t === 'topo' ||
+    t === 'topa' ||
+    t === 'claro' ||
+    t === 'bora' ||
+    t === 'quero' ||
+    t === 'fechado' ||
+    t === 'ss' ||
+    t === 'ssiim'
+  ) {
+    return true
+  }
+  return (
+    t.includes('pode sim') ||
+    t.includes('quero sim') ||
+    t.includes('quero avaliar') ||
+    t.includes('pode avaliar') ||
+    t.includes('vamos la') ||
+    t.includes('topa')
+  )
+}
+
+export function isNegative(text: string): boolean {
+  const t = normalizeMatch(text)
+  if (!t) return false
+  if (
+    t === '2' ||
+    t === 'n' ||
+    t === 'nao' ||
+    t === 'no' ||
+    t === 'nop' ||
+    t === 'agora nao' ||
+    t === 'depois' ||
+    t === 'obrigado' ||
+    t === 'obrigada'
+  ) {
+    return true
+  }
+  return (
+    t.includes('nao quero') ||
+    t.includes('nao preciso') ||
+    t.includes('sem precis') ||
+    t.includes('deixa pra') ||
+    t.includes('outra hora') ||
+    t.includes('nao agora') ||
+    t.includes('prefiro nao')
+  )
+}
+
+/** Extrai nota 1–5 do texto do cliente. */
+export function parseRatingScore(text: string): number | null {
+  const t = normalizeMatch(text)
+  if (!t) return null
+
+  const wordMap: Record<string, number> = {
+    um: 1,
+    uma: 1,
+    dois: 2,
+    duas: 2,
+    tres: 3,
+    quatro: 4,
+    cinco: 5,
+  }
+  for (const [w, n] of Object.entries(wordMap)) {
+    if (t === w || t.includes(`nota ${w}`) || t.includes(`${w} estrela`)) return n
+  }
+
+  const m = t.match(/\b([1-5])\b/)
+  if (m) return Number(m[1])
+  return null
+}
+
+/**
+ * Grava avaliação e atualiza média ponderada em barbeiros.avaliacao.
+ * Retorna false se já existir avaliação para o agendamento.
+ */
+export async function applyBarberRating(
+  db: SupabaseClient,
+  opts: {
+    agendamentoId: string
+    barbeiroId: string
+    clienteId?: string | null
+    nota: number
+    origem?: string
+  },
+): Promise<{ ok: true; media: number; count: number } | { ok: false; error: string }> {
+  const nota = Math.round(opts.nota)
+  if (nota < 1 || nota > 5) return { ok: false, error: 'Nota inválida' }
+
+  const { data: existing } = await db
+    .from('avaliacoes')
+    .select('id')
+    .eq('agendamento_id', opts.agendamentoId)
+    .maybeSingle()
+  if (existing) return { ok: false, error: 'Já avaliado' }
+
+  const { error: errIns } = await db.from('avaliacoes').insert({
+    agendamento_id: opts.agendamentoId,
+    barbeiro_id: opts.barbeiroId,
+    cliente_id: opts.clienteId || null,
+    nota,
+    origem: opts.origem || 'whatsapp',
+  })
+  if (errIns) return { ok: false, error: errIns.message }
+
+  const { data: barb, error: errB } = await db
+    .from('barbeiros')
+    .select('id, avaliacao, avaliacao_count')
+    .eq('id', opts.barbeiroId)
+    .single()
+  if (errB || !barb) return { ok: false, error: errB?.message || 'Barbeiro não encontrado' }
+
+  const count = Number(barb.avaliacao_count || 0)
+  const old = Number(barb.avaliacao ?? 5)
+  const media =
+    count <= 0 ? nota : Math.round(((old * count + nota) / (count + 1)) * 100) / 100
+  const newCount = count + 1
+
+  const { error: errUp } = await db
+    .from('barbeiros')
+    .update({ avaliacao: media, avaliacao_count: newCount })
+    .eq('id', opts.barbeiroId)
+  if (errUp) return { ok: false, error: errUp.message }
+
+  return { ok: true, media, count: newCount }
+}

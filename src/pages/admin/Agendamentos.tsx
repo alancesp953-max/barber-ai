@@ -227,6 +227,7 @@ export default function Agendamentos() {
   const [clientName, setClientName] = useState('')
   const [clientEmail, setClientEmail] = useState('')
   const [clientPhone, setClientPhone] = useState('')
+  const [clientBirthdate, setClientBirthdate] = useState('')
   const [date, setDate] = useState('')
   const [time, setTime] = useState('')
   const [barberId, setBarberId] = useState('')
@@ -306,6 +307,7 @@ export default function Agendamentos() {
         nome: clientName.trim(),
         email: clientEmail,
         telefone: phone || undefined,
+        data_nascimento: clientBirthdate || null,
       })
 
       const created = await createAppointment({
@@ -337,6 +339,7 @@ export default function Agendamentos() {
       setClientName('')
       setClientEmail('')
       setClientPhone('')
+      setClientBirthdate('')
       setDate('')
       setTime('')
       setBarberId('')
@@ -433,6 +436,13 @@ export default function Agendamentos() {
               value={clientPhone}
               onChange={(e) => setClientPhone(e.currentTarget.value)}
               placeholder="(11) 99999-9999"
+              styles={inputStyles}
+            />
+            <TextInput
+              label="Data de nascimento"
+              type="date"
+              value={clientBirthdate}
+              onChange={(e) => setClientBirthdate(e.currentTarget.value)}
               styles={inputStyles}
             />
             <TextInput

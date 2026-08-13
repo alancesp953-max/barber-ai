@@ -22,13 +22,13 @@ import {
   Clock,
   LogOut,
   RefreshCw,
-  Scissors,
   Star,
   Trash2,
   User as UserIcon,
 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
+import { BrandLogo } from '../../components/BrandLogo'
 import {
   createBarbeiroBloqueio,
   deleteBarbeiroBloqueio,
@@ -253,9 +253,7 @@ export default function BarberAgenda() {
         }}
       >
         <Group gap="sm">
-          <ThemeIcon size={40} radius="md" variant="light" color="gold">
-            <Scissors size={20} />
-          </ThemeIcon>
+          <BrandLogo height={36} maw={160} />
           <div>
             <Title order={4} c="gold">
               Minha agenda

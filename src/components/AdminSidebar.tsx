@@ -1,4 +1,4 @@
-import { Box, Button, NavLink, Stack, Text, Title } from '@mantine/core'
+import { Box, Button, NavLink, Stack, Text } from '@mantine/core'
 import { Link, useRouter, useRouterState } from '@tanstack/react-router'
 import {
   IconCalendar,
@@ -15,6 +15,7 @@ import {
 } from '@tabler/icons-react'
 import { useTranslation } from 'react-i18next'
 import { signOut } from '../integrations/supabase/client'
+import { BrandLogo } from './BrandLogo'
 
 const navItems = [
   { to: '/admin/dashboard', labelKey: 'nav.dashboard', icon: IconLayoutDashboard },
@@ -87,20 +88,5 @@ export function AdminSidebar({ onNavigate }: AdminSidebarProps) {
 }
 
 function GroupBrand() {
-  const { t } = useTranslation()
-  return (
-    <Box style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-      <Box
-        w={32}
-        h={32}
-        bg="gold.5"
-        style={{ borderRadius: 8, display: 'grid', placeItems: 'center', flexShrink: 0 }}
-      >
-        <IconScissors size={18} color="#0A0A0A" stroke={2} />
-      </Box>
-      <Title order={4} fw={700}>
-        {t('app.name')}
-      </Title>
-    </Box>
-  )
+  return <BrandLogo height={34} maw={180} />
 }
