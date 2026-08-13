@@ -15,6 +15,8 @@ export interface Barber {
   user_id?: string | null
   ativo?: boolean
   active?: boolean
+  ordem_rodizio?: number | null
+  senha_temporaria?: string | null
   created_at: string
 }
 

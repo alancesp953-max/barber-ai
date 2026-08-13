@@ -111,24 +111,41 @@ async function uazRequest(
 
 export type PresenceType = 'composing' | 'paused' | 'recording'
 
-/** POST /message/presence — typing / recording indicator in chat */
+/**
+ * POST /message/presence
+ * `delay` (ms) = quanto tempo o WhatsApp mostra "digitando…" / "gravando…".
+ * Sem delay a presença some na hora e o cliente não vê nada.
+ */
 export async function sendPresence(
   number: string,
   presence: PresenceType,
   config?: UazapiConfig,
+  delayMs?: number,
 ): Promise<{ ok: boolean; data?: unknown; error?: string }> {
   const phone = normalizePhone(number)
+  const body: Record<string, unknown> = {
+    number: phone,
+    presence,
+  }
+  if (delayMs != null && delayMs > 0) {
+    body.delay = Math.round(delayMs)
+  }
   const result = await uazRequest(
     '/message/presence',
-    { method: 'POST', body: { number: phone, presence } },
+    { method: 'POST', body },
     config,
   )
   return { ok: result.ok, data: result.data, error: result.error }
 }
 
-/** Delay that feels like typing without blocking the Edge Function too long */
+/**
+ * Tempo de “digitação” legível no celular.
+ * Mín ~1.8s (cumprimentos curtos ainda parecem humanos); máx ~5s.
+ */
 export function typingDelayMs(text: string): number {
-  return Math.min(2800, Math.max(600, text.length * 25))
+  // ~45ms por caractere + margem, sem ficar absurdamente longo no Edge
+  const byLen = 800 + text.length * 45
+  return Math.min(5000, Math.max(1800, byLen))
 }
 
 function sleep(ms: number): Promise<void> {
@@ -136,8 +153,8 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Simulate human typing: compose presence → wait → send text.
- * Presence failures never block the actual message.
+ * Simula humano: "digitando…" (presence com delay) → espera → envia texto.
+ * Presence falha não bloqueia o envio.
  */
 export async function humanReply(
   number: string,
@@ -145,21 +162,24 @@ export async function humanReply(
   config?: UazapiConfig,
 ): Promise<{ ok: boolean; data?: unknown; error?: string }> {
   const phone = normalizePhone(number)
+  const delay = typingDelayMs(text)
 
-  try {
-    await sendPresence(phone, 'composing', config)
-  } catch {
-    /* best-effort */
+  // 1) Marca digitando pelo tempo calculado (UAZAPI usa o campo delay)
+  const presence = await sendPresence(phone, 'composing', config, delay)
+  if (!presence.ok) {
+    console.warn('sendPresence composing failed', presence.error)
   }
 
-  await sleep(typingDelayMs(text))
+  // 2) Espera o mesmo tempo (composing some cedo se mandar a msg antes)
+  await sleep(delay)
 
-  const result = await sendText(phone, text, config)
+  // 3) Envia o texto (delay extra 0 — já esperamos)
+  const result = await sendText(phone, text, config, 0)
 
-  try {
-    await sendPresence(phone, 'paused', config)
-  } catch {
-    /* best-effort */
+  // 4) Encerra status (best-effort)
+  const paused = await sendPresence(phone, 'paused', config)
+  if (!paused.ok) {
+    console.warn('sendPresence paused failed', paused.error)
   }
 
   return result
@@ -169,19 +189,21 @@ export async function sendText(
   number: string,
   text: string,
   config?: UazapiConfig,
+  delayMs?: number,
 ): Promise<{ ok: boolean; data?: unknown; error?: string }> {
   const phone = normalizePhone(number)
+  const body: Record<string, unknown> = {
+    number: phone,
+    text,
+    readchat: true,
+    readmessages: true,
+  }
+  if (delayMs != null && delayMs > 0) {
+    body.delay = Math.round(delayMs)
+  }
   const result = await uazRequest(
     '/send/text',
-    {
-      method: 'POST',
-      body: {
-        number: phone,
-        text,
-        readchat: true,
-        readmessages: true,
-      },
-    },
+    { method: 'POST', body },
     config,
   )
   return { ok: result.ok, data: result.data, error: result.error }

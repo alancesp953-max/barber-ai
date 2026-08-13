@@ -1,22 +1,39 @@
+import { Box, Button, NavLink, Stack, Text, Title } from '@mantine/core'
 import { Link, useRouter, useRouterState } from '@tanstack/react-router'
-import { BarChart3, Calendar, DollarSign, LayoutDashboard, LogOut, Package, Percent, Scissors, Settings, UserPlus, Users } from 'lucide-react'
+import {
+  IconCalendar,
+  IconCash,
+  IconChartBar,
+  IconLayoutDashboard,
+  IconLogout,
+  IconPackage,
+  IconPercentage,
+  IconScissors,
+  IconSettings,
+  IconUserPlus,
+  IconUsers,
+} from '@tabler/icons-react'
 import { useTranslation } from 'react-i18next'
 import { signOut } from '../integrations/supabase/client'
 
 const navItems = [
-  { to: '/admin/dashboard', labelKey: 'nav.dashboard', icon: LayoutDashboard },
-  { to: '/admin/services', labelKey: 'nav.services', icon: Scissors },
-  { to: '/admin/produtos', labelKey: 'nav.products', icon: Package },
-  { to: '/admin/appointments', labelKey: 'nav.appointments', icon: Calendar },
-  { to: '/admin/barbers', labelKey: 'nav.barbers', icon: Users },
-  { to: '/admin/usuarios', label: 'Usuários', icon: UserPlus },
-  { to: '/admin/financeiro', label: 'Financeiro', icon: DollarSign },
-  { to: '/admin/comissoes', label: 'Comissões', icon: Percent },
-  { to: '/admin/relatorios', labelKey: 'nav.reports', icon: BarChart3 },
-  { to: '/admin/configuracoes', label: 'Configurações', icon: Settings },
+  { to: '/admin/dashboard', labelKey: 'nav.dashboard', icon: IconLayoutDashboard },
+  { to: '/admin/services', labelKey: 'nav.services', icon: IconScissors },
+  { to: '/admin/produtos', labelKey: 'nav.products', icon: IconPackage },
+  { to: '/admin/appointments', labelKey: 'nav.appointments', icon: IconCalendar },
+  { to: '/admin/barbers', labelKey: 'nav.barbers', icon: IconUsers },
+  { to: '/admin/usuarios', label: 'Usuários', icon: IconUserPlus },
+  { to: '/admin/financeiro', label: 'Financeiro', icon: IconCash },
+  { to: '/admin/comissoes', label: 'Comissões', icon: IconPercentage },
+  { to: '/admin/relatorios', labelKey: 'nav.reports', icon: IconChartBar },
+  { to: '/admin/configuracoes', label: 'Configurações', icon: IconSettings },
 ] as const
 
-export function AdminSidebar() {
+type AdminSidebarProps = {
+  onNavigate?: () => void
+}
+
+export function AdminSidebar({ onNavigate }: AdminSidebarProps) {
   const { t } = useTranslation()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const router = useRouter()
@@ -26,53 +43,64 @@ export function AdminSidebar() {
     router.navigate({ to: '/login' })
   }
 
-  const isActive = (to: string) => {
-    return pathname === to || pathname.startsWith(`${to}/`)
-  }
+  const isActive = (to: string) => pathname === to || pathname.startsWith(`${to}/`)
 
   return (
-    <aside className="flex h-screen w-64 flex-col border-r border-barber-gold/20 bg-barber-black">
-      <div className="flex flex-col items-center p-6">
-        <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-barber-gold/10">
-          <Scissors className="h-8 w-8 text-barber-gold" />
-        </div>
-        <h1 className="font-serif text-2xl font-bold tracking-wider text-barber-gold">
-          {t('app.name')}
-        </h1>
-        <p className="mt-1 text-xs text-barber-white/60">{t('app.adminDashboard')}</p>
-      </div>
+    <Stack h="100%" gap="md">
+      <Box py="xs">
+        <GroupBrand />
+        <Text size="xs" c="dimmed" mt={4}>
+          {t('app.adminDashboard')}
+        </Text>
+      </Box>
 
-      <nav className="mt-2 flex-1">
+      <Stack gap={2} style={{ flex: 1 }}>
         {navItems.map((item) => {
+          const Icon = item.icon
+          const label = 'label' in item ? item.label : t(item.labelKey)
           const active = isActive(item.to)
-
           return (
-            <Link
+            <NavLink
               key={item.to}
+              component={Link}
               to={item.to}
-              className={`flex items-center px-6 py-3 transition-colors ${
-                active
-                  ? 'bg-barber-gold font-semibold text-barber-black'
-                  : 'text-barber-white hover:bg-barber-gold/10'
-              }`}
-            >
-              <item.icon className="mr-3 h-5 w-5 shrink-0" />
-              {'label' in item ? item.label : t(item.labelKey)}
-            </Link>
+              label={label}
+              leftSection={<Icon size={18} stroke={1.5} />}
+              active={active}
+              onClick={onNavigate}
+            />
           )
         })}
-      </nav>
+      </Stack>
 
-      <div className="border-t border-barber-gold/20 p-6">
-        <button
-          type="button"
-          onClick={handleLogout}
-          className="flex items-center text-barber-white transition-colors hover:text-barber-gold"
-        >
-          <LogOut className="mr-3 h-5 w-5" />
-          {t('nav.signOut')}
-        </button>
-      </div>
-    </aside>
+      <Button
+        variant="subtle"
+        color="gray"
+        leftSection={<IconLogout size={18} />}
+        justify="flex-start"
+        onClick={handleLogout}
+      >
+        {t('nav.signOut')}
+      </Button>
+    </Stack>
+  )
+}
+
+function GroupBrand() {
+  const { t } = useTranslation()
+  return (
+    <Box style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <Box
+        w={32}
+        h={32}
+        bg="gold.5"
+        style={{ borderRadius: 8, display: 'grid', placeItems: 'center', flexShrink: 0 }}
+      >
+        <IconScissors size={18} color="#0A0A0A" stroke={2} />
+      </Box>
+      <Title order={4} fw={700}>
+        {t('app.name')}
+      </Title>
+    </Box>
   )
 }

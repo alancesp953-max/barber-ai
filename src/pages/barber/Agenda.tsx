@@ -1,21 +1,51 @@
-import { useEffect, useState } from 'react'
-import { useNavigate } from '@tanstack/react-router'
+import {
+  Alert,
+  Avatar,
+  Badge,
+  Box,
+  Button,
+  Card,
+  Group,
+  Loader,
+  SimpleGrid,
+  Stack,
+  Switch,
+  Tabs,
+  Text,
+  TextInput,
+  ThemeIcon,
+  Title,
+} from '@mantine/core'
 import {
   CalendarDays,
   CalendarX2,
-  Loader2,
+  Clock,
   LogOut,
+  RefreshCw,
   Scissors,
   Star,
+  Trash2,
   User as UserIcon,
 } from 'lucide-react'
-
-import { getAgendaBarbeiro, getBarbeiroByUserId } from '../../lib/api'
+import { useCallback, useEffect, useState } from 'react'
+import { useNavigate } from '@tanstack/react-router'
+import {
+  createBarbeiroBloqueio,
+  deleteBarbeiroBloqueio,
+  getAgendaBarbeiro,
+  getBarbeiroBloqueios,
+  getBarbeiroByUserId,
+  getBarbeiroHorarios,
+  upsertBarbeiroHorario,
+  type BarberBlock,
+  type BarberDayHours,
+} from '../../lib/api'
 import { supabase } from '../../services/supabaseClient'
 
 type AgendaItem = {
   id: string
   data: string
+  horario?: string | null
   status: string | null
   servicos: { nome: string; duracao_minutos: number | null; preco: number | null } | null
   clientes: { nome: string; telefone: string | null } | null
@@ -28,11 +58,24 @@ type BarberInfo = {
   foto_url: string | null
 }
 
+const DIAS = [
+  { dia: 1, label: 'Segunda' },
+  { dia: 2, label: 'Terça' },
+  { dia: 3, label: 'Quarta' },
+  { dia: 4, label: 'Quinta' },
+  { dia: 5, label: 'Sexta' },
+  { dia: 6, label: 'Sábado' },
+  { dia: 0, label: 'Domingo' },
+]
+
 const groupByDate = (items: AgendaItem[]) => {
   const groups: Record<string, AgendaItem[]> = {}
   for (const item of items) {
     if (!groups[item.data]) groups[item.data] = []
     groups[item.data].push(item)
+  }
+  for (const list of Object.values(groups)) {
+    list.sort((a, b) => String(a.horario || '').localeCompare(String(b.horario || '')))
   }
   return Object.entries(groups).sort((a, b) => a[0].localeCompare(b[0]))
 }
@@ -41,6 +84,11 @@ const formatDate = (dateStr: string) => {
   const d = new Date(`${dateStr}T12:00:00`)
   const label = d.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })
   return label.charAt(0).toUpperCase() + label.slice(1)
+}
+
+const formatHorario = (horario?: string | null) => {
+  if (!horario) return '--:--'
+  return String(horario).slice(0, 5)
 }
 
 const dayLabel = (dateStr: string) => {
@@ -56,13 +104,11 @@ const dayLabel = (dateStr: string) => {
 
 const statusInfo = (status: string | null) => {
   const s = (status ?? '').toLowerCase()
-  if (s.includes('cancel'))
-    return { label: 'Cancelado', className: 'border-red-500/30 bg-red-500/10 text-red-400' }
-  if (s.includes('pago') || s.includes('confirm') || s.includes('realiz'))
-    return { label: status ?? 'Confirmado', className: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400' }
-  if (s.includes('pend'))
-    return { label: 'Pendente', className: 'border-amber-500/30 bg-amber-500/10 text-amber-400' }
-  return { label: status ?? 'Agendado', className: 'border-barber-gold/30 bg-barber-gold/10 text-barber-gold' }
+  if (s.includes('cancel')) return { label: 'Cancelado', color: 'red' }
+  if (s.includes('conclu') || s.includes('realiz')) return { label: 'Concluído', color: 'teal' }
+  if (s.includes('confirm')) return { label: 'Confirmado', color: 'teal' }
+  if (s.includes('pend')) return { label: 'Pendente', color: 'orange' }
+  return { label: status ?? 'Agendado', color: 'gold' }
 }
 
 export default function BarberAgenda() {
@@ -70,158 +116,441 @@ export default function BarberAgenda() {
   const [barbeiro, setBarbeiro] = useState<BarberInfo | null>(null)
   const [agenda, setAgenda] = useState<AgendaItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
 
-  useEffect(() => {
-    const init = async () => {
+  const [horarios, setHorarios] = useState<Record<number, BarberDayHours>>({})
+  const [bloqueios, setBloqueios] = useState<BarberBlock[]>([])
+  const [blockDate, setBlockDate] = useState('')
+  const [blockStart, setBlockStart] = useState('08:30')
+  const [blockEnd, setBlockEnd] = useState('12:00')
+  const [blockMotivo, setBlockMotivo] = useState('')
+  const [savingBlock, setSavingBlock] = useState(false)
+  const [availMsg, setAvailMsg] = useState<string | null>(null)
+
+  const loadAvailability = useCallback(async (barbeiroId: string) => {
+    const [hRows, bRows] = await Promise.all([
+      getBarbeiroHorarios(barbeiroId),
+      getBarbeiroBloqueios(barbeiroId),
+    ])
+    const map: Record<number, BarberDayHours> = {}
+    for (const d of DIAS) {
+      const found = hRows.find((h) => h.dia_semana === d.dia)
+      map[d.dia] = found || {
+        barbeiro_id: barbeiroId,
+        dia_semana: d.dia,
+        abertura: '08:30',
+        fechamento: '19:30',
+        fechado: d.dia === 0,
+      }
+    }
+    setHorarios(map)
+    setBloqueios(bRows)
+  }, [])
+
+  const loadAgenda = useCallback(
+    async (opts?: { soft?: boolean }) => {
       try {
-        const { data: { session } } = await supabase.auth.getSession()
+        if (opts?.soft) setRefreshing(true)
+        else setLoading(true)
+        setError('')
+
+        const {
+          data: { session },
+        } = await supabase.auth.getSession()
         if (!session?.user) {
-          navigate({ to: '/barber/login' })
+          navigate({ to: '/login' })
           return
         }
+
         const info = await getBarbeiroByUserId(session.user.id)
         if (!info) {
           await supabase.auth.signOut()
-          navigate({ to: '/barber/login' })
+          navigate({ to: '/login' })
           return
         }
+
         setBarbeiro(info)
         const itens = await getAgendaBarbeiro(info.id)
-        setAgenda(itens)
+        setAgenda(itens as AgendaItem[])
+        await loadAvailability(info.id)
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Erro ao carregar agenda.')
       } finally {
         setLoading(false)
+        setRefreshing(false)
       }
-    }
-    init()
-  }, [navigate])
+    },
+    [navigate, loadAvailability],
+  )
+
+  useEffect(() => {
+    void loadAgenda()
+  }, [loadAgenda])
 
   const handleLogout = async () => {
     await supabase.auth.signOut()
-    navigate({ to: '/barber/login' })
+    navigate({ to: '/login' })
+  }
+
+  const saveDayHours = async (dia: number, patch: Partial<BarberDayHours>) => {
+    if (!barbeiro) return
+    const current = horarios[dia]
+    const next = { ...current, ...patch, barbeiro_id: barbeiro.id, dia_semana: dia }
+    setHorarios((prev) => ({ ...prev, [dia]: next }))
+    try {
+      await upsertBarbeiroHorario({
+        barbeiro_id: barbeiro.id,
+        dia_semana: dia,
+        abertura: next.fechado ? null : next.abertura,
+        fechamento: next.fechado ? null : next.fechamento,
+        fechado: Boolean(next.fechado),
+      })
+      setAvailMsg('Horário salvo.')
+    } catch (e) {
+      setAvailMsg(e instanceof Error ? e.message : 'Erro ao salvar horário')
+    }
+  }
+
+  const handleCreateBlock = async () => {
+    if (!barbeiro || !blockDate || !blockStart || !blockEnd) {
+      setAvailMsg('Preencha data e horários do bloqueio.')
+      return
+    }
+    setSavingBlock(true)
+    setAvailMsg(null)
+    try {
+      const inicio = `${blockDate}T${blockStart}:00-03:00`
+      const fim = `${blockDate}T${blockEnd}:00-03:00`
+      await createBarbeiroBloqueio({
+        barbeiro_id: barbeiro.id,
+        inicio,
+        fim,
+        motivo: blockMotivo || undefined,
+      })
+      setBlockMotivo('')
+      await loadAvailability(barbeiro.id)
+      setAvailMsg('Horário bloqueado. Clientes não poderão agendar nesse período.')
+    } catch (e) {
+      setAvailMsg(e instanceof Error ? e.message : 'Erro ao bloquear')
+    } finally {
+      setSavingBlock(false)
+    }
   }
 
   const grupos = groupByDate(agenda)
+  const totalHoje = agenda.filter((a) => dayLabel(a.data) === 'Hoje').length
 
   return (
-    <div className="min-h-screen bg-barber-black">
-      <header className="flex items-center justify-between border-b border-barber-gold/20 bg-barber-gray/50 px-6 py-4">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-barber-gold/10">
-            <Scissors className="h-5 w-5 text-barber-gold" />
-          </div>
+    <Box m="-xl" mih="100vh" bg="dark.8">
+      <Group
+        justify="space-between"
+        px="lg"
+        py="md"
+        style={{
+          borderBottom: '1px solid rgba(197,160,89,0.2)',
+          background: 'var(--mantine-color-dark-7)',
+        }}
+      >
+        <Group gap="sm">
+          <ThemeIcon size={40} radius="md" variant="light" color="gold">
+            <Scissors size={20} />
+          </ThemeIcon>
           <div>
-            <h1 className="font-serif text-lg font-bold text-barber-gold">Minha Agenda</h1>
-            <p className="text-xs text-barber-white/60">Hoje e próximos dias</p>
+            <Title order={4} c="gold">
+              Minha agenda
+            </Title>
+            <Text size="xs" c="dimmed">
+              Horários, disponibilidade e bloqueios
+            </Text>
           </div>
-        </div>
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            {barbeiro?.foto_url ? (
-              <img
-                src={barbeiro.foto_url}
-                alt={barbeiro.nome}
-                className="h-9 w-9 rounded-full border border-barber-gold object-cover"
-              />
-            ) : (
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-barber-gold/15">
-                <UserIcon className="h-5 w-5 text-barber-gold" />
-              </div>
-            )}
-            <div className="hidden sm:block">
-              <p className="text-sm font-semibold text-barber-white">{barbeiro?.nome}</p>
-              <p className="flex items-center gap-1 text-xs text-barber-white/60">
-                <Star className="h-3 w-3 fill-barber-gold text-barber-gold" />
-                {barbeiro?.avaliacao ?? '—'}
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="flex items-center gap-2 rounded-lg border border-barber-gold/30 px-3 py-2 text-sm text-barber-white transition-colors hover:bg-barber-gold/10 hover:text-barber-gold"
-          >
-            <LogOut className="h-4 w-4" />
-            Sair
-          </button>
-        </div>
-      </header>
+        </Group>
 
-      <main className="mx-auto max-w-3xl p-6">
+        <Group gap="sm">
+          <Group gap="xs" visibleFrom="xs">
+            {barbeiro?.foto_url ? (
+              <Avatar src={barbeiro.foto_url} radius="xl" size={36} />
+            ) : (
+              <Avatar radius="xl" size={36} color="gold">
+                <UserIcon size={18} />
+              </Avatar>
+            )}
+            <Box visibleFrom="sm">
+              <Text size="sm" fw={600}>
+                {barbeiro?.nome}
+              </Text>
+              <Group gap={4}>
+                <Star size={12} fill="#c5a059" color="#c5a059" />
+                <Text size="xs" c="dimmed">
+                  {barbeiro?.avaliacao ?? '—'}
+                </Text>
+              </Group>
+            </Box>
+          </Group>
+          <Button
+            variant="default"
+            size="sm"
+            leftSection={<RefreshCw size={14} />}
+            loading={refreshing}
+            onClick={() => void loadAgenda({ soft: true })}
+          >
+            Atualizar
+          </Button>
+          <Button
+            variant="outline"
+            color="gold"
+            size="sm"
+            leftSection={<LogOut size={16} />}
+            onClick={handleLogout}
+          >
+            Sair
+          </Button>
+        </Group>
+      </Group>
+
+      <Box maw={720} mx="auto" p="lg">
         {error && (
-          <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+          <Alert color="red" variant="light" mb="md">
             {error}
-          </div>
+          </Alert>
         )}
 
         {loading ? (
-          <div className="flex items-center justify-center py-20">
-            <Loader2 className="h-8 w-8 animate-spin text-barber-gold" />
-          </div>
-        ) : grupos.length === 0 ? (
-          <div className="flex flex-col items-center rounded-2xl border border-barber-gold/20 bg-barber-gray/30 py-20 text-center">
-            <CalendarX2 className="mb-3 h-12 w-12 text-barber-gold/60" />
-            <p className="text-barber-white/80">Nenhum agendamento para os próximos dias.</p>
-            <p className="mt-1 text-sm text-barber-white/50">Boa folga! 😄</p>
-          </div>
+          <Group justify="center" py={80}>
+            <Loader color="gold" />
+          </Group>
         ) : (
-          <div className="space-y-6">
-            {grupos.map(([data, itens]) => {
-              const label = dayLabel(data)
-              return (
-                <div key={data}>
-                  <div className="mb-3 flex items-center gap-2">
-                    <CalendarDays className="h-5 w-5 text-barber-gold" />
-                    <h2 className="font-semibold text-barber-white">{formatDate(data)}</h2>
-                    {label && (
-                      <span className="rounded-full bg-barber-gold/15 px-2.5 py-0.5 text-xs font-semibold text-barber-gold">
-                        {label}
-                      </span>
-                    )}
-                  </div>
-                  <div className="space-y-3">
-                    {itens.map((item) => {
-                      const status = statusInfo(item.status)
+          <Tabs defaultValue="agenda" color="gold">
+            <Tabs.List mb="md">
+              <Tabs.Tab value="agenda" leftSection={<CalendarDays size={14} />}>
+                Agenda
+              </Tabs.Tab>
+              <Tabs.Tab value="disponibilidade" leftSection={<Clock size={14} />}>
+                Disponibilidade
+              </Tabs.Tab>
+            </Tabs.List>
+
+            <Tabs.Panel value="agenda">
+              <Group mb="md" gap="sm">
+                <Badge variant="light" color="gold" size="lg">
+                  {agenda.length} agendamento{agenda.length === 1 ? '' : 's'}
+                </Badge>
+                {totalHoje > 0 && (
+                  <Badge variant="filled" color="gold" size="lg" c="dark.9">
+                    {totalHoje} hoje
+                  </Badge>
+                )}
+              </Group>
+
+              {grupos.length === 0 ? (
+                <Card withBorder padding="xl" radius="lg">
+                  <Stack align="center" py="xl" gap="sm">
+                    <CalendarX2 size={48} color="rgba(197,160,89,0.6)" />
+                    <Text c="dimmed">Nenhum agendamento para os próximos dias.</Text>
+                  </Stack>
+                </Card>
+              ) : (
+                <Stack gap="lg">
+                  {grupos.map(([data, itens]) => {
+                    const label = dayLabel(data)
+                    return (
+                      <div key={data}>
+                        <Group gap="sm" mb="sm">
+                          <CalendarDays size={20} color="#c5a059" />
+                          <Text fw={600}>{formatDate(data)}</Text>
+                          {label && (
+                            <Badge color="gold" variant="light">
+                              {label}
+                            </Badge>
+                          )}
+                        </Group>
+                        <Stack gap="sm">
+                          {itens.map((item) => {
+                            const status = statusInfo(item.status)
+                            return (
+                              <Card key={item.id} withBorder padding="lg" radius="lg">
+                                <Group justify="space-between" align="flex-start" wrap="nowrap">
+                                  <Group gap="md" wrap="nowrap" style={{ minWidth: 0 }}>
+                                    <ThemeIcon size={56} radius="md" variant="light" color="gold">
+                                      <Text fw={700} fz="sm">
+                                        {formatHorario(item.horario)}
+                                      </Text>
+                                    </ThemeIcon>
+                                    <div style={{ minWidth: 0 }}>
+                                      <Text size="lg" fw={600} lineClamp={1}>
+                                        {item.clientes?.nome ?? 'Cliente'}
+                                      </Text>
+                                      {item.clientes?.telefone && (
+                                        <Text size="sm" c="dimmed">
+                                          {item.clientes.telefone}
+                                        </Text>
+                                      )}
+                                      <Text size="sm" c="gold" mt={4}>
+                                        {item.servicos?.nome ?? 'Serviço'}
+                                        {item.servicos?.duracao_minutos
+                                          ? ` · ~${item.servicos.duracao_minutos} min`
+                                          : ''}
+                                      </Text>
+                                    </div>
+                                  </Group>
+                                  <Badge color={status.color} variant="light">
+                                    {status.label}
+                                  </Badge>
+                                </Group>
+                              </Card>
+                            )
+                          })}
+                        </Stack>
+                      </div>
+                    )
+                  })}
+                </Stack>
+              )}
+            </Tabs.Panel>
+
+            <Tabs.Panel value="disponibilidade">
+              <Stack gap="lg">
+                {availMsg && (
+                  <Alert color="gold" variant="light">
+                    {availMsg}
+                  </Alert>
+                )}
+
+                <Card withBorder padding="lg">
+                  <Title order={4} mb="xs">
+                    Dias e horários de trabalho
+                  </Title>
+                  <Text size="sm" c="dimmed" mb="md">
+                    Se não configurar, vale o horário da barbearia. Dias fechados não aceitam agendamento.
+                  </Text>
+                  <Stack gap="sm">
+                    {DIAS.map((d) => {
+                      const h = horarios[d.dia]
                       return (
-                        <div
-                          key={item.id}
-                          className="rounded-2xl border border-barber-gold/20 bg-barber-gray/30 p-5"
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <p className="text-lg font-semibold text-barber-white">
-                                {item.clientes?.nome ?? 'Cliente'}
-                              </p>
-                              {item.clientes?.telefone && (
-                                <p className="text-sm text-barber-white/60">{item.clientes.telefone}</p>
-                              )}
-                              <p className="mt-2 text-sm text-barber-gold">
-                                {item.servicos?.nome ?? 'Serviço'}
-                              </p>
-                              {item.servicos?.duracao_minutos ? (
-                                <p className="text-xs text-barber-white/50">
-                                  ~{item.servicos.duracao_minutos} min
-                                </p>
-                              ) : null}
-                            </div>
-                            <span
-                              className={`shrink-0 rounded-full border px-3 py-1 text-xs font-semibold ${status.className}`}
-                            >
-                              {status.label}
-                            </span>
-                          </div>
-                        </div>
+                        <SimpleGrid key={d.dia} cols={{ base: 1, sm: 4 }} spacing="sm">
+                          <Text fw={600} style={{ alignSelf: 'center' }}>
+                            {d.label}
+                          </Text>
+                          <Switch
+                            label="Fechado"
+                            checked={Boolean(h?.fechado)}
+                            onChange={(e) =>
+                              void saveDayHours(d.dia, { fechado: e.currentTarget.checked })
+                            }
+                          />
+                          <TextInput
+                            type="time"
+                            label="Abre"
+                            disabled={Boolean(h?.fechado)}
+                            value={h?.abertura?.slice(0, 5) || '08:30'}
+                            onChange={(e) =>
+                              setHorarios((prev) => ({
+                                ...prev,
+                                [d.dia]: { ...prev[d.dia], abertura: e.currentTarget.value },
+                              }))
+                            }
+                            onBlur={() => void saveDayHours(d.dia, {})}
+                          />
+                          <TextInput
+                            type="time"
+                            label="Fecha"
+                            disabled={Boolean(h?.fechado)}
+                            value={h?.fechamento?.slice(0, 5) || '19:30'}
+                            onChange={(e) =>
+                              setHorarios((prev) => ({
+                                ...prev,
+                                [d.dia]: { ...prev[d.dia], fechamento: e.currentTarget.value },
+                              }))
+                            }
+                            onBlur={() => void saveDayHours(d.dia, {})}
+                          />
+                        </SimpleGrid>
                       )
                     })}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
+                  </Stack>
+                </Card>
+
+                <Card withBorder padding="lg">
+                  <Title order={4} mb="xs">
+                    Bloquear horário
+                  </Title>
+                  <Text size="sm" c="dimmed" mb="md">
+                    Ex.: bloquear manhã de sexta até meio-dia. O período fica indisponível no WhatsApp e no sistema.
+                  </Text>
+                  <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md" mb="md">
+                    <TextInput
+                      type="date"
+                      label="Data"
+                      value={blockDate}
+                      onChange={(e) => setBlockDate(e.currentTarget.value)}
+                    />
+                    <TextInput
+                      label="Motivo (opcional)"
+                      value={blockMotivo}
+                      onChange={(e) => setBlockMotivo(e.currentTarget.value)}
+                      placeholder="Almoço / compromisso"
+                    />
+                    <TextInput
+                      type="time"
+                      label="Início"
+                      value={blockStart}
+                      onChange={(e) => setBlockStart(e.currentTarget.value)}
+                    />
+                    <TextInput
+                      type="time"
+                      label="Fim"
+                      value={blockEnd}
+                      onChange={(e) => setBlockEnd(e.currentTarget.value)}
+                    />
+                  </SimpleGrid>
+                  <Button color="gold" c="dark.9" loading={savingBlock} onClick={() => void handleCreateBlock()}>
+                    Bloquear
+                  </Button>
+
+                  <Stack gap="sm" mt="lg">
+                    {bloqueios.length === 0 ? (
+                      <Text size="sm" c="dimmed">
+                        Nenhum bloqueio futuro.
+                      </Text>
+                    ) : (
+                      bloqueios.map((b) => (
+                        <Group key={b.id} justify="space-between" wrap="nowrap">
+                          <div>
+                            <Text size="sm" fw={600}>
+                              {new Date(b.inicio).toLocaleString('pt-BR')} →{' '}
+                              {new Date(b.fim).toLocaleTimeString('pt-BR', {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </Text>
+                            {b.motivo && (
+                              <Text size="xs" c="dimmed">
+                                {b.motivo}
+                              </Text>
+                            )}
+                          </div>
+                          <Button
+                            variant="subtle"
+                            color="red"
+                            size="xs"
+                            leftSection={<Trash2 size={14} />}
+                            onClick={async () => {
+                              await deleteBarbeiroBloqueio(b.id)
+                              if (barbeiro) await loadAvailability(barbeiro.id)
+                            }}
+                          >
+                            Remover
+                          </Button>
+                        </Group>
+                      ))
+                    )}
+                  </Stack>
+                </Card>
+              </Stack>
+            </Tabs.Panel>
+          </Tabs>
         )}
-      </main>
-    </div>
+      </Box>
+    </Box>
   )
 }

@@ -146,7 +146,7 @@ export async function createBarberUser(params: {
     .from('barbeiros')
     .insert({
       nome: params.nome,
-      email: params.email,
+      email: params.email.trim().toLowerCase(),
       telefone: null,
       especialidades: null,
       percentual_servico: 0,
@@ -156,11 +156,21 @@ export async function createBarberUser(params: {
       avaliacao: params.avaliacao ?? 5,
       foto_url: params.foto_url || null,
       user_id: userId,
+      senha_temporaria: params.senha,
     })
     .select()
     .single()
   if (error) throw new Error(`Erro ao criar barbeiro: ${error.message}`)
   return data
+}
+
+export async function resetBarberPassword(barbeiroId: string, senha?: string) {
+  const { data, error } = await supabase.functions.invoke('barber-user-admin', {
+    body: { action: 'reset_password', barbeiro_id: barbeiroId, senha },
+  })
+  if (error) throw new Error(error.message || 'Falha ao redefinir senha')
+  if (data?.error) throw new Error(data.error)
+  return data as { ok: boolean; senha: string; email?: string; nome?: string }
 }
 
 export async function getUsers() {
@@ -227,13 +237,91 @@ export async function getAppointments() {
 }
 
 export async function createAppointment(appointment: any) {
+  let payload = { ...appointment }
+  let fromRotation = false
+
+  // Sem barbeiro: atribui pelo rodízio (primeiro livre na fila)
+  if (!payload.barbeiro_id && payload.servico_id && payload.data && payload.horario) {
+    const assigned = await assignBarberFromRotation({
+      data: payload.data,
+      horario: String(payload.horario).slice(0, 5),
+      servicoId: payload.servico_id,
+    })
+    if (assigned) {
+      payload.barbeiro_id = assigned.id
+      fromRotation = true
+    }
+  }
+
+  // Preenche valor do serviço se não veio
+  if (payload.valor == null && payload.servico_id) {
+    const { data: svc } = await supabase
+      .from('servicos')
+      .select('preco')
+      .eq('id', payload.servico_id)
+      .maybeSingle()
+    if (svc?.preco != null) payload.valor = Number(svc.preco)
+  }
+
   const { data, error } = await supabase
     .from('agendamentos')
-    .insert(appointment)
+    .insert(payload)
     .select('*, barbeiros(nome), servicos(nome), clientes(nome, telefone)')
     .single()
   if (error) throw new Error(`Erro ao criar agendamento: ${error.message}`)
+
+  if (fromRotation && payload.barbeiro_id) {
+    try {
+      await rotateBarberQueueClient(payload.barbeiro_id)
+    } catch (e) {
+      console.warn('rotateBarberQueueClient', e)
+    }
+  }
+
   return data
+}
+
+/** Atribui o barbeiro no topo da fila que estiver livre no horário. */
+async function assignBarberFromRotation(opts: {
+  data: string
+  horario: string
+  servicoId: string
+}): Promise<{ id: string; nome: string } | null> {
+  const { data: barbers } = await supabase
+    .from('barbeiros')
+    .select('id, nome, ordem_rodizio, ativo')
+    .order('ordem_rodizio', { ascending: true })
+    .order('nome', { ascending: true })
+
+  const list = (barbers || []).filter((b: any) => b.ativo !== false)
+  for (const b of list) {
+    const { data: slots, error } = await supabase.rpc('get_available_slots', {
+      p_data: opts.data,
+      p_servico_id: opts.servicoId,
+      p_barbeiro_id: b.id,
+    })
+    if (error) continue
+    const horarios = ((slots as { horario: string }[]) || []).map((s) => String(s.horario).slice(0, 5))
+    if (horarios.includes(opts.horario)) {
+      return { id: b.id, nome: b.nome }
+    }
+  }
+  return null
+}
+
+async function rotateBarberQueueClient(barbeiroId: string) {
+  const { data: barbers } = await supabase
+    .from('barbeiros')
+    .select('id, ordem_rodizio, ativo')
+    .order('ordem_rodizio', { ascending: true })
+    .order('nome', { ascending: true })
+  const list = (barbers || []).filter((b: any) => b.ativo !== false)
+  if (list.length <= 1) return
+  const others = list.filter((b: any) => b.id !== barbeiroId)
+  const rotated = [...others, ...list.filter((b: any) => b.id === barbeiroId)]
+  for (let i = 0; i < rotated.length; i++) {
+    await supabase.from('barbeiros').update({ ordem_rodizio: i + 1 }).eq('id', rotated[i].id)
+  }
 }
 
 /** Envia confirmação via Edge Function whatsapp-send (UAZAPI). Falhas não bloqueiam o fluxo. */
@@ -386,7 +474,9 @@ export async function getAgendaBarbeiro(barbeiroId: string) {
     .select('*, servicos(nome, duracao_minutos, preco), clientes(nome, telefone)')
     .eq('barbeiro_id', barbeiroId)
     .gte('data', dataInicial)
+    .neq('status', 'cancelado')
     .order('data', { ascending: true })
+    .order('horario', { ascending: true })
   if (error) throw new Error(`Erro ao buscar agenda: ${error.message}`)
   return data ?? []
 }
@@ -507,11 +597,39 @@ export async function createPagamento(pagamento: {
 }) {
   const { data, error } = await supabase
     .from('pagamentos')
-    .insert(pagamento)
+    .insert({ ...pagamento, status: pagamento.status || 'Pago' })
     .select()
     .single()
   if (error) throw new Error(`Erro ao criar pagamento: ${error.message}`)
+
+  // Baixa automática: conclui o agendamento e grava o valor
+  const { error: errAppt } = await supabase
+    .from('agendamentos')
+    .update({ status: 'concluido', valor: pagamento.valor })
+    .eq('id', pagamento.agendamento_id)
+  if (errAppt) {
+    throw new Error(
+      `Pagamento registrado, mas falhou ao concluir o agendamento: ${errAppt.message}`,
+    )
+  }
+
   return data
+}
+
+/** Agendamentos ainda não pagos (para o modal financeiro). */
+export async function getAgendamentosPendentesPagamento() {
+  const [{ data: appts, error: errA }, { data: pagos, error: errP }] = await Promise.all([
+    supabase
+      .from('agendamentos')
+      .select('*, barbeiros(nome), servicos(nome, preco), clientes(nome)')
+      .not('status', 'in', '("cancelado","concluido")')
+      .order('data', { ascending: false }),
+    supabase.from('pagamentos').select('agendamento_id'),
+  ])
+  if (errA) throw new Error(`Erro ao buscar agendamentos: ${errA.message}`)
+  if (errP) throw new Error(`Erro ao buscar pagamentos: ${errP.message}`)
+  const paidIds = new Set((pagos || []).map((p) => p.agendamento_id).filter(Boolean))
+  return (appts || []).filter((a) => !paidIds.has(a.id))
 }
 
 export async function updatePagamentoStatus(id: string, status: string) {
@@ -804,15 +922,19 @@ export async function getResumoComissoes(params: {
   for (const barbeiro of barbeiros ?? []) {
     const { data: servicos, error: errServicos } = await supabase
       .from('agendamentos')
-      .select('valor')
+      .select('valor, servicos(preco)')
       .eq('barbeiro_id', barbeiro.id)
+      .eq('status', 'concluido')
       .gte('data', dataInicio)
       .lte('data', dataFim)
     if (errServicos) throw new Error(`Erro ao buscar serviços: ${errServicos.message}`)
-    const servicosComValor = (servicos ?? []).filter(s => s.valor !== null && Number(s.valor) > 0)
+    const servicosComValor = (servicos ?? []).map((s: any) => {
+      const precoServico = Array.isArray(s.servicos) ? s.servicos[0]?.preco : s.servicos?.preco
+      return Number(s.valor || precoServico || 0)
+    }).filter((v) => v > 0)
     const totalServicos = servicosComValor.length
-    const valorServicos = servicosComValor.reduce((acc, s) => acc + Number(s.valor || 0), 0)
-    const comissaoServicos = valorServicos * (barbeiro.percentual_servico / 100)
+    const valorServicos = servicosComValor.reduce((acc, v) => acc + v, 0)
+    const comissaoServicos = valorServicos * ((barbeiro.percentual_servico || 0) / 100)
     const { data: vendas, error: errVendas } = await supabase
       .from('movimentacoes_estoque')
       .select('quantidade, comissao_percentual, produtos!inner(preco_venda)')
@@ -866,6 +988,7 @@ export async function getRelatorioComissoes(params: {
     .from('agendamentos')
     .select('data, valor, servicos!inner(nome, preco)')
     .eq('barbeiro_id', barbeiro_id)
+    .eq('status', 'concluido')
     .gte('data', dataInicio)
     .lte('data', dataFim)
     .order('data', { ascending: false })
@@ -880,7 +1003,7 @@ export async function getRelatorioComissoes(params: {
       servico_nome: servico?.nome || 'Serviço',
       valor_cobrado: valor,
       percentual_comissao: barbeiro.percentual_servico,
-      valor_comissao: valor * (barbeiro.percentual_servico / 100),
+      valor_comissao: valor * ((barbeiro.percentual_servico || 0) / 100),
     }
   })
   const { data: vendas, error: errVendas } = await supabase
@@ -929,4 +1052,89 @@ export async function getRelatorioComissoes(params: {
         detalheVendas.reduce((acc, v) => acc + v.valor_comissao, 0),
     },
   }
+}
+
+// =====================
+// Horários e bloqueios do barbeiro
+// =====================
+export type BarberDayHours = {
+  id?: string
+  barbeiro_id: string
+  dia_semana: number
+  abertura: string | null
+  fechamento: string | null
+  fechado: boolean
+}
+
+export type BarberBlock = {
+  id: string
+  barbeiro_id: string
+  inicio: string
+  fim: string
+  motivo: string | null
+  created_at?: string
+}
+
+export async function getBarbeiroHorarios(barbeiroId: string): Promise<BarberDayHours[]> {
+  const { data, error } = await supabase
+    .from('barbeiro_horarios')
+    .select('*')
+    .eq('barbeiro_id', barbeiroId)
+    .order('dia_semana')
+  if (error) throw new Error(`Erro ao buscar horários: ${error.message}`)
+  return data ?? []
+}
+
+export async function upsertBarbeiroHorario(row: {
+  barbeiro_id: string
+  dia_semana: number
+  abertura: string | null
+  fechamento: string | null
+  fechado: boolean
+}) {
+  const { data, error } = await supabase
+    .from('barbeiro_horarios')
+    .upsert(row, { onConflict: 'barbeiro_id,dia_semana' })
+    .select()
+    .single()
+  if (error) throw new Error(`Erro ao salvar horário: ${error.message}`)
+  return data
+}
+
+export async function getBarbeiroBloqueios(barbeiroId: string): Promise<BarberBlock[]> {
+  const hoje = new Date()
+  hoje.setHours(0, 0, 0, 0)
+  const { data, error } = await supabase
+    .from('barbeiro_bloqueios')
+    .select('*')
+    .eq('barbeiro_id', barbeiroId)
+    .gte('fim', hoje.toISOString())
+    .order('inicio', { ascending: true })
+  if (error) throw new Error(`Erro ao buscar bloqueios: ${error.message}`)
+  return data ?? []
+}
+
+export async function createBarbeiroBloqueio(params: {
+  barbeiro_id: string
+  inicio: string
+  fim: string
+  motivo?: string
+}) {
+  const { data, error } = await supabase
+    .from('barbeiro_bloqueios')
+    .insert({
+      barbeiro_id: params.barbeiro_id,
+      inicio: params.inicio,
+      fim: params.fim,
+      motivo: params.motivo || null,
+    })
+    .select()
+    .single()
+  if (error) throw new Error(`Erro ao criar bloqueio: ${error.message}`)
+  return data
+}
+
+export async function deleteBarbeiroBloqueio(id: string) {
+  const { error } = await supabase.from('barbeiro_bloqueios').delete().eq('id', id)
+  if (error) throw new Error(`Erro ao remover bloqueio: ${error.message}`)
 }

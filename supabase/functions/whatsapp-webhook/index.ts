@@ -1,19 +1,33 @@
 import { corsHeaders, jsonResponse } from '../_shared/cors.ts'
 import {
   aftercareText,
+  afterNameGreeting,
+  appointmentsContextLines,
+  askNameText,
+  fetchShopName,
+  fetchShopPublicInfo,
+  fetchUpcomingAppointments,
   findOrCreateClientByPhone,
   formatDateBR,
   formatNameList,
+  getLeadDisplayName,
   getServiceClient,
   getSession,
   greetingText,
+  greetingWithAppointments,
+  humanizeOutbound,
   isBotActive,
+  isGreetingOnly,
+  isKnownLeadName,
+  isPlausiblePersonName,
   matchByName,
   matchSlot,
   normalizeMatch,
   parseDateBR,
   resetSession,
+  saveLeadName,
   saveSession,
+  wantsShopInfo,
 } from '../_shared/db.ts'
 import { BARBER_TOOLS, runBarberTool, systemPromptBarber } from '../_shared/barber-tools.ts'
 import { loadMimoConfig, mimoChat, type ChatMessage } from '../_shared/mimo.ts'
@@ -22,9 +36,10 @@ import {
   checkSlotAvailability,
   fetchAvailableSlots,
   filterPastSlots,
+  rotateBarberQueue,
   todaySaoPaulo,
 } from '../_shared/slots.ts'
-import { humanReply, normalizePhone } from '../_shared/uazapi.ts'
+import { humanReply, normalizePhone, sendPresence } from '../_shared/uazapi.ts'
 
 type UazMessage = {
   messageid?: string
@@ -179,13 +194,38 @@ function collectMessages(payload: Record<string, unknown>): UazMessage[] {
   return []
 }
 
-async function reply(phone: string, text: string, db: ReturnType<typeof getServiceClient>) {
+/** Mostra "digitando…" já no início (durante a IA / processamento). */
+async function beginTyping(
+  phone: string,
+  db: ReturnType<typeof getServiceClient>,
+  delayMs = 12000,
+) {
   const resolved = await resolveUazConfig(db)
   if (!resolved.config) {
-    console.error('reply uaz config', resolved.error)
-    throw new Error(resolved.error || 'UAZAPI não configurada para enviar mensagens')
+    console.error('beginTyping uaz config', resolved.error)
+    return null
   }
-  const result = await humanReply(phone, text, resolved.config)
+  const r = await sendPresence(phone, 'composing', resolved.config, delayMs)
+  if (!r.ok) console.warn('beginTyping failed', r.error)
+  return resolved.config
+}
+
+async function reply(
+  phone: string,
+  text: string,
+  db: ReturnType<typeof getServiceClient>,
+  config?: { baseUrl: string; token: string } | null,
+) {
+  let uaz = config
+  if (!uaz) {
+    const resolved = await resolveUazConfig(db)
+    if (!resolved.config) {
+      console.error('reply uaz config', resolved.error)
+      throw new Error(resolved.error || 'UAZAPI não configurada para enviar mensagens')
+    }
+    uaz = resolved.config
+  }
+  const result = await humanReply(phone, text, uaz)
   if (!result.ok) {
     console.error('reply send failed', result.error)
     throw new Error(result.error || 'Falha ao enviar WhatsApp')
@@ -218,12 +258,34 @@ async function handleFallbackIntent(
     t.includes('agendar') ||
     t.includes('marcar') ||
     t.includes('quero marcar') ||
-    (t.includes('horario') && !t.includes('meus') && !t.includes('ver'))
+    (t.includes('horario') && !t.includes('meus') && !t.includes('ver') && !wantsShopInfo(text))
   ) {
+    try {
+      const appts = await fetchUpcomingAppointments(db, phone)
+      if (appts.length === 1) {
+        const a = appts[0]
+        return `Você já tem ${a.servico || 'horário'} em ${a.data_br} às ${a.horario}${a.barbeiro ? ` com ${a.barbeiro}` : ''}. Quer marcar outro mesmo assim, ou prefere remarcar/cancelar esse?`
+      }
+      if (appts.length > 1) {
+        return `Você já tem ${appts.length} horários marcados (próximo em ${appts[0].data_br} às ${appts[0].horario}). Quer ver, remarcar, cancelar ou marcar mais um?`
+      }
+    } catch {
+      /* segue booking */
+    }
     return startBooking(db, phone)
   }
 
-  if (t.includes('meus') || t.includes('consult') || t.includes('ver meu')) {
+  if (wantsShopInfo(text)) {
+    const info = await fetchShopPublicInfo(db)
+    return info.resumo
+  }
+
+  if (
+    t.includes('meus') ||
+    t.includes('consult') ||
+    t.includes('ver meu') ||
+    t.includes('ver todos')
+  ) {
     return await listAppointments(db, phone)
   }
 
@@ -231,8 +293,18 @@ async function handleFallbackIntent(
     return await startCancel(db, phone)
   }
 
-  // Não inventar "menu": só pede de volta o que a pessoa precisa
-  return 'Oi! Me conta o que você precisa — marcar horário, ver o que já tem ou cancelar algo.'
+  if (t.includes('remarc') || t.includes('trocar') || t.includes('mudar horario')) {
+    const cancelPrompt = await startCancel(db, phone)
+    if (cancelPrompt.includes('Não achei') || cancelPrompt.includes('Nada para') || cancelPrompt.includes('nada pra')) {
+      return 'Não achei horário marcado pra remarcar. Quer marcar um novo?'
+    }
+    return cancelPrompt.replace(
+      'Qual desses você quer cancelar?',
+      'Pra remarcar, cancelamos o atual primeiro. Qual horário você quer alterar?',
+    )
+  }
+
+  return 'Oi! Me conta o que você precisa.'
 }
 
 async function startBooking(
@@ -418,30 +490,10 @@ async function proceedAfterService(
       barbeiro_id: null,
       barbeiro_nome: null,
     })
-    return [
-      `Show, *${service.nome}*.`,
-      '',
-      'Pra qual *data*? (ex.: 15/08 ou 15/08/2026)',
-    ].join('\n')
+    return `Beleza, *${service.nome}*. Pra qual data? (ex.: 15/08)`
   }
 
-  if (list.length === 1) {
-    const only = list[0]
-    await saveSession(db, phone, 'choose_date', {
-      ...context,
-      servico_id: service.id,
-      servico_nome: service.nome,
-      barbeiro_id: only.id,
-      barbeiro_nome: only.nome,
-      barbers: list.map((b: { id: string; nome: string }) => ({ id: b.id, nome: b.nome })),
-    })
-    return [
-      `*${service.nome}* com *${only.nome}*.`,
-      '',
-      'Pra qual *data*? (ex.: 15/08 ou 15/08/2026)',
-    ].join('\n')
-  }
-
+  // Sempre pergunta preferência de barbeiro (1 ou vários)
   await saveSession(db, phone, 'choose_barber', {
     ...context,
     servico_id: service.id,
@@ -449,14 +501,19 @@ async function proceedAfterService(
     barbers: list.map((b: { id: string; nome: string }) => ({ id: b.id, nome: b.nome })),
   })
 
-  const names = list.map((b: { nome: string }) => b.nome)
+  if (list.length === 1) {
+    return [
+      `Beleza, *${service.nome}*.`,
+      `Quer ser atendido pelo *${list[0].nome}*? Pode dizer sim, ou "qualquer um" se tanto fizer.`,
+    ].join(' ')
+  }
+
+  const names = list.map((b: { nome: string }) => b.nome).join(', ')
   return [
-    `*${service.nome}* — ótima escolha.`,
-    '',
-    'Com quem prefere? Ou diga *qualquer* se não tiver preferência.',
-    '',
-    formatNameList(names),
-  ].join('\n')
+    `Beleza, *${service.nome}*.`,
+    `Quer ser atendido por algum barbeiro em específico? Temos ${names}.`,
+    'Pode falar o nome ou "qualquer um" se não tiver preferência.',
+  ].join(' ')
 }
 
 async function handleChooseService(
@@ -502,20 +559,30 @@ async function handleChooseBarber(
   let barbeiro_id: string | null = null
   let barbeiro_nome: string | null = 'Qualquer'
 
-  const anyKeywords = ['qualquer', 'tanto faz', 'sem preferencia', 'sem preferência', 'indiferente', 'qualquer um']
-  if (anyKeywords.some((k) => t.includes(normalizeMatch(k))) || t === String(barbers.length + 1)) {
+  const anyPref = [
+    'qualquer',
+    'tanto faz',
+    'sem preferencia',
+    'indiferente',
+    'qualquer um',
+  ].some((k) => t === k || t.includes(k))
+
+  const yes = t === 's' || t === 'sim' || t === 'pode' || t === 'ok' || t === 'pode ser'
+  const no = t === 'n' || t === 'nao' || t === 'no'
+
+  if (barbers.length === 1 && yes) {
+    barbeiro_id = barbers[0].id
+    barbeiro_nome = barbers[0].nome
+  } else if (anyPref || no || t === String(barbers.length + 1)) {
     barbeiro_id = null
     barbeiro_nome = 'Qualquer'
   } else {
     const matched = matchByName(text, barbers)
     if (!matched) {
-      return [
-        'Não achei esse barbeiro. Temos:',
-        '',
-        formatNameList(barbers.map((b) => b.nome)),
-        '',
-        'Ou diga *qualquer*.',
-      ].join('\n')
+      if (barbers.length === 1) {
+        return `Quer com *${barbers[0].nome}*? Responde sim, ou "qualquer um".`
+      }
+      return `Não achei esse barbeiro. Temos ${barbers.map((b) => b.nome).join(', ')}. Qual prefere, ou "qualquer um"?`
     }
     barbeiro_id = matched.id
     barbeiro_nome = matched.nome
@@ -525,6 +592,7 @@ async function handleChooseBarber(
     ...context,
     barbeiro_id,
     barbeiro_nome,
+    from_rotation: !barbeiro_id,
   })
 
   return [
@@ -693,6 +761,7 @@ async function handleChooseTime(
     horario,
     barbeiro_id: check.barbeiro_id,
     barbeiro_nome: check.barbeiro_nome || context.barbeiro_nome,
+    from_rotation: check.from_rotation || Boolean(context.from_rotation),
   })
 
   return [
@@ -801,6 +870,14 @@ async function handleConfirm(
     .select('id')
     .single()
 
+  if (!error && (context.from_rotation || check.from_rotation) && check.barbeiro_id) {
+    try {
+      await rotateBarberQueue(db, check.barbeiro_id)
+    } catch (e) {
+      console.warn('rotateBarberQueue', e)
+    }
+  }
+
   await resetSession(db, phone)
 
   if (error) {
@@ -824,7 +901,7 @@ async function processWithMimo(
   db: ReturnType<typeof getServiceClient>,
   phone: string,
   text: string,
-  senderName?: string,
+  leadName?: string | null,
 ): Promise<string | null> {
   const config = await loadMimoConfig(db)
   if (!config) return null
@@ -854,23 +931,38 @@ async function processWithMimo(
   if (c.barbeiro_nome) ctxLines.push(`barbeiro: ${c.barbeiro_nome}`)
   if (c.data) ctxLines.push(`data: ${c.data}`)
   if (c.horario) ctxLines.push(`horário: ${c.horario}`)
-  if (session.step && session.step !== 'menu' && session.step !== 'chat') {
+  if (session.step && session.step !== 'menu' && session.step !== 'chat' && session.step !== 'ask_name') {
     ctxLines.push(`estava no passo interno: ${session.step}`)
+  }
+  if (leadName && isKnownLeadName(leadName)) {
+    ctxLines.push(`nome do lead (salvo): ${leadName}`)
+  }
+
+  // Agenda do lead (agendamentos já marcados)
+  let apptCtx = ''
+  try {
+    const upcoming = await fetchUpcomingAppointments(db, phone)
+    apptCtx = '\nAgenda do lead:\n' + appointmentsContextLines(upcoming).join('\n')
+  } catch (e) {
+    console.warn('fetchUpcomingAppointments failed', e)
   }
 
   const system = systemPromptBarber() +
     (ctxLines.length
       ? `\nContexto parcial já conhecido desta conversa (não pergunte de novo se já souber):\n- ${ctxLines.join('\n- ')}`
-      : '')
+      : '') +
+    apptCtx
+
+  const identity = leadName && isKnownLeadName(leadName)
+    ? `[Cliente se chama ${leadName}. Tel ${phone}. Responda só a mensagem:]`
+    : `[Tel ${phone}. Nome ainda não confirmado no cadastro. Responda só a mensagem:]`
 
   const messages: ChatMessage[] = [
     { role: 'system', content: system },
     ...prior,
     {
       role: 'user',
-      content: senderName
-        ? `[Cliente se chama ${senderName}. Tel ${phone}. Responda só a mensagem:]\n${text}`
-        : text,
+      content: `${identity}\n${text}`,
     },
   ]
 
@@ -880,8 +972,8 @@ async function processWithMimo(
       messages,
       tools: BARBER_TOOLS,
       tool_choice: 'auto',
-      temperature: 0.65,
-      max_completion_tokens: 900,
+      temperature: 0.4,
+      max_completion_tokens: 500,
     })
 
     if (!res.ok || !res.message) {
@@ -903,7 +995,8 @@ async function processWithMimo(
       for (const tc of msg.tool_calls) {
         const fnName = tc.function?.name || ''
         const fnArgs = tc.function?.arguments || '{}'
-        const toolResult = await runBarberTool(db, phone, fnName, fnArgs, senderName)
+        // tools usam o nome salvo do lead, não o perfil WhatsApp
+        const toolResult = await runBarberTool(db, phone, fnName, fnArgs, leadName || undefined)
         messages.push({
           role: 'tool',
           tool_call_id: tc.id,
@@ -916,15 +1009,19 @@ async function processWithMimo(
 
     let answer = String(msg.content || '').trim()
     if (!answer) {
-      answer = 'Desculpa, não entendi. Pode falar de outro jeito?'
+      answer = 'Não entendi direito. Pode repetir?'
     }
+    answer = humanizeOutbound(answer, { senderName: leadName, userText: text })
 
-    // Guarda só turnos user/assistant/tool limpos; mode mimo + step chat (sem “menu”)
     const toStore = messages
       .filter((m) => m.role !== 'system')
       .map((m) => {
         const out: ChatMessage = { role: m.role }
-        if (m.content != null) out.content = typeof m.content === 'string' ? m.content.slice(0, 4000) : m.content
+        if (m === assistantMsg && !m.tool_calls?.length) {
+          out.content = answer
+        } else if (m.content != null) {
+          out.content = typeof m.content === 'string' ? m.content.slice(0, 4000) : m.content
+        }
         if (m.tool_calls) out.tool_calls = m.tool_calls
         if (m.tool_call_id) out.tool_call_id = m.tool_call_id
         if (m.name) out.name = m.name
@@ -935,50 +1032,144 @@ async function processWithMimo(
     await saveSession(db, phone, 'chat', {
       history: toStore,
       mode: 'mimo',
-      // limpa rastros de wizard legado para não “segurar” passo de formulário
-      servico_id: undefined,
-      servico_nome: undefined,
-      barbeiro_id: undefined,
-      barbeiro_nome: undefined,
-      data: undefined,
-      horario: undefined,
-      slots: undefined,
-      services: undefined,
-      barbers: undefined,
-      cancelItems: undefined,
+      lead_name: leadName || undefined,
     })
     return answer
   }
 
-  return 'Poxa, me confundi um pouco. Pode me dizer de novo o que você precisa?'
+  return 'Me confundi um pouco. Pode me dizer de novo o que você precisa?'
 }
 
 async function processMessage(
   db: ReturnType<typeof getServiceClient>,
   phone: string,
   text: string,
-  senderName?: string,
+  _whatsappProfileName?: string,
 ): Promise<string> {
   const trimmed = text.trim()
-  if (!trimmed) {
-    const withAi = await processWithMimo(db, phone, 'oi', senderName)
-    return withAi || greetingText()
+  // Nome do perfil WhatsApp NÃO é usado — só o que o lead informou e está em clientes.nome
+  let leadName = await getLeadDisplayName(db, phone)
+  const session = await getSession(db, phone)
+  const shop = await fetchShopName(db)
+
+  // ── Lead ainda não informou o nome ────────────────────────────────────────
+  if (session.step === 'ask_name' || !leadName) {
+    // Já está responder o nome
+    if (session.step === 'ask_name' && trimmed && isPlausiblePersonName(trimmed)) {
+      try {
+        leadName = await saveLeadName(db, phone, trimmed)
+      } catch (e) {
+        console.error('saveLeadName', e)
+        return 'Não consegui salvar o nome. Pode digitar de novo só o nome?'
+      }
+      let appts: Awaited<ReturnType<typeof fetchUpcomingAppointments>> = []
+      try {
+        appts = await fetchUpcomingAppointments(db, phone)
+      } catch {
+        /* ignore */
+      }
+      const hi = afterNameGreeting(leadName, shop, appts)
+      await saveSession(db, phone, 'chat', {
+        history: [
+          { role: 'user', content: trimmed },
+          { role: 'assistant', content: hi },
+        ],
+        mode: 'mimo',
+        lead_name: leadName,
+      })
+      return hi
+    }
+
+    // Ainda sem nome válido: pede
+    if (!leadName) {
+      // se mandou cumprimento + já vamos pedir nome
+      if (session.step === 'ask_name' && trimmed && !isPlausiblePersonName(trimmed) && !isGreetingOnly(trimmed)) {
+        return 'Pode me falar só o seu *nome*? Assim te chamo direito nas próximas conversas.'
+      }
+      const ask = askNameText(shop)
+      await saveSession(db, phone, 'ask_name', {
+        mode: 'mimo',
+        awaiting_name: true,
+      })
+      return ask
+    }
+  }
+
+  // ── Cumprimento puro com nome já salvo ────────────────────────────────────
+  if (!trimmed || isGreetingOnly(trimmed)) {
+    let appts: Awaited<ReturnType<typeof fetchUpcomingAppointments>> = []
+    try {
+      appts = await fetchUpcomingAppointments(db, phone)
+    } catch (e) {
+      console.warn('greeting appointments', e)
+    }
+    const hi = greetingWithAppointments(leadName, shop, appts)
+    try {
+      const prev = Array.isArray(session.context.history)
+        ? (session.context.history as ChatMessage[])
+        : []
+      const history = [
+        ...prev,
+        { role: 'user' as const, content: trimmed || 'oi' },
+        { role: 'assistant' as const, content: hi },
+      ].slice(-28)
+      await saveSession(db, phone, 'chat', {
+        history,
+        mode: 'mimo',
+        lead_name: leadName,
+        has_appointments: appts.length > 0,
+        upcoming_count: appts.length,
+      })
+    } catch {
+      /* ignore */
+    }
+    return hi
+  }
+
+  // Endereço / funcionamento
+  if (wantsShopInfo(trimmed)) {
+    const info = await fetchShopPublicInfo(db)
+    const answer = info.resumo
+    try {
+      const prev = Array.isArray(session.context.history)
+        ? (session.context.history as ChatMessage[])
+        : []
+      await saveSession(db, phone, 'chat', {
+        history: [...prev, { role: 'user', content: trimmed }, { role: 'assistant', content: answer }].slice(
+          -28,
+        ),
+        mode: 'mimo',
+        lead_name: leadName,
+      })
+    } catch {
+      /* ignore */
+    }
+    return answer
   }
 
   // Cliente pediu pra zerar o papo
   if (wantsRestart(trimmed) || ['reset', 'limpar', '/start'].includes(trimmed.toLowerCase())) {
     await resetSession(db, phone)
-    const withAi = await processWithMimo(db, phone, 'oi', senderName)
-    return withAi || greetingText()
+    // mantém o nome no cadastro (clientes); só zera a sessão
+    if (!leadName) {
+      await saveSession(db, phone, 'ask_name', { awaiting_name: true })
+      return askNameText(shop)
+    }
+    let appts: Awaited<ReturnType<typeof fetchUpcomingAppointments>> = []
+    try {
+      appts = await fetchUpcomingAppointments(db, phone)
+    } catch {
+      /* ignore */
+    }
+    return greetingWithAppointments(leadName, shop, appts)
   }
 
-  const session = await getSession(db, phone)
   const { step, context } = session
 
   // SEMPRE tenta a IA primeiro — contexto e memória do chat
   try {
-    const ai = await processWithMimo(db, phone, trimmed, senderName)
-    if (ai) return ai
+    const ai = await processWithMimo(db, phone, trimmed, leadName)
+    if (ai) return humanizeOutbound(ai, { senderName: leadName, userText: trimmed })
   } catch (e) {
     console.error('processWithMimo failed', e)
   }
@@ -993,39 +1184,57 @@ async function processMessage(
     'cancel_pick',
   ]
 
+  let fallback = ''
   if (wizardSteps.includes(step) && context.mode !== 'mimo') {
     switch (step) {
       case 'choose_service':
-        return handleChooseService(db, phone, trimmed, context)
+        fallback = await handleChooseService(db, phone, trimmed, context)
+        break
       case 'choose_barber':
-        return handleChooseBarber(db, phone, trimmed, context)
+        fallback = await handleChooseBarber(db, phone, trimmed, context)
+        break
       case 'choose_date':
-        return handleChooseDate(db, phone, trimmed, context)
+        fallback = await handleChooseDate(db, phone, trimmed, context)
+        break
       case 'choose_time':
-        return handleChooseTime(db, phone, trimmed, context)
+        fallback = await handleChooseTime(db, phone, trimmed, context)
+        break
       case 'confirm':
-        return handleConfirm(db, phone, trimmed, context, senderName)
+        fallback = await handleConfirm(db, phone, trimmed, context, leadName || undefined)
+        break
       case 'cancel_pick':
-        return handleCancelPick(db, phone, trimmed, context)
+        fallback = await handleCancelPick(db, phone, trimmed, context)
+        break
+    }
+  } else {
+    switch (step) {
+      case 'choose_service':
+        fallback = await handleChooseService(db, phone, trimmed, context)
+        break
+      case 'choose_barber':
+        fallback = await handleChooseBarber(db, phone, trimmed, context)
+        break
+      case 'choose_date':
+        fallback = await handleChooseDate(db, phone, trimmed, context)
+        break
+      case 'choose_time':
+        fallback = await handleChooseTime(db, phone, trimmed, context)
+        break
+      case 'confirm':
+        fallback = await handleConfirm(db, phone, trimmed, context, leadName || undefined)
+        break
+      case 'cancel_pick':
+        fallback = await handleCancelPick(db, phone, trimmed, context)
+        break
+      default:
+        fallback = await handleFallbackIntent(db, phone, trimmed)
     }
   }
 
-  switch (step) {
-    case 'choose_service':
-      return handleChooseService(db, phone, trimmed, context)
-    case 'choose_barber':
-      return handleChooseBarber(db, phone, trimmed, context)
-    case 'choose_date':
-      return handleChooseDate(db, phone, trimmed, context)
-    case 'choose_time':
-      return handleChooseTime(db, phone, trimmed, context)
-    case 'confirm':
-      return handleConfirm(db, phone, trimmed, context, senderName)
-    case 'cancel_pick':
-      return handleCancelPick(db, phone, trimmed, context)
-    default:
-      return handleFallbackIntent(db, phone, trimmed)
-  }
+  return humanizeOutbound(fallback || 'Me conta o que você precisa.', {
+    senderName: leadName,
+    userText: trimmed,
+  })
 }
 
 // ─── HTTP entry ──────────────────────────────────────────────────────────────
@@ -1108,15 +1317,18 @@ Deno.serve(async (req) => {
       }
 
       const text = extractText(msg)
+      // Perfil WhatsApp NÃO é mais usado para chamar o lead
+      const uazCfg = await beginTyping(phone, db, 15000)
+
       if (!text) {
-        await reply(phone, greetingText(), db)
+        const answer = await processMessage(db, phone, 'oi')
+        await reply(phone, answer, db, uazCfg)
         results.push({ phone, ok: true })
         continue
       }
 
-      const senderName = typeof msg.senderName === 'string' ? msg.senderName : undefined
-      const answer = await processMessage(db, phone, text, senderName)
-      await reply(phone, answer, db)
+      const answer = await processMessage(db, phone, text)
+      await reply(phone, answer, db, uazCfg)
       results.push({ phone, ok: true })
     }
 

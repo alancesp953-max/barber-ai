@@ -1,16 +1,48 @@
-import { useEffect, useMemo, useState } from 'react';
-import { supabase } from '../services/supabaseClient';
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  CartesianGrid, PieChart, Pie, Cell, Legend,
-} from 'recharts';
+  Button,
+  Card,
+  Group,
+  Loader,
+  SimpleGrid,
+  Stack,
+  Table,
+  Text,
+  TextInput,
+  Title,
+} from '@mantine/core'
+import { useEffect, useMemo, useState } from 'react'
+import { supabase } from '../services/supabaseClient'
 import {
-  FileText, Search, DollarSign, Scissors, Users, TrendingUp,
-} from 'lucide-react';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+  PieChart,
+  Pie,
+  Cell,
+  Legend,
+} from 'recharts'
+import { FileText, Search, DollarSign, Scissors, Users, TrendingUp } from 'lucide-react'
+import jsPDF from 'jspdf'
+import autoTable from 'jspdf-autotable'
+import { PageHeader } from '../components/PageHeader'
+import { KPICard } from '../components/KPICard'
 
-const CORES = ['#c9a227', '#1a1a1a', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#3b82f6', '#ec4899'];
+const CORES = ['#c5a059', '#1a1a1a', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#3b82f6', '#ec4899']
+
+
+const inputStyles = {
+  input: {
+    background: '#0d0d0d',
+    borderColor: 'rgba(197,160,89,0.2)',
+    color: '#f5f5f5',
+    colorScheme: 'dark' as const,
+  },
+  label: { color: '#cfcfcf' },
+}
 
 type RelatorioAgendamento = {
   data: string
@@ -20,7 +52,7 @@ type RelatorioAgendamento = {
 }
 
 function formatarMoeda(valor: number) {
-  return valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  return valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 }
 
 function joinOne<T>(value: T | T[] | null | undefined): T | null {
@@ -29,291 +61,333 @@ function joinOne<T>(value: T | T[] | null | undefined): T | null {
 }
 
 export default function Relatorios() {
-  const [dataInicio, setDataInicio] = useState('');
-  const [dataFim, setDataFim] = useState('');
-  const [agendamentos, setAgendamentos] = useState<RelatorioAgendamento[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [dataInicio, setDataInicio] = useState('')
+  const [dataFim, setDataFim] = useState('')
+  const [agendamentos, setAgendamentos] = useState<RelatorioAgendamento[]>([])
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    const hoje = new Date();
-    const primeiroDia = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
-    setDataInicio(primeiroDia.toISOString().split('T')[0]);
-    setDataFim(hoje.toISOString().split('T')[0]);
-  }, []);
+    const hoje = new Date()
+    const primeiroDia = new Date(hoje.getFullYear(), hoje.getMonth(), 1)
+    setDataInicio(primeiroDia.toISOString().split('T')[0])
+    setDataFim(hoje.toISOString().split('T')[0])
+  }, [])
 
   const buscarDados = async () => {
-    if (!dataInicio || !dataFim) return;
-    setLoading(true);
+    if (!dataInicio || !dataFim) return
+    setLoading(true)
     const { data, error } = await supabase
       .from('agendamentos')
       .select('data, horario, barbeiros(nome), servicos(nome, preco)')
       .gte('data', dataInicio)
       .lte('data', dataFim)
-      .order('data', { ascending: true });
+      .order('data', { ascending: true })
     if (error) {
-      console.error('Erro:', error);
+      console.error('Erro:', error)
     } else {
-      setAgendamentos(data || []);
+      setAgendamentos(data || [])
     }
-    setLoading(false);
-  };
+    setLoading(false)
+  }
 
-  useEffect(() => { buscarDados(); }, [dataInicio, dataFim]);
+  useEffect(() => {
+    if (dataInicio && dataFim) buscarDados()
+  }, [dataInicio, dataFim])
 
   const relatorio = useMemo(() => {
-    const barbeiroMap: Record<string, { quantidade: number; receita: number }> = {};
-    const servicoMap: Record<string, { quantidade: number; receita: number }> = {};
-    let receitaTotal = 0;
-    let quantidadeTotal = 0;
+    const barbeiroMap: Record<string, { quantidade: number; receita: number }> = {}
+    const servicoMap: Record<string, { quantidade: number; receita: number }> = {}
+    let receitaTotal = 0
+    let quantidadeTotal = 0
 
     agendamentos.forEach((item) => {
-      const barbeiro = joinOne(item.barbeiros)?.nome || 'Desconhecido';
-      const servicoInfo = joinOne(item.servicos);
-      const servico = servicoInfo?.nome || 'Desconhecido';
-      const preco = Number(servicoInfo?.preco) || 0;
+      const barbeiro = joinOne(item.barbeiros)?.nome || 'Desconhecido'
+      const servicoInfo = joinOne(item.servicos)
+      const servico = servicoInfo?.nome || 'Desconhecido'
+      const preco = Number(servicoInfo?.preco) || 0
 
       if (!barbeiroMap[barbeiro]) {
-        barbeiroMap[barbeiro] = { quantidade: 0, receita: 0 };
+        barbeiroMap[barbeiro] = { quantidade: 0, receita: 0 }
       }
-      barbeiroMap[barbeiro].quantidade += 1;
-      barbeiroMap[barbeiro].receita += preco;
+      barbeiroMap[barbeiro].quantidade += 1
+      barbeiroMap[barbeiro].receita += preco
 
       if (!servicoMap[servico]) {
-        servicoMap[servico] = { quantidade: 0, receita: 0 };
+        servicoMap[servico] = { quantidade: 0, receita: 0 }
       }
-      servicoMap[servico].quantidade += 1;
-      servicoMap[servico].receita += preco;
+      servicoMap[servico].quantidade += 1
+      servicoMap[servico].receita += preco
 
-      receitaTotal += preco;
-      quantidadeTotal += 1;
-    });
+      receitaTotal += preco
+      quantidadeTotal += 1
+    })
 
     const servicosPorBarbeiro = Object.entries(barbeiroMap).map(([b, v]) => ({
-      barbeiro: b, quantidade: v.quantidade
-    }));
+      barbeiro: b,
+      quantidade: v.quantidade,
+    }))
 
     const receitaPorBarbeiro = Object.entries(barbeiroMap).map(([b, v]) => ({
-      barbeiro: b, receita: v.receita
-    }));
+      barbeiro: b,
+      receita: v.receita,
+    }))
 
     const servicosPorTipo = Object.entries(servicoMap).map(([s, v]) => ({
-      servico: s, quantidade: v.quantidade, receita: v.receita
-    }));
+      servico: s,
+      quantidade: v.quantidade,
+      receita: v.receita,
+    }))
 
     const maisRentavel = Object.entries(barbeiroMap).reduce(
-      (acc, [nome, val]) => val.receita > acc.receita ? { nome, receita: val.receita } : acc,
-      { nome: '-', receita: 0 }
-    ).nome;
+      (acc, [nome, val]) => (val.receita > acc.receita ? { nome, receita: val.receita } : acc),
+      { nome: '-', receita: 0 },
+    ).nome
 
     return {
-      receitaTotal, quantidadeTotal,
+      receitaTotal,
+      quantidadeTotal,
       ticketMedio: quantidadeTotal > 0 ? receitaTotal / quantidadeTotal : 0,
       barbeiroMaisRentavel: maisRentavel,
-      servicosPorBarbeiro, receitaPorBarbeiro, servicosPorTipo,
+      servicosPorBarbeiro,
+      receitaPorBarbeiro,
+      servicosPorTipo,
       barbeiros: Object.keys(barbeiroMap),
-    };
-  }, [agendamentos]);
+    }
+  }, [agendamentos])
 
   const exportarPDF = () => {
-    const doc = new jsPDF();
-    doc.setFontSize(18);
-    doc.text('Relatorio de Atendimentos', 14, 20);
-    doc.setFontSize(12);
-    doc.text('Periodo: ' + dataInicio + ' a ' + dataFim, 14, 30);
-    doc.text('Receita Total: ' + formatarMoeda(relatorio.receitaTotal), 14, 38);
-    doc.text('Total de Atendimentos: ' + relatorio.quantidadeTotal, 14, 46);
+    const doc = new jsPDF()
+    doc.setFontSize(18)
+    doc.text('Relatorio de Atendimentos', 14, 20)
+    doc.setFontSize(12)
+    doc.text('Periodo: ' + dataInicio + ' a ' + dataFim, 14, 30)
+    doc.text('Receita Total: ' + formatarMoeda(relatorio.receitaTotal), 14, 38)
+    doc.text('Total de Atendimentos: ' + relatorio.quantidadeTotal, 14, 46)
     const linhas = agendamentos.map((item) => {
-      const barbeiro = joinOne(item.barbeiros)?.nome || 'Desconhecido';
-      const servicoInfo = joinOne(item.servicos);
+      const barbeiro = joinOne(item.barbeiros)?.nome || 'Desconhecido'
+      const servicoInfo = joinOne(item.servicos)
       return [
         item.data ? new Date(item.data + 'T00:00:00').toLocaleDateString('pt-BR') : '-',
         item.horario || '-',
         barbeiro,
         servicoInfo?.nome || 'Desconhecido',
         formatarMoeda(Number(servicoInfo?.preco) || 0),
-      ];
-    });
+      ]
+    })
     autoTable(doc, {
       head: [['Data', 'Horario', 'Barbeiro', 'Servico', 'Receita']],
-      body: linhas, startY: 55,
+      body: linhas,
+      startY: 55,
       headStyles: { fillColor: [26, 26, 26], textColor: 255, fontStyle: 'bold' },
-      bodyStyles: { textColor: 0 }, alternateRowStyles: { fillColor: [245, 245, 245] },
-    });
-    doc.save('relatorio-atendimentos.pdf');
-  };
-
-  const estiloInput = {
-    backgroundColor: '#ffffff', color: '#000000',
-    border: '2px solid #1a1a1a', borderRadius: 8,
-    padding: '10px 14px', fontSize: 15, fontWeight: 600,
-    marginLeft: 8,
-  };
-
-  const estiloBotao = {
-    padding: '10px 18px', borderRadius: 8, fontWeight: 700,
-    cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, border: '2px solid #1a1a1a',
-  };
-
-  const estiloCardGrafico = {
-    backgroundColor: '#ffffff', border: '2px solid #1a1a1a',
-    borderRadius: 12, padding: 20,
-    boxShadow: '0 4px 12px rgba(0,0,0,0.08)', color: '#000000',
-    flex: 1, minWidth: 300,
-  };
+      bodyStyles: { textColor: 0 },
+      alternateRowStyles: { fillColor: [245, 245, 245] },
+    })
+    doc.save('relatorio-atendimentos.pdf')
+  }
 
   return (
-    <div style={{ padding: 24, backgroundColor: '#f3f4f6', minHeight: '100vh', color: '#000' }}>
-      <div style={{ maxWidth: 1200, margin: '0 auto' }}>
+    <Stack gap="lg">
+      <PageHeader
+        title="Relatórios"
+        description="Análise de atendimentos e receita"
+        action={
+          <Group gap="sm" wrap="wrap">
+            <TextInput
+              label="De"
+              type="date"
+              value={dataInicio}
+              onChange={(e) => setDataInicio(e.currentTarget.value)}
+              styles={inputStyles}
+            />
+            <TextInput
+              label="Até"
+              type="date"
+              value={dataFim}
+              onChange={(e) => setDataFim(e.currentTarget.value)}
+              styles={inputStyles}
+            />
+            <Button
+              color="gold"
+              c="#0A0A0A"
+              leftSection={<Search size={16} />}
+              onClick={buscarDados}
+              mt={22}
+            >
+              Buscar
+            </Button>
+            <Button
+              variant="outline"
+              color="gold"
+              leftSection={<FileText size={16} />}
+              onClick={exportarPDF}
+              mt={22}
+            >
+              Exportar PDF
+            </Button>
+          </Group>
+        }
+      />
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16, marginBottom: 24 }}>
-          <h1 style={{ fontSize: 28, fontWeight: 800, color: '#1a1a1a', display: 'flex', alignItems: 'center', gap: 10 }}>
-            <FileText size={32} color="#c9a227" /> Relat&oacute;rios
-          </h1>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-            <label style={{ fontWeight: 700, color: '#1a1a1a' }}>
-              De: <input type="date" value={dataInicio} onChange={(e) => setDataInicio(e.target.value)} style={estiloInput} />
-            </label>
-            <label style={{ fontWeight: 700, color: '#1a1a1a' }}>
-              At&eacute;: <input type="date" value={dataFim} onChange={(e) => setDataFim(e.target.value)} style={estiloInput} />
-            </label>
-            <button onClick={buscarDados} style={{ ...estiloBotao, backgroundColor: '#c9a227', color: '#000' }}>
-              <Search size={18} /> Buscar
-            </button>
-            <button onClick={exportarPDF} style={{ ...estiloBotao, backgroundColor: '#1a1a1a', color: '#fff' }}>
-              <FileText size={18} /> Exportar PDF
-            </button>
-          </div>
-        </div>
+      {loading ? (
+        <Group justify="center" py="xl">
+          <Loader color="gold" />
+          <Text c="dimmed">Carregando relatório...</Text>
+        </Group>
+      ) : (
+        <>
+          <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
+            <KPICard
+              title="Receita Total"
+              value={formatarMoeda(relatorio.receitaTotal)}
+              icon={DollarSign}
+            />
+            <KPICard
+              title="Total Atendimentos"
+              value={relatorio.quantidadeTotal}
+              icon={Scissors}
+            />
+            <KPICard
+              title="Ticket Médio"
+              value={formatarMoeda(relatorio.ticketMedio)}
+              icon={TrendingUp}
+            />
+            <KPICard
+              title="Mais Rentável"
+              value={relatorio.barbeiroMaisRentavel}
+              icon={Users}
+            />
+          </SimpleGrid>
 
-        {loading ? (
-          <p style={{ color: '#1a1a1a', fontWeight: 700, fontSize: 16, textAlign: 'center', padding: 40 }}>
-            Carregando relat&oacute;rio...
-          </p>
-        ) : (
-          <>
+          <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
+            <Card withBorder padding="lg" radius="lg">
+              <Title order={5} c="gold" mb="md">
+                Serviços por Barbeiro
+              </Title>
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={relatorio.servicosPorBarbeiro}>
+                  <CartesianGrid stroke="rgba(197,160,89,0.15)" strokeDasharray="3 3" />
+                  <XAxis dataKey="barbeiro" tick={{ fill: '#aaa', fontSize: 12 }} />
+                  <YAxis tick={{ fill: '#aaa', fontSize: 12 }} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#1a1a1a',
+                      border: '1px solid rgba(197,160,89,0.3)',
+                      color: '#f5f5f5',
+                    }}
+                  />
+                  <Bar dataKey="quantidade" fill="#c5a059" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </Card>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16, marginBottom: 24 }}>
-              <div style={{ background: 'linear-gradient(135deg, #f5d78e 0%, #c9a227 100%)', color: '#000', borderRadius: 12, padding: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.15)', display: 'flex', alignItems: 'center', gap: 16 }}>
-                <DollarSign size={32} />
-                <div>
-                  <p style={{ margin: 0, fontWeight: 700, color: '#1a1a1a' }}>Receita Total</p>
-                  <h2 style={{ margin: 0, fontSize: 24, fontWeight: 900, color: '#000' }}>{formatarMoeda(relatorio.receitaTotal)}</h2>
-                </div>
-              </div>
-              <div style={{ background: 'linear-gradient(135deg, #f5d78e 0%, #c9a227 100%)', color: '#000', borderRadius: 12, padding: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.15)', display: 'flex', alignItems: 'center', gap: 16 }}>
-                <Scissors size={32} />
-                <div>
-                  <p style={{ margin: 0, fontWeight: 700, color: '#1a1a1a' }}>Total Atendimentos</p>
-                  <h2 style={{ margin: 0, fontSize: 24, fontWeight: 900, color: '#000' }}>{relatorio.quantidadeTotal}</h2>
-                </div>
-              </div>
-              <div style={{ background: 'linear-gradient(135deg, #f5d78e 0%, #c9a227 100%)', color: '#000', borderRadius: 12, padding: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.15)', display: 'flex', alignItems: 'center', gap: 16 }}>
-                <TrendingUp size={32} />
-                <div>
-                  <p style={{ margin: 0, fontWeight: 700, color: '#1a1a1a' }}>Ticket M&eacute;dio</p>
-                  <h2 style={{ margin: 0, fontSize: 24, fontWeight: 900, color: '#000' }}>{formatarMoeda(relatorio.ticketMedio)}</h2>
-                </div>
-              </div>
-              <div style={{ background: 'linear-gradient(135deg, #f5d78e 0%, #c9a227 100%)', color: '#000', borderRadius: 12, padding: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.15)', display: 'flex', alignItems: 'center', gap: 16 }}>
-                <Users size={32} />
-                <div>
-                  <p style={{ margin: 0, fontWeight: 700, color: '#1a1a1a' }}>Mais Rent&aacute;vel</p>
-                  <h2 style={{ margin: 0, fontSize: 20, fontWeight: 900, color: '#000' }}>{relatorio.barbeiroMaisRentavel}</h2>
-                </div>
-              </div>
-            </div>
+            <Card withBorder padding="lg" radius="lg">
+              <Title order={5} c="gold" mb="md">
+                Receita por Barbeiro
+              </Title>
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={relatorio.receitaPorBarbeiro}>
+                  <CartesianGrid stroke="rgba(197,160,89,0.15)" strokeDasharray="3 3" />
+                  <XAxis dataKey="barbeiro" tick={{ fill: '#aaa', fontSize: 12 }} />
+                  <YAxis tick={{ fill: '#aaa', fontSize: 12 }} tickFormatter={(v) => 'R$' + v} />
+                  <Tooltip
+                    formatter={(v) => formatarMoeda(Number(v ?? 0))}
+                    contentStyle={{
+                      backgroundColor: '#1a1a1a',
+                      border: '1px solid rgba(197,160,89,0.3)',
+                      color: '#f5f5f5',
+                    }}
+                  />
+                  <Bar dataKey="receita" fill="#c5a059" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </Card>
+          </SimpleGrid>
 
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, marginBottom: 24 }}>
-              <div style={estiloCardGrafico}>
-                <h3 style={{ marginBottom: 12, color: '#000', fontWeight: 800 }}>Servi&ccedil;os por Barbeiro</h3>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={relatorio.servicosPorBarbeiro}>
-                    <CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" />
-                    <XAxis dataKey="barbeiro" tick={{ fill: '#000', fontWeight: 700 }} />
-                    <YAxis tick={{ fill: '#000', fontWeight: 700 }} />
-                    <Tooltip contentStyle={{ backgroundColor: '#fff', border: '2px solid #1a1a1a', color: '#000' }} itemStyle={{ color: '#000', fontWeight: 700 }} />
-                    <Bar dataKey="quantidade" fill="#c9a227" stroke="#1a1a1a" strokeWidth={2} radius={[6, 6, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-              <div style={estiloCardGrafico}>
-                <h3 style={{ marginBottom: 12, color: '#000', fontWeight: 800 }}>Receita por Barbeiro</h3>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={relatorio.receitaPorBarbeiro}>
-                    <CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" />
-                    <XAxis dataKey="barbeiro" tick={{ fill: '#000', fontWeight: 700 }} />
-                    <YAxis tick={{ fill: '#000', fontWeight: 700 }} tickFormatter={(v) => 'R$' + v} />
-                    <Tooltip formatter={(v) => formatarMoeda(Number(v ?? 0))} contentStyle={{ backgroundColor: '#fff', border: '2px solid #1a1a1a', color: '#000' }} itemStyle={{ color: '#000', fontWeight: 700 }} />
-                    <Bar dataKey="receita" fill="#1a1a1a" stroke="#c9a227" strokeWidth={2} radius={[6, 6, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
+          <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
+            <Card withBorder padding="lg" radius="lg">
+              <Title order={5} c="gold" mb="md">
+                Serviços por Tipo
+              </Title>
+              <ResponsiveContainer width="100%" height={300}>
+                <PieChart>
+                  <Pie
+                    data={relatorio.servicosPorTipo}
+                    dataKey="quantidade"
+                    nameKey="servico"
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={100}
+                    label={({ name, percent }) =>
+                      name + ': ' + ((percent ?? 0) * 100).toFixed(0) + '%'
+                    }
+                  >
+                    {relatorio.servicosPorTipo.map((_, i) => (
+                      <Cell key={i} fill={CORES[i % CORES.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#1a1a1a',
+                      border: '1px solid rgba(197,160,89,0.3)',
+                      color: '#f5f5f5',
+                    }}
+                  />
+                  <Legend wrapperStyle={{ color: '#aaa' }} />
+                </PieChart>
+              </ResponsiveContainer>
+            </Card>
 
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, marginBottom: 24 }}>
-              <div style={{ ...estiloCardGrafico, maxWidth: 500 }}>
-                <h3 style={{ marginBottom: 12, color: '#000', fontWeight: 800 }}>Servi&ccedil;os por Tipo</h3>
-                <ResponsiveContainer width="100%" height={300}>
-                  <PieChart>
-                    <Pie data={relatorio.servicosPorTipo} dataKey="quantidade" nameKey="servico"
-                      cx="50%" cy="50%" outerRadius={100}
-                      label={({ name, percent }) => name + ': ' + ((percent ?? 0) * 100).toFixed(0) + '%'}>
-                      {relatorio.servicosPorTipo.map((_, i) => (
-                        <Cell key={i} fill={CORES[i % CORES.length]} stroke="#1a1a1a" strokeWidth={2} />
-                      ))}
-                    </Pie>
-                    <Tooltip contentStyle={{ backgroundColor: '#fff', border: '2px solid #1a1a1a', color: '#000' }} itemStyle={{ color: '#000', fontWeight: 700 }} />
-                    <Legend wrapperStyle={{ color: '#000', fontWeight: 700 }} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-              <div style={{ ...estiloCardGrafico, flex: 2, minWidth: 400 }}>
-                <h3 style={{ marginBottom: 12, color: '#000', fontWeight: 800 }}>Atendimentos Detalhados</h3>
-                <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', color: '#000' }}>
-                    <thead>
-                      <tr style={{ backgroundColor: '#1a1a1a', color: '#fff' }}>
-                        <th style={{ padding: 12, textAlign: 'left', fontWeight: 800 }}>Data</th>
-                        <th style={{ padding: 12, textAlign: 'left', fontWeight: 800 }}>Hor&aacute;rio</th>
-                        <th style={{ padding: 12, textAlign: 'left', fontWeight: 800 }}>Barbeiro</th>
-                        <th style={{ padding: 12, textAlign: 'left', fontWeight: 800 }}>Servi&ccedil;o</th>
-                        <th style={{ padding: 12, textAlign: 'right', fontWeight: 800 }}>Receita</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {agendamentos.map((item, i) => {
-                        const barbeiro = joinOne(item.barbeiros)?.nome || 'Desconhecido'
-                        const servicoInfo = joinOne(item.servicos)
-                        return (
-                        <tr key={i} style={{ backgroundColor: i % 2 === 0 ? '#fff' : '#f3f4f6' }}>
-                          <td style={{ padding: 12, fontWeight: 700, color: '#000' }}>
-                            {item.data ? new Date(item.data + 'T00:00:00').toLocaleDateString('pt-BR') : '-'}
-                          </td>
-                          <td style={{ padding: 12, fontWeight: 700, color: '#000' }}>{item.horario || '-'}</td>
-                          <td style={{ padding: 12, fontWeight: 700, color: '#000' }}>{barbeiro}</td>
-                          <td style={{ padding: 12, fontWeight: 700, color: '#000' }}>{servicoInfo?.nome || 'Desconhecido'}</td>
-                          <td style={{ padding: 12, textAlign: 'right', fontWeight: 900, color: '#000' }}>
+            <Card withBorder padding="lg" radius="lg">
+              <Title order={5} c="gold" mb="md">
+                Atendimentos Detalhados
+              </Title>
+              <Table.ScrollContainer minWidth={400}>
+                <Table highlightOnHover verticalSpacing="sm" fz="sm">
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Data</Table.Th>
+                      <Table.Th>Horário</Table.Th>
+                      <Table.Th>Barbeiro</Table.Th>
+                      <Table.Th>Serviço</Table.Th>
+                      <Table.Th ta="right">Receita</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {agendamentos.map((item, i) => {
+                      const barbeiro = joinOne(item.barbeiros)?.nome || 'Desconhecido'
+                      const servicoInfo = joinOne(item.servicos)
+                      return (
+                        <Table.Tr key={i}>
+                          <Table.Td>
+                            {item.data
+                              ? new Date(item.data + 'T00:00:00').toLocaleDateString('pt-BR')
+                              : '-'}
+                          </Table.Td>
+                          <Table.Td>{item.horario || '-'}</Table.Td>
+                          <Table.Td>{barbeiro}</Table.Td>
+                          <Table.Td>{servicoInfo?.nome || 'Desconhecido'}</Table.Td>
+                          <Table.Td ta="right" fw={700} c="gold">
                             {formatarMoeda(Number(servicoInfo?.preco) || 0)}
-                          </td>
-                        </tr>
-                        )
-                      })}
-                      {agendamentos.length === 0 && (
-                        <tr>
-                          <td colSpan={5} style={{ padding: 20, textAlign: 'center', color: '#000', fontWeight: 700 }}>
-                            Nenhum atendimento encontrado no per&iacute;odo selecionado.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-
-          </>
-        )}
-      </div>
-    </div>
-  );
+                          </Table.Td>
+                        </Table.Tr>
+                      )
+                    })}
+                    {agendamentos.length === 0 && (
+                      <Table.Tr>
+                        <Table.Td colSpan={5}>
+                          <Text c="dimmed" ta="center" py="md">
+                            Nenhum atendimento encontrado no período selecionado.
+                          </Text>
+                        </Table.Td>
+                      </Table.Tr>
+                    )}
+                  </Table.Tbody>
+                </Table>
+              </Table.ScrollContainer>
+            </Card>
+          </SimpleGrid>
+        </>
+      )}
+    </Stack>
+  )
 }

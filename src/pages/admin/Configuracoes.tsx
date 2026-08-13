@@ -1,3 +1,18 @@
+import {
+  Alert,
+  Box,
+  Button,
+  Card,
+  Group,
+  Image,
+  Loader,
+  NativeSelect,
+  SimpleGrid,
+  Stack,
+  Text,
+  TextInput,
+  Title,
+} from '@mantine/core'
 import { useCallback, useEffect, useState } from 'react'
 import {
   connectWhatsAppInstance,
@@ -7,109 +22,13 @@ import {
   updateConfiguracoes,
   type WhatsAppInstanceResult,
 } from '../../lib/api'
+import { PageHeader } from '../../components/PageHeader'
+import { withShopDefaults } from '../../lib/shopDefaults'
 
-const containerStyle: React.CSSProperties = {
-  minHeight: '100vh',
-  backgroundColor: '#0d0d0d',
-  color: '#f5f5f5',
-  padding: '32px',
-  fontFamily: 'Arial, Helvetica, sans-serif',
-}
 
-const titleStyle: React.CSSProperties = {
-  fontSize: '28px',
-  fontWeight: 700,
-  color: '#D4AF37',
-  marginBottom: '24px',
-  borderBottom: '1px solid #222',
-  paddingBottom: '12px',
-}
-
-const cardStyle: React.CSSProperties = {
-  backgroundColor: '#161616',
-  border: '1px solid #222',
-  borderRadius: '8px',
-  padding: '24px',
-  marginBottom: '24px',
-}
-
-const sectionTitleStyle: React.CSSProperties = {
-  fontSize: '18px',
-  color: '#D4AF37',
-  marginBottom: '16px',
-  fontWeight: 600,
-}
-
-const formGridStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
-  gap: '16px',
-}
-
-const labelStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '6px',
-  fontSize: '14px',
-  color: '#cfcfcf',
-}
-
-const inputStyle: React.CSSProperties = {
-  backgroundColor: '#0d0d0d',
-  border: '1px solid #333',
-  borderRadius: '6px',
-  padding: '10px 12px',
-  color: '#f5f5f5',
-  fontSize: '14px',
-  outline: 'none',
-}
-
-const buttonStyle: React.CSSProperties = {
-  backgroundColor: '#D4AF37',
-  color: '#0d0d0d',
-  border: 'none',
-  borderRadius: '6px',
-  padding: '12px 24px',
-  fontSize: '14px',
-  fontWeight: 700,
-  cursor: 'pointer',
-  marginTop: '16px',
-}
-
-const buttonSecondaryStyle: React.CSSProperties = {
-  ...buttonStyle,
-  backgroundColor: 'transparent',
-  color: '#D4AF37',
-  border: '1px solid #D4AF37',
-  marginTop: 0,
-  marginRight: 8,
-}
-
-const buttonDangerStyle: React.CSSProperties = {
-  ...buttonSecondaryStyle,
-  color: '#ff6b6b',
-  borderColor: '#ff6b6b',
-}
-
-const messageStyle: React.CSSProperties = {
-  padding: '12px',
-  borderRadius: '6px',
-  marginBottom: '16px',
-  fontSize: '14px',
-}
-
-const successMsgStyle: React.CSSProperties = {
-  ...messageStyle,
-  backgroundColor: '#1a3a1a',
-  color: '#4caf50',
-  border: '1px solid #4caf50',
-}
-
-const errorMsgStyle: React.CSSProperties = {
-  ...messageStyle,
-  backgroundColor: '#2a1212',
-  color: '#ff6b6b',
-  border: '1px solid #ff6b6b',
+const inputStyles = {
+  input: { background: '#0d0d0d', borderColor: 'rgba(197,160,89,0.2)', color: '#f5f5f5' },
+  label: { color: '#cfcfcf' },
 }
 
 function isConnectedStatus(status?: string | null): boolean {
@@ -124,18 +43,18 @@ function isConnectedStatus(status?: string | null): boolean {
 function statusLabel(status?: string | null): { text: string; color: string; connected: boolean } {
   const s = (status || '').toLowerCase()
   if (isConnectedStatus(status)) {
-    return { text: 'Conectado', color: '#4caf50', connected: true }
+    return { text: 'Conectado', color: 'teal', connected: true }
   }
   if (s.includes('connecting')) {
-    return { text: 'Conectando… escaneie o QR', color: '#ff9800', connected: false }
+    return { text: 'Conectando… escaneie o QR', color: 'orange', connected: false }
   }
   if (s.includes('disconnect') || s.includes('close') || s === 'offline') {
-    return { text: 'Desconectado', color: '#ff6b6b', connected: false }
+    return { text: 'Desconectado', color: 'red', connected: false }
   }
   if (s.includes('hibern')) {
-    return { text: 'Hibernado', color: '#888', connected: false }
+    return { text: 'Hibernado', color: 'gray', connected: false }
   }
-  return { text: status || 'Desconhecido', color: '#aaa', connected: false }
+  return { text: status || 'Desconhecido', color: 'gray', connected: false }
 }
 
 function resolveStatusFromResult(result: WhatsAppInstanceResult): string | null {
@@ -162,7 +81,12 @@ function resolveProfileFromResult(result: WhatsAppInstanceResult): { name?: stri
   if (!data) return {}
   const inst = (data.instance || data) as Record<string, unknown>
   return {
-    name: typeof inst.profileName === 'string' ? inst.profileName : typeof inst.name === 'string' ? inst.name : undefined,
+    name:
+      typeof inst.profileName === 'string'
+        ? inst.profileName
+        : typeof inst.name === 'string'
+          ? inst.name
+          : undefined,
     owner: typeof inst.owner === 'string' ? inst.owner : undefined,
   }
 }
@@ -185,7 +109,7 @@ export default function Configuracoes() {
     async function load() {
       try {
         const data = await getConfiguracoes()
-        setForm(data || {})
+        setForm(withShopDefaults(data || {}))
       } catch {
         setMessage({ tipo: 'erro', texto: 'Erro ao carregar configurações.' })
       } finally {
@@ -225,11 +149,9 @@ export default function Configuracoes() {
     void refreshStatus()
   }, [refreshStatus])
 
-  // Poll while not connected (QR pending or connecting)
   useEffect(() => {
     const connected = isConnectedStatus(waStatus)
     if (connected) return
-    // poll if showing QR or waiting for connection
     if (!qrcode && waStatus && !String(waStatus).toLowerCase().includes('connecting')) return
     const id = window.setInterval(() => {
       void refreshStatus()
@@ -245,7 +167,9 @@ export default function Configuracoes() {
     setSaving(true)
     setMessage(null)
     try {
-      await updateConfiguracoes(form)
+      const payload = withShopDefaults(form)
+      await updateConfiguracoes(payload)
+      setForm(payload)
       setMessage({ tipo: 'sucesso', texto: 'Configurações salvas com sucesso!' })
     } catch {
       setMessage({ tipo: 'erro', texto: 'Erro ao salvar configurações.' })
@@ -314,9 +238,10 @@ export default function Configuracoes() {
 
   if (loading) {
     return (
-      <div style={containerStyle}>
-        <p style={{ color: '#888' }}>Carregando configurações...</p>
-      </div>
+      <Group justify="center" py="xl">
+        <Loader color="gold" />
+        <Text c="dimmed">Carregando configurações...</Text>
+      </Group>
     )
   }
 
@@ -325,211 +250,213 @@ export default function Configuracoes() {
   const showQr = !connected && !!qrcode
 
   return (
-    <div style={containerStyle}>
-      <h1 style={titleStyle}>Configurações</h1>
+    <Stack gap="lg">
+      <PageHeader title="Configurações" description="Dados da barbearia e integração WhatsApp" />
 
       {message && (
-        <div style={message.tipo === 'sucesso' ? successMsgStyle : errorMsgStyle}>
+        <Alert color={message.tipo === 'sucesso' ? 'teal' : 'red'} variant="light">
           {message.texto}
-        </div>
+        </Alert>
       )}
 
-      <div style={cardStyle}>
-        <h2 style={sectionTitleStyle}>Informações da Barbearia</h2>
-        <div style={formGridStyle}>
-          <label style={labelStyle}>
-            Nome da Barbearia
-            <input style={inputStyle} value={form.nome_barbearia || ''} onChange={(e) => handleChange('nome_barbearia', e.target.value)} placeholder="Minha Barbearia" />
-          </label>
-          <label style={labelStyle}>
-            Endereço
-            <input style={inputStyle} value={form.endereco || ''} onChange={(e) => handleChange('endereco', e.target.value)} placeholder="Rua Exemplo, 123" />
-          </label>
-          <label style={labelStyle}>
-            Telefone
-            <input style={inputStyle} value={form.telefone || ''} onChange={(e) => handleChange('telefone', e.target.value)} placeholder="(11) 99999-9999" />
-          </label>
-          <label style={labelStyle}>
-            E-mail
-            <input style={inputStyle} value={form.email || ''} onChange={(e) => handleChange('email', e.target.value)} placeholder="contato@barbearia.com" />
-          </label>
-        </div>
-      </div>
+      <Card withBorder padding="lg" radius="lg">
+        <Title order={4} c="gold" mb="md">
+          Informações da Barbearia
+        </Title>
+        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+          <TextInput
+            label="Nome da Barbearia"
+            value={form.nome_barbearia || ''}
+            onChange={(e) => handleChange('nome_barbearia', e.currentTarget.value)}
+            placeholder="Minha Barbearia"
+            styles={inputStyles}
+          />
+          <TextInput
+            label="Endereço"
+            value={form.endereco || ''}
+            onChange={(e) => handleChange('endereco', e.currentTarget.value)}
+            placeholder="Rua Castro Monte 165, Bairro Varjota, Fortaleza"
+            styles={inputStyles}
+          />
+          <TextInput
+            label="Telefone"
+            value={form.telefone || ''}
+            onChange={(e) => handleChange('telefone', e.currentTarget.value)}
+            placeholder="(11) 99999-9999"
+            styles={inputStyles}
+          />
+          <TextInput
+            label="E-mail"
+            value={form.email || ''}
+            onChange={(e) => handleChange('email', e.currentTarget.value)}
+            placeholder="contato@barbearia.com"
+            styles={inputStyles}
+          />
+        </SimpleGrid>
+      </Card>
 
-      <div style={cardStyle}>
-        <h2 style={sectionTitleStyle}>Redes Sociais</h2>
-        <div style={formGridStyle}>
-          <label style={labelStyle}>
-            Instagram
-            <input style={inputStyle} value={form.instagram || ''} onChange={(e) => handleChange('instagram', e.target.value)} placeholder="@minhabarbearia" />
-          </label>
-          <label style={labelStyle}>
-            Facebook
-            <input style={inputStyle} value={form.facebook || ''} onChange={(e) => handleChange('facebook', e.target.value)} placeholder="fb.com/minhabarbearia" />
-          </label>
-          <label style={labelStyle}>
-            WhatsApp
-            <input style={inputStyle} value={form.whatsapp || ''} onChange={(e) => handleChange('whatsapp', e.target.value)} placeholder="(11) 99999-9999" />
-          </label>
-        </div>
-      </div>
+      <Card withBorder padding="lg" radius="lg">
+        <Title order={4} c="gold" mb="md">
+          Redes Sociais
+        </Title>
+        <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="md">
+          <TextInput
+            label="Instagram"
+            value={form.instagram || ''}
+            onChange={(e) => handleChange('instagram', e.currentTarget.value)}
+            placeholder="@minhabarbearia"
+            styles={inputStyles}
+          />
+          <TextInput
+            label="Facebook"
+            value={form.facebook || ''}
+            onChange={(e) => handleChange('facebook', e.currentTarget.value)}
+            placeholder="fb.com/minhabarbearia"
+            styles={inputStyles}
+          />
+          <TextInput
+            label="WhatsApp"
+            value={form.whatsapp || ''}
+            onChange={(e) => handleChange('whatsapp', e.currentTarget.value)}
+            placeholder="(11) 99999-9999"
+            styles={inputStyles}
+          />
+        </SimpleGrid>
+      </Card>
 
-      <div style={cardStyle}>
-        <h2 style={sectionTitleStyle}>Bot WhatsApp (UAZAPI)</h2>
-        <p style={{ color: '#888', fontSize: 13, marginBottom: 16, marginTop: 0 }}>
+      <Card withBorder padding="lg" radius="lg">
+        <Title order={4} c="gold" mb="xs">
+          Bot WhatsApp (UAZAPI)
+        </Title>
+        <Text size="sm" c="dimmed" mb="md">
           Escaneie o QR no celular (WhatsApp → Aparelhos conectados). Preferir WhatsApp Business.
           Mensagens são respondidas pela IA MiMo via Edge Function.
-        </p>
-        <div style={formGridStyle}>
-          <label style={labelStyle}>
-            Bot ativo
-            <select
-              style={inputStyle}
-              value={form.whatsapp_bot_ativo === true ? 'true' : 'false'}
-              onChange={(e) => handleChange('whatsapp_bot_ativo', e.target.value === 'true')}
-            >
-              <option value="true">Sim — responder mensagens</option>
-              <option value="false">Não — bot desligado</option>
-            </select>
-          </label>
-          <label style={labelStyle}>
-            URL base UAZAPI (referência)
-            <input
-              style={inputStyle}
-              value={form.uazapi_base_url || ''}
-              onChange={(e) => handleChange('uazapi_base_url', e.target.value)}
-              placeholder="https://barberai.uazapi.com"
-            />
-          </label>
-        </div>
+        </Text>
+        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+          <NativeSelect
+            label="Bot ativo"
+            value={form.whatsapp_bot_ativo === true ? 'true' : 'false'}
+            onChange={(e) => handleChange('whatsapp_bot_ativo', e.currentTarget.value === 'true')}
+            data={[
+              { value: 'true', label: 'Sim — responder mensagens' },
+              { value: 'false', label: 'Não — bot desligado' },
+            ]}
+            styles={inputStyles}
+          />
+          <TextInput
+            label="URL base UAZAPI (referência)"
+            value={form.uazapi_base_url || ''}
+            onChange={(e) => handleChange('uazapi_base_url', e.currentTarget.value)}
+            placeholder="https://barberai.uazapi.com"
+            styles={inputStyles}
+          />
+        </SimpleGrid>
 
-        <div
+        <Card
+          withBorder
+          mt="lg"
+          padding="md"
+          radius="md"
           style={{
-            marginTop: 20,
-            padding: 16,
-            border: connected ? '1px solid #4caf50' : '1px solid #333',
-            borderRadius: 8,
             background: connected ? '#0f1a0f' : '#0d0d0d',
+            borderColor: connected ? 'teal' : 'rgba(197,160,89,0.2)',
           }}
         >
-          {/* Visual status banner */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 12,
-              marginBottom: 16,
-              padding: '12px 14px',
-              borderRadius: 8,
-              background: connected ? 'rgba(76,175,80,0.15)' : 'rgba(255,152,0,0.1)',
-              border: connected ? '1px solid #4caf50' : '1px solid #ff9800',
-            }}
+          <Alert
+            color={connected ? 'teal' : 'orange'}
+            variant="light"
+            mb="md"
+            title={connected ? 'WhatsApp conectado' : statusUi.text}
           >
-            <span
-              style={{
-                width: 12,
-                height: 12,
-                borderRadius: '50%',
-                background: statusUi.color,
-                boxShadow: connected ? '0 0 8px #4caf50' : 'none',
-                flexShrink: 0,
-              }}
-            />
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 700, color: statusUi.color, fontSize: 15 }}>
-                {connected ? 'WhatsApp conectado' : statusUi.text}
-              </div>
-              {connected && (
-                <div style={{ color: '#aaa', fontSize: 13, marginTop: 2 }}>
-                  {profileName ? `Perfil: ${profileName}` : 'Instância online'}
-                  {profileOwner ? ` · ${profileOwner}` : ''}
-                </div>
-              )}
-              {!connected && (
-                <div style={{ color: '#888', fontSize: 12, marginTop: 2 }}>
-                  Gere o QR e escaneie no celular. Ao conectar, o QR some automaticamente.
-                </div>
-              )}
-            </div>
-          </div>
+            {connected ? (
+              <Text size="sm">
+                {profileName ? `Perfil: ${profileName}` : 'Instância online'}
+                {profileOwner ? ` · ${profileOwner}` : ''}
+              </Text>
+            ) : (
+              <Text size="sm">Gere o QR e escaneie no celular. Ao conectar, o QR some automaticamente.</Text>
+            )}
+          </Alert>
 
           {waError && (
-            <div style={{ ...errorMsgStyle, marginBottom: 12 }}>{waError}</div>
+            <Alert color="red" variant="light" mb="md">
+              {waError}
+            </Alert>
           )}
 
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+          <Group gap="sm" mb="md" wrap="wrap">
             {!connected && (
-              <button
-                type="button"
-                style={buttonSecondaryStyle}
+              <Button
+                variant="outline"
+                color="gold"
                 onClick={() => void handleGenerateQr()}
-                disabled={waLoading}
+                loading={waLoading}
               >
-                {waLoading ? 'Aguarde...' : 'Gerar / renovar QR code'}
-              </button>
+                Gerar / renovar QR code
+              </Button>
             )}
-            <button
-              type="button"
-              style={buttonSecondaryStyle}
+            <Button
+              variant="outline"
+              color="gold"
               onClick={() => void refreshStatus()}
               disabled={waLoading}
             >
               Atualizar status
-            </button>
+            </Button>
             {connected && (
-              <button
-                type="button"
-                style={buttonDangerStyle}
+              <Button
+                variant="outline"
+                color="red"
                 onClick={() => void handleDisconnect()}
-                disabled={waLoading}
+                loading={waLoading}
               >
                 Desconectar
-              </button>
+              </Button>
             )}
-          </div>
+          </Group>
 
           {showQr && (
-            <div style={{ textAlign: 'center' }}>
-              <p style={{ color: '#cfcfcf', fontSize: 14, marginBottom: 12 }}>
+            <Stack align="center" gap="sm">
+              <Text size="sm" c="dimmed">
                 Abra o WhatsApp → Aparelhos conectados → Conectar um aparelho e escaneie:
-              </p>
-              <div
-                style={{
-                  display: 'inline-block',
-                  padding: 16,
-                  background: '#fff',
-                  borderRadius: 12,
-                }}
-              >
-                <img
-                  src={qrcode!.startsWith('data:') || qrcode!.startsWith('http') ? qrcode! : `data:image/png;base64,${qrcode}`}
+              </Text>
+              <Box p="md" bg="white" style={{ borderRadius: 12 }}>
+                <Image
+                  src={
+                    qrcode!.startsWith('data:') || qrcode!.startsWith('http')
+                      ? qrcode!
+                      : `data:image/png;base64,${qrcode}`
+                  }
                   alt="QR Code WhatsApp UAZAPI"
-                  style={{ width: 260, height: 260, display: 'block' }}
+                  w={260}
+                  h={260}
                 />
-              </div>
-              <p style={{ color: '#888', fontSize: 12, marginTop: 10 }}>
+              </Box>
+              <Text size="xs" c="dimmed">
                 Atualiza sozinho a cada 3s. Quando conectar, esta área some.
-              </p>
-            </div>
+              </Text>
+            </Stack>
           )}
 
           {!connected && paircode && (
-            <p style={{ color: '#D4AF37', fontSize: 16, marginTop: 12 }}>
+            <Text c="gold" mt="sm">
               Código de pareamento: <strong>{paircode}</strong>
-            </p>
+            </Text>
           )}
 
           {!connected && !showQr && !paircode && !waError && (
-            <p style={{ color: '#666', fontSize: 13, margin: 0 }}>
+            <Text size="sm" c="dimmed">
               Clique em <strong>Gerar / renovar QR code</strong> para conectar o WhatsApp.
-            </p>
+            </Text>
           )}
-        </div>
-      </div>
+        </Card>
+      </Card>
 
-      <div style={cardStyle}>
-        <h2 style={sectionTitleStyle}>Horários de Funcionamento</h2>
-        <div style={formGridStyle}>
+      <Card withBorder padding="lg" radius="lg">
+        <Title order={4} c="gold" mb="md">
+          Horários de Funcionamento
+        </Title>
+        <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="md">
           {[
             { chave: 'horario_segunda', label: 'Segunda-feira' },
             { chave: 'horario_terca', label: 'Terça-feira' },
@@ -539,17 +466,21 @@ export default function Configuracoes() {
             { chave: 'horario_sabado', label: 'Sábado' },
             { chave: 'horario_domingo', label: 'Domingo' },
           ].map((dia) => (
-            <label key={dia.chave} style={labelStyle}>
-              {dia.label}
-              <input style={inputStyle} value={form[dia.chave] || ''} onChange={(e) => handleChange(dia.chave, e.target.value)} placeholder="08:00 - 18:00" />
-            </label>
+            <TextInput
+              key={dia.chave}
+              label={dia.label}
+              value={form[dia.chave] || ''}
+              onChange={(e) => handleChange(dia.chave, e.currentTarget.value)}
+              placeholder="08:30 - 19:30"
+              styles={inputStyles}
+            />
           ))}
-        </div>
-      </div>
+        </SimpleGrid>
+      </Card>
 
-      <button style={buttonStyle} onClick={handleSave} disabled={saving}>
-        {saving ? 'Salvando...' : 'Salvar Configurações'}
-      </button>
-    </div>
+      <Button color="gold" c="#0A0A0A" onClick={handleSave} loading={saving} w="fit-content">
+        Salvar Configurações
+      </Button>
+    </Stack>
   )
 }

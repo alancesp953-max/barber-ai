@@ -1,3 +1,19 @@
+import {
+  ActionIcon,
+  Alert,
+  Box,
+  Button,
+  Card,
+  Group,
+  Loader,
+  NativeSelect,
+  SimpleGrid,
+  Stack,
+  Table,
+  Text,
+  TextInput,
+  Title,
+} from '@mantine/core'
 import { Plus, Trash2, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useEffect, useState, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -17,10 +33,10 @@ import { formatCurrency, formatDateTime } from '../../lib/format'
 import type { Appointment, AppointmentStatus, Barber, Service } from '../../types/database'
 
 const statusColors: Record<AppointmentStatus, string> = {
-  pendente: 'bg-blue-500/10 text-blue-400',
-  confirmado: 'bg-barber-gold/10 text-barber-gold',
-  concluido: 'bg-emerald-500/10 text-emerald-400',
-  cancelado: 'bg-red-500/10 text-red-400',
+  pendente: 'blue',
+  confirmado: 'gold',
+  concluido: 'teal',
+  cancelado: 'red',
 }
 
 const appointmentStatuses = ['pendente', 'confirmado', 'concluido', 'cancelado'] as const
@@ -32,7 +48,26 @@ const MONTHS = [
 
 const WEEKDAYS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
 
-// 🔥 Componente do calendário mensal
+
+const inputStyles = {
+  input: { background: '#0d0d0d', borderColor: 'rgba(197,160,89,0.2)', color: '#f5f5f5' },
+  label: { color: '#cfcfcf' },
+}
+
+const apptBg: Record<AppointmentStatus, string> = {
+  pendente: 'rgba(59,130,246,0.15)',
+  confirmado: 'rgba(197,160,89,0.15)',
+  concluido: 'rgba(16,185,129,0.15)',
+  cancelado: 'rgba(239,68,68,0.15)',
+}
+
+const apptBorder: Record<AppointmentStatus, string> = {
+  pendente: '#60a5fa',
+  confirmado: '#c5a059',
+  concluido: '#34d399',
+  cancelado: '#f87171',
+}
+
 function MonthCalendar({
   currentMonth,
   appointmentsByDate,
@@ -61,24 +96,34 @@ function MonthCalendar({
   }
 
   return (
-    <div className="w-full rounded-lg border border-barber-gray bg-barber-darker">
-      {/* Cabeçalho com dias da semana */}
-      <div className="grid grid-cols-7 border-b border-barber-gray">
+    <Card withBorder padding={0} radius="lg">
+      <Box
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(7, 1fr)',
+          borderBottom: '1px solid rgba(197,160,89,0.2)',
+        }}
+      >
         {WEEKDAYS.map((d) => (
-          <div
-            key={d}
-            className="border-r border-barber-gray py-2 text-center text-xs font-semibold uppercase text-barber-white/50 last:border-r-0"
-          >
+          <Text key={d} size="xs" fw={600} tt="uppercase" c="dimmed" ta="center" py="xs">
             {d}
-          </div>
+          </Text>
         ))}
-      </div>
+      </Box>
 
-      {/* Grid de dias */}
-      <div className="grid grid-cols-7">
+      <Box style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)' }}>
         {days.map((day, idx) => {
           if (day === null) {
-            return <div key={`empty-${idx}`} className="border-r border-b border-barber-gray p-1 last:border-r-0" />
+            return (
+              <Box
+                key={`empty-${idx}`}
+                style={{
+                  minHeight: 80,
+                  borderRight: '1px solid rgba(197,160,89,0.1)',
+                  borderBottom: '1px solid rgba(197,160,89,0.1)',
+                }}
+              />
+            )
           }
 
           const dateStr = getDateStr(day)
@@ -89,66 +134,80 @@ function MonthCalendar({
           const overflowCount = dayAppointments.length - 2
 
           return (
-            <button
+            <Box
               key={day}
+              component="button"
               type="button"
               onClick={() => onDayClick(dateStr)}
-              className={`
-                relative flex min-h-[80px] flex-col border-r border-b border-barber-gray p-1 text-left transition-colors last:border-r-0
-                hover:bg-barber-black/50
-                ${isSelected ? 'bg-barber-gold/10 ring-1 ring-inset ring-barber-gold' : ''}
-                sm:min-h-[100px] sm:p-1.5
-              `}
+              style={{
+                position: 'relative',
+                display: 'flex',
+                flexDirection: 'column',
+                minHeight: 80,
+                padding: 6,
+                textAlign: 'left',
+                cursor: 'pointer',
+                background: isSelected ? 'rgba(197,160,89,0.1)' : 'transparent',
+                border: 'none',
+                borderRight: '1px solid rgba(197,160,89,0.1)',
+                borderBottom: '1px solid rgba(197,160,89,0.1)',
+                boxShadow: isSelected ? 'inset 0 0 0 1px #c5a059' : undefined,
+                color: 'inherit',
+              }}
             >
-              {/* Número do dia */}
-              <span
-                className={`
-                  mb-0.5 flex h-6 w-6 items-center justify-center rounded-full text-xs font-medium sm:h-7 sm:w-7 sm:text-sm
-                  ${isToday ? 'bg-barber-gold text-barber-black' : ''}
-                  ${isSelected && !isToday ? 'bg-barber-gold/30 text-barber-gold' : ''}
-                  ${!isToday && !isSelected ? 'text-barber-white' : ''}
-                `}
+              <Box
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 13,
+                  fontWeight: 500,
+                  marginBottom: 2,
+                  background: isToday
+                    ? '#c5a059'
+                    : isSelected
+                      ? 'rgba(197,160,89,0.3)'
+                      : 'transparent',
+                  color: isToday ? '#0A0A0A' : isSelected ? '#c5a059' : '#f5f5f5',
+                }}
               >
                 {day}
-              </span>
+              </Box>
 
-              {/* Compromissos visíveis */}
-              <div className="flex flex-col gap-0.5 overflow-hidden">
+              <Stack gap={2}>
                 {visibleAppts.map((appt) => (
-                  <div
+                  <Text
                     key={appt.id}
-                    className={`
-                      truncate rounded px-1 py-0.5 text-[10px] leading-tight
-                      border-l-2
-                      ${appt.status === 'pendente' ? 'bg-blue-500/15 border-l-blue-400 text-blue-300' : ''}
-                      ${appt.status === 'confirmado' ? 'bg-yellow-500/15 border-l-yellow-400 text-yellow-300' : ''}
-                      ${appt.status === 'concluido' ? 'bg-emerald-500/15 border-l-emerald-400 text-emerald-300' : ''}
-                      ${appt.status === 'cancelado' ? 'bg-red-500/15 border-l-red-400 text-red-300 line-through' : ''}
-                      sm:text-xs
-                    `}
+                    size="10px"
+                    truncate
+                    style={{
+                      padding: '2px 4px',
+                      borderRadius: 4,
+                      borderLeft: `2px solid ${apptBorder[appt.status]}`,
+                      background: apptBg[appt.status],
+                      textDecoration: appt.status === 'cancelado' ? 'line-through' : undefined,
+                    }}
                   >
-                    <span className="font-medium">{appt.horario}</span>{' '}
-                    <span className="hidden sm:inline">{appt.clientes?.nome?.split(' ')[0]}</span>
-                  </div>
+                    <Text span fw={600}>
+                      {appt.horario}
+                    </Text>{' '}
+                    {appt.clientes?.nome?.split(' ')[0]}
+                  </Text>
                 ))}
                 {overflowCount > 0 && (
-                  <span className="px-1 text-[10px] font-medium text-barber-gold sm:text-xs">
+                  <Text size="xs" c="gold" fw={500}>
                     +{overflowCount} mais
-                  </span>
+                  </Text>
                 )}
-              </div>
-
-              {/* Badge de quantidade (mobile) */}
-              {dayAppointments.length > 0 && (
-                <span className="absolute right-1 top-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-barber-gold/20 px-1 text-[9px] font-bold text-barber-gold sm:hidden">
-                  {dayAppointments.length}
-                </span>
-              )}
-            </button>
+              </Stack>
+            </Box>
           )
         })}
-      </div>
-    </div>
+      </Box>
+    </Card>
   )
 }
 
@@ -162,9 +221,16 @@ export default function Agendamentos() {
   const [checkinAppointment, setCheckinAppointment] = useState<Appointment | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  // 🔥 Estados do calendário novo
   const [currentMonth, setCurrentMonth] = useState(new Date())
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
+
+  const [clientName, setClientName] = useState('')
+  const [clientEmail, setClientEmail] = useState('')
+  const [clientPhone, setClientPhone] = useState('')
+  const [date, setDate] = useState('')
+  const [time, setTime] = useState('')
+  const [barberId, setBarberId] = useState('')
+  const [serviceId, setServiceId] = useState('')
 
   const load = async () => {
     try {
@@ -183,7 +249,6 @@ export default function Agendamentos() {
     load()
   }, [])
 
-  // 🔥 Agrupa agendamentos por data para o calendário
   const appointmentsByDate = useMemo(() => {
     const grouped: Record<string, Appointment[]> = {}
     appointments.forEach((appt) => {
@@ -192,14 +257,12 @@ export default function Agendamentos() {
       if (!grouped[dateStr]) grouped[dateStr] = []
       grouped[dateStr].push(appt)
     })
-    // Ordena por horário dentro de cada dia
     Object.keys(grouped).forEach((key) => {
       grouped[key].sort((a, b) => (a.horario || '').localeCompare(b.horario || ''))
     })
     return grouped
   }, [appointments])
 
-  // 🔥 Filtra agendamentos pelo dia selecionado
   const filteredAppointments = useMemo(() => {
     if (!selectedDate) return appointments
     return appointments.filter((appt) => appt.data === selectedDate)
@@ -207,7 +270,7 @@ export default function Agendamentos() {
 
   function handleDayClick(dateStr: string) {
     if (selectedDate === dateStr) {
-      setSelectedDate(null) // desmarca se clicar no mesmo dia
+      setSelectedDate(null)
     } else {
       setSelectedDate(dateStr)
     }
@@ -229,46 +292,41 @@ export default function Agendamentos() {
     setSelectedDate(null)
   }
 
-  const handleCreate = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
-    const form = new FormData(e.currentTarget)
 
-    const nome = form.get('client_name') as string
-    if (!nome || !nome.trim()) {
+    if (!clientName || !clientName.trim()) {
       setError('O nome do cliente é obrigatório')
       return
     }
 
     try {
-      const clientPhone = ((form.get('client_phone') as string) || '').trim()
+      const phone = clientPhone.trim()
       const cliente = await findOrCreateClient({
-        nome: nome.trim(),
-        email: form.get('client_email') as string,
-        telefone: clientPhone || undefined,
+        nome: clientName.trim(),
+        email: clientEmail,
+        telefone: phone || undefined,
       })
 
-      const barberId = (form.get('barber_id') as string) || null
-      const serviceId = (form.get('service_id') as string) || null
-      const date = form.get('date') as string
-      const time = form.get('time') as string
-
-      await createAppointment({
+      const created = await createAppointment({
         cliente_id: cliente.id,
-        barbeiro_id: barberId,
-        servico_id: serviceId,
+        barbeiro_id: barberId || null,
+        servico_id: serviceId || null,
         data: date,
         horario: time,
         status: 'pendente',
       })
 
-      if (clientPhone) {
-        const barber = barbers.find((b) => b.id === barberId)
+      if (phone) {
+        const barberName =
+          created?.barbeiros?.nome ||
+          barbers.find((b) => b.id === (created?.barbeiro_id || barberId))?.nome
         const service = services.find((s) => s.id === serviceId)
         void notifyAppointmentWhatsApp({
-          phone: clientPhone,
-          clientName: nome.trim(),
+          phone,
+          clientName: clientName.trim(),
           serviceName: service?.nome,
-          barberName: barber?.nome,
+          barberName,
           date,
           time,
         })
@@ -276,6 +334,13 @@ export default function Agendamentos() {
 
       setShowForm(false)
       setError(null)
+      setClientName('')
+      setClientEmail('')
+      setClientPhone('')
+      setDate('')
+      setTime('')
+      setBarberId('')
+      setServiceId('')
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : t('common.failedToCreate'))
@@ -301,146 +366,156 @@ export default function Agendamentos() {
     }
   }
 
-  const inputClass = 'w-full rounded-lg border border-barber-gray bg-barber-black px-3 py-2 text-sm text-barber-white focus:border-barber-gold focus:outline-none'
-
   const formatDateDisplay = (dateStr: string) => {
     if (!dateStr) return ''
     const [year, month, day] = dateStr.split('-')
     return `${day}/${month}/${year}`
   }
 
-  // 🔥 Contagem de agendamentos do mês
-  const monthAppointmentCount = Object.entries(appointmentsByDate).filter(([dateStr]) => {
-    const d = new Date(dateStr)
-    return d.getMonth() === currentMonth.getMonth() && d.getFullYear() === currentMonth.getFullYear()
-  }).reduce((sum, [, apps]) => sum + apps.length, 0)
+  const monthAppointmentCount = Object.entries(appointmentsByDate)
+    .filter(([dateStr]) => {
+      const d = new Date(dateStr)
+      return d.getMonth() === currentMonth.getMonth() && d.getFullYear() === currentMonth.getFullYear()
+    })
+    .reduce((sum, [, apps]) => sum + apps.length, 0)
 
   return (
-    <>
+    <Stack gap="md">
       <PageHeader
         title={t('appointments.title')}
         description={t('appointments.description')}
         action={
-          <button
-            type="button"
+          <Button
+            color="gold"
+            c="#0A0A0A"
+            leftSection={<Plus size={16} />}
             onClick={() => setShowForm(!showForm)}
-            className="flex items-center gap-2 rounded-lg bg-barber-gold px-4 py-2 text-sm font-semibold text-barber-black hover:bg-barber-gold/90"
           >
-            <Plus className="h-4 w-4" />
             {t('appointments.newAppointment')}
-          </button>
+          </Button>
         }
       />
 
-      <div className="mb-4">
-        <button
-          onClick={() => setShowForm(!showForm)}
-          className="flex items-center gap-2 rounded-lg bg-barber-gold px-4 py-2 text-sm font-semibold text-barber-black hover:bg-barber-gold/90"
-        >
-          <Plus size={18} />
-          {t('appointments.newAppointment')}
-        </button>
-      </div>
-
       {error && (
-        <div className="mb-4 rounded-lg bg-red-500/10 p-3 text-sm text-red-400">{error}</div>
+        <Alert color="red" variant="light" withCloseButton onClose={() => setError(null)}>
+          {error}
+        </Alert>
       )}
 
       {showForm && (
-        <form onSubmit={handleCreate} className="mb-8 space-y-4 rounded-lg border border-barber-gray bg-barber-darker p-6">
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <div>
-              <label className="mb-1 block text-sm text-barber-white/70">{t('appointments.clientName')} *</label>
-              <input name="client_name" type="text" required className={inputClass} placeholder="Nome do cliente" />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-barber-white/70">{t('common.email')}</label>
-              <input name="client_email" type="email" className={inputClass} placeholder="email@exemplo.com" />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-barber-white/70">{t('common.phone')}</label>
-              <input name="client_phone" type="text" className={inputClass} placeholder="(11) 99999-9999" />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-barber-white/70">Data *</label>
-              <input name="date" type="date" required className={inputClass} />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-barber-white/70">Horário *</label>
-              <input name="time" type="time" required className={inputClass} />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-barber-white/70">{t('appointments.selectBarber')}</label>
-              <select name="barber_id" className={inputClass} defaultValue="">
-                <option value="">{t('appointments.selectBarber')}</option>
-                {barbers.map((b) => (
-                  <option key={b.id} value={b.id}>{b.nome}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-barber-white/70">{t('appointments.selectService')}</label>
-              <select name="service_id" className={inputClass} defaultValue="">
-                <option value="">{t('appointments.selectService')}</option>
-                {services.map((s) => (
-                  <option key={s.id} value={s.id}>{s.nome} — {formatCurrency(Number(s.preco))}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-          <div className="flex gap-3 pt-2">
-            <button type="submit" className="rounded-lg bg-barber-gold px-6 py-2 text-sm font-semibold text-barber-black hover:bg-barber-gold/90">
+        <Card
+          withBorder
+          padding="lg"
+          radius="lg"
+         
+          component="form"
+          onSubmit={handleCreate}
+        >
+          <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
+            <TextInput
+              label={`${t('appointments.clientName')} *`}
+              required
+              value={clientName}
+              onChange={(e) => setClientName(e.currentTarget.value)}
+              placeholder="Nome do cliente"
+              styles={inputStyles}
+            />
+            <TextInput
+              label={t('common.email')}
+              type="email"
+              value={clientEmail}
+              onChange={(e) => setClientEmail(e.currentTarget.value)}
+              placeholder="email@exemplo.com"
+              styles={inputStyles}
+            />
+            <TextInput
+              label={t('common.phone')}
+              value={clientPhone}
+              onChange={(e) => setClientPhone(e.currentTarget.value)}
+              placeholder="(11) 99999-9999"
+              styles={inputStyles}
+            />
+            <TextInput
+              label="Data *"
+              type="date"
+              required
+              value={date}
+              onChange={(e) => setDate(e.currentTarget.value)}
+              styles={inputStyles}
+            />
+            <TextInput
+              label="Horário *"
+              type="time"
+              required
+              value={time}
+              onChange={(e) => setTime(e.currentTarget.value)}
+              styles={inputStyles}
+            />
+            <NativeSelect
+              label="Barbeiro"
+              value={barberId}
+              onChange={(e) => setBarberId(e.currentTarget.value)}
+              data={[
+                { value: '', label: 'Qualquer (rodízio)' },
+                ...barbers.map((b) => ({ value: b.id, label: b.nome })),
+              ]}
+              styles={inputStyles}
+            />
+            <NativeSelect
+              label={t('appointments.selectService')}
+              value={serviceId}
+              onChange={(e) => setServiceId(e.currentTarget.value)}
+              data={[
+                { value: '', label: t('appointments.selectService') },
+                ...services.map((s) => ({
+                  value: s.id,
+                  label: `${s.nome} — ${formatCurrency(Number(s.preco))}`,
+                })),
+              ]}
+              styles={inputStyles}
+            />
+          </SimpleGrid>
+          <Group mt="md">
+            <Button type="submit" color="gold" c="#0A0A0A">
               {t('appointments.saveAppointment')}
-            </button>
-            <button type="button" onClick={() => setShowForm(false)} className="rounded-lg border border-barber-gray px-4 py-2 text-sm text-barber-white/70">
+            </Button>
+            <Button variant="outline" color="gray" onClick={() => setShowForm(false)}>
               {t('common.cancel')}
-            </button>
-          </div>
-        </form>
+            </Button>
+          </Group>
+        </Card>
       )}
 
       {loading ? (
-        <p className="text-barber-white/50">{t('appointments.loading')}</p>
+        <Group justify="center" py="xl">
+          <Loader color="gold" />
+          <Text c="dimmed">{t('appointments.loading')}</Text>
+        </Group>
       ) : (
         <>
-          {/* 🔥 CALENDÁRIO ESTILO GOOGLE */}
-          <div className="mb-6">
-            {/* Navegação do calendário */}
-            <div className="mb-3 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={prevMonth}
-                  className="rounded-lg border border-barber-gray p-2 text-barber-white/70 hover:bg-barber-black hover:text-barber-gold"
-                >
+          <Stack gap="sm">
+            <Group justify="space-between" wrap="wrap">
+              <Group gap="sm">
+                <ActionIcon variant="outline" color="gold" onClick={prevMonth}>
                   <ChevronLeft size={18} />
-                </button>
-                <h2 className="text-lg font-bold text-barber-white">
+                </ActionIcon>
+                <Title order={4} c="white">
                   {MONTHS[currentMonth.getMonth()]} {currentMonth.getFullYear()}
-                </h2>
-                <button
-                  type="button"
-                  onClick={nextMonth}
-                  className="rounded-lg border border-barber-gray p-2 text-barber-white/70 hover:bg-barber-black hover:text-barber-gold"
-                >
+                </Title>
+                <ActionIcon variant="outline" color="gold" onClick={nextMonth}>
                   <ChevronRight size={18} />
-                </button>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="hidden text-sm text-barber-white/50 sm:inline">
+                </ActionIcon>
+              </Group>
+              <Group gap="sm">
+                <Text size="sm" c="dimmed" visibleFrom="sm">
                   {monthAppointmentCount} agendamento{monthAppointmentCount !== 1 ? 's' : ''}
-                </span>
-                <button
-                  type="button"
-                  onClick={goToToday}
-                  className="rounded-lg border border-barber-gray px-3 py-1.5 text-xs font-semibold text-barber-gold hover:bg-barber-black"
-                >
+                </Text>
+                <Button size="xs" variant="outline" color="gold" onClick={goToToday}>
                   Hoje
-                </button>
-              </div>
-            </div>
+                </Button>
+              </Group>
+            </Group>
 
-            {/* 🔥 Grid do calendário */}
             <MonthCalendar
               currentMonth={currentMonth}
               appointmentsByDate={appointmentsByDate}
@@ -448,106 +523,135 @@ export default function Agendamentos() {
               onDayClick={handleDayClick}
             />
 
-            {/* Indicador de filtro */}
             {selectedDate && (
-              <div className="mt-2 flex items-center gap-2 text-sm text-barber-white/70">
-                <span>
-                  Agendamentos de <strong className="text-barber-gold">{formatDateDisplay(selectedDate)}</strong>
-                  {' '}({filteredAppointments.length} encontrado{filteredAppointments.length !== 1 ? 's' : ''})
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setSelectedDate(null)}
-                  className="text-xs text-barber-gold hover:underline"
-                >
+              <Group gap="sm">
+                <Text size="sm" c="dimmed">
+                  Agendamentos de{' '}
+                  <Text span fw={700} c="gold">
+                    {formatDateDisplay(selectedDate)}
+                  </Text>{' '}
+                  ({filteredAppointments.length} encontrado
+                  {filteredAppointments.length !== 1 ? 's' : ''})
+                </Text>
+                <Button size="compact-xs" variant="subtle" color="gold" onClick={() => setSelectedDate(null)}>
                   Mostrar todos
-                </button>
-              </div>
+                </Button>
+              </Group>
             )}
-          </div>
+          </Stack>
 
-          {/* 🔥 Legenda de cores */}
-          <div className="mb-4 flex flex-wrap gap-4 text-xs text-barber-white/60">
-            <span className="flex items-center gap-1">
-              <span className="inline-block h-2.5 w-2.5 rounded bg-blue-400" /> Pendente
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="inline-block h-2.5 w-2.5 rounded bg-yellow-400" /> Confirmado
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="inline-block h-2.5 w-2.5 rounded bg-emerald-400" /> Concluído
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="inline-block h-2.5 w-2.5 rounded bg-red-400" /> Cancelado
-            </span>
-          </div>
+          <Group gap="md">
+            <Group gap={6}>
+              <Box w={10} h={10} bg="blue.4" style={{ borderRadius: 2 }} />
+              <Text size="xs" c="dimmed">
+                Pendente
+              </Text>
+            </Group>
+            <Group gap={6}>
+              <Box w={10} h={10} bg="gold.5" style={{ borderRadius: 2 }} />
+              <Text size="xs" c="dimmed">
+                Confirmado
+              </Text>
+            </Group>
+            <Group gap={6}>
+              <Box w={10} h={10} bg="teal.4" style={{ borderRadius: 2 }} />
+              <Text size="xs" c="dimmed">
+                Concluído
+              </Text>
+            </Group>
+            <Group gap={6}>
+              <Box w={10} h={10} bg="red.4" style={{ borderRadius: 2 }} />
+              <Text size="xs" c="dimmed">
+                Cancelado
+              </Text>
+            </Group>
+          </Group>
 
-          {/* 🔥 Tabela de agendamentos */}
-          <div className="overflow-x-auto rounded-lg border border-barber-gray">
-            <table className="w-full text-left text-sm">
-              <thead className="border-b border-barber-gray bg-barber-darker">
-                <tr>
-                  <th className="px-4 py-3 font-medium text-barber-white/50">{t('appointments.client')}</th>
-                  <th className="px-4 py-3 font-medium text-barber-white/50">{t('common.service')}</th>
-                  <th className="px-4 py-3 font-medium text-barber-white/50">{t('appointments.barber')}</th>
-                  <th className="px-4 py-3 font-medium text-barber-white/50">{t('appointments.dateTime')}</th>
-                  <th className="px-4 py-3 font-medium text-barber-white/50">{t('common.status')}</th>
-                  <th className="px-4 py-3 font-medium text-barber-white/50">{t('common.price')}</th>
-                  <th className="px-4 py-3 font-medium text-barber-white/50">{t('common.actions')}</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-barber-gray">
-                {filteredAppointments.map((appt) => (
-                  <tr key={appt.id} className="hover:bg-barber-darker/50">
-                    <td className="px-4 py-3">
-                      <div className="font-medium">{appt.clientes?.nome ?? '—'}</div>
-                      <div className="text-xs text-barber-white/50">{appt.clientes?.email}</div>
-                    </td>
-                    <td className="px-4 py-3">{appt.servicos?.nome ?? '—'}</td>
-                    <td className="px-4 py-3">{appt.barbeiros?.nome ?? '—'}</td>
-                    <td className="px-4 py-3">{formatDateTime(appt.data, appt.horario)}</td>
-                    <td className="px-4 py-3">
-                      <select
-                        value={appt.status}
-                        onChange={(e) => handleStatusChange(appt.id, e.target.value as AppointmentStatus)}
-                        className={`rounded-full border-0 px-2 py-1 text-xs capitalize ${statusColors[appt.status]}`}
-                      >
-                        {appointmentStatuses.map((s) => (
-                          <option key={s} value={s}>{t(`status.${s}`)}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="px-4 py-3">{formatCurrency(Number(appt.servicos?.preco ?? 0))}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        {(appt.status === 'pendente' || appt.status === 'confirmado') && (
-                          <button
-                            onClick={() => setCheckinAppointment(appt)}
-                            className="rounded px-2 py-1 text-xs font-semibold text-barber-gold hover:bg-barber-gold/10"
+          <Card withBorder padding={0} radius="lg">
+            <Table.ScrollContainer minWidth={800}>
+              <Table highlightOnHover verticalSpacing="sm">
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>{t('appointments.client')}</Table.Th>
+                    <Table.Th>{t('common.service')}</Table.Th>
+                    <Table.Th>{t('appointments.barber')}</Table.Th>
+                    <Table.Th>{t('appointments.dateTime')}</Table.Th>
+                    <Table.Th>{t('common.status')}</Table.Th>
+                    <Table.Th>{t('common.price')}</Table.Th>
+                    <Table.Th>{t('common.actions')}</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {filteredAppointments.map((appt) => (
+                    <Table.Tr key={appt.id}>
+                      <Table.Td>
+                        <Text fw={500} size="sm">
+                          {appt.clientes?.nome ?? '—'}
+                        </Text>
+                        <Text size="xs" c="dimmed">
+                          {appt.clientes?.email}
+                        </Text>
+                      </Table.Td>
+                      <Table.Td>{appt.servicos?.nome ?? '—'}</Table.Td>
+                      <Table.Td>{appt.barbeiros?.nome ?? '—'}</Table.Td>
+                      <Table.Td>{formatDateTime(appt.data, appt.horario)}</Table.Td>
+                      <Table.Td>
+                        <NativeSelect
+                          size="xs"
+                          value={appt.status}
+                          onChange={(e) =>
+                            handleStatusChange(appt.id, e.currentTarget.value as AppointmentStatus)
+                          }
+                          data={appointmentStatuses.map((s) => ({
+                            value: s,
+                            label: t(`status.${s}`),
+                          }))}
+                          styles={{
+                            input: {
+                              background: 'transparent',
+                              border: 'none',
+                              color: `var(--mantine-color-${statusColors[appt.status]}-4)`,
+                              fontWeight: 600,
+                              textTransform: 'capitalize',
+                            },
+                          }}
+                        />
+                      </Table.Td>
+                      <Table.Td>{formatCurrency(Number(appt.servicos?.preco ?? 0))}</Table.Td>
+                      <Table.Td>
+                        <Group gap="xs">
+                          {(appt.status === 'pendente' || appt.status === 'confirmado') && (
+                            <Button
+                              size="compact-xs"
+                              variant="subtle"
+                              color="gold"
+                              onClick={() => setCheckinAppointment(appt)}
+                            >
+                              {t('dashboard.checkIn')}
+                            </Button>
+                          )}
+                          <ActionIcon
+                            variant="subtle"
+                            color="red"
+                            onClick={() => handleDelete(appt.id)}
                           >
-                            {t('dashboard.checkIn')}
-                          </button>
-                        )}
-                        <button
-                          onClick={() => handleDelete(appt.id)}
-                          className="rounded p-1 text-red-400 hover:bg-red-500/10"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                            <Trash2 size={16} />
+                          </ActionIcon>
+                        </Group>
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Table.ScrollContainer>
             {filteredAppointments.length === 0 && (
-              <p className="p-4 text-center text-barber-white/50">
+              <Text c="dimmed" ta="center" p="md">
                 {selectedDate
                   ? 'Nenhum agendamento nesta data.'
                   : t('appointments.noAppointments')}
-              </p>
+              </Text>
             )}
-          </div>
+          </Card>
         </>
       )}
 
@@ -557,6 +661,6 @@ export default function Agendamentos() {
         onClose={() => setCheckinAppointment(null)}
         onUpdated={() => load()}
       />
-    </>
+    </Stack>
   )
 }

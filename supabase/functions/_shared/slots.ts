@@ -1,5 +1,5 @@
 /**
- * Slot availability helpers (Brazil timezone + recheck before booking)
+ * Slot availability helpers (Brazil timezone + rodízio + recheck before booking)
  */
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1'
 import { formatDateBR } from './db.ts'
@@ -31,8 +31,7 @@ export function todaySaoPaulo(): string {
 
 export function nowTimeSaoPaulo(): string {
   const p = spParts()
-  // en-CA can use 24:00 edge; clamp hour to 00-23 display
-  let hour = p.hour === '24' ? '00' : p.hour
+  const hour = p.hour === '24' ? '00' : p.hour
   return `${hour}:${p.minute}`
 }
 
@@ -68,9 +67,41 @@ export async function fetchAvailableSlots(
   return { slots }
 }
 
+/** Barbeiros ativos na ordem da fila de rodízio. */
+export async function listBarbersForRotation(
+  db: SupabaseClient,
+): Promise<{ id: string; nome: string; ordem_rodizio: number }[]> {
+  const { data } = await db
+    .from('barbeiros')
+    .select('id, nome, ordem_rodizio, ativo')
+    .order('ordem_rodizio', { ascending: true })
+    .order('nome', { ascending: true })
+  return ((data || []) as { id: string; nome: string; ordem_rodizio: number | null; ativo?: boolean }[])
+    .filter((b) => b.ativo !== false)
+    .map((b) => ({
+      id: b.id,
+      nome: b.nome,
+      ordem_rodizio: Number(b.ordem_rodizio) || 0,
+    }))
+}
+
+/**
+ * Após atribuição automática: move o barbeiro para o fim da fila.
+ */
+export async function rotateBarberQueue(db: SupabaseClient, barbeiroId: string): Promise<void> {
+  if (!barbeiroId) return
+  const list = await listBarbersForRotation(db)
+  if (list.length <= 1) return
+  const others = list.filter((b) => b.id !== barbeiroId)
+  const rotated = [...others, ...list.filter((b) => b.id === barbeiroId)]
+  for (let i = 0; i < rotated.length; i++) {
+    await db.from('barbeiros').update({ ordem_rodizio: i + 1 }).eq('id', rotated[i].id)
+  }
+}
+
 /**
  * True if horario is free for the given barber (or any free barber when barbeiroId is null).
- * Returns which barber to assign when "any" was requested.
+ * Returns which barber to assign when "any" was requested (rodízio).
  */
 export async function checkSlotAvailability(
   db: SupabaseClient,
@@ -82,7 +113,7 @@ export async function checkSlotAvailability(
     barbeiroNome?: string | null
   },
 ): Promise<
-  | { ok: true; barbeiro_id: string | null; barbeiro_nome: string | null }
+  | { ok: true; barbeiro_id: string | null; barbeiro_nome: string | null; from_rotation: boolean }
   | { ok: false; message: string }
 > {
   const data = opts.data
@@ -100,13 +131,11 @@ export async function checkSlotAvailability(
     }
   }
 
-  const { data: barbers } = await db.from('barbeiros').select('id, nome').order('nome')
-  const list = barbers || []
+  const list = await listBarbersForRotation(db)
 
   if (opts.barbeiroId) {
     const { slots, error } = await fetchAvailableSlots(db, data, opts.servicoId, opts.barbeiroId)
     if (error) {
-      // fallback conflict check
       const free = await isBarberFreeAt(db, data, opts.servicoId, opts.barbeiroId, horario)
       if (!free) {
         const nome = opts.barbeiroNome || 'Esse barbeiro'
@@ -126,10 +155,11 @@ export async function checkSlotAvailability(
       ok: true,
       barbeiro_id: opts.barbeiroId,
       barbeiro_nome: opts.barbeiroNome || list.find((b) => b.id === opts.barbeiroId)?.nome || null,
+      from_rotation: false,
     }
   }
 
-  // Qualquer barbeiro: achar o primeiro livre naquele horário
+  // Qualquer barbeiro: topo da fila de rodízio que estiver livre
   if (!list.length) {
     const { slots } = await fetchAvailableSlots(db, data, opts.servicoId, null)
     if (!slots.includes(horario)) {
@@ -138,13 +168,13 @@ export async function checkSlotAvailability(
         message: `O horário *${horario}* não está mais disponível em ${formatDateBR(data)}. Escolha outro.`,
       }
     }
-    return { ok: true, barbeiro_id: null, barbeiro_nome: null }
+    return { ok: true, barbeiro_id: null, barbeiro_nome: null, from_rotation: false }
   }
 
   for (const b of list) {
     const { slots } = await fetchAvailableSlots(db, data, opts.servicoId, b.id)
     if (slots.includes(horario)) {
-      return { ok: true, barbeiro_id: b.id, barbeiro_nome: b.nome }
+      return { ok: true, barbeiro_id: b.id, barbeiro_nome: b.nome, from_rotation: true }
     }
   }
 
@@ -183,5 +213,20 @@ async function isBarberFreeAt(
     const aEnd = aStart + aDur
     if (aStart < endMin && aEnd > startMin) return false
   }
+
+  // Bloqueios do barbeiro
+  const startIso = `${data}T${horario}:00-03:00`
+  const endH = Math.floor(endMin / 60)
+  const endM = endMin % 60
+  const endIso = `${data}T${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}:00-03:00`
+  const { data: blocks } = await db
+    .from('barbeiro_bloqueios')
+    .select('id')
+    .eq('barbeiro_id', barbeiroId)
+    .lt('inicio', endIso)
+    .gt('fim', startIso)
+    .limit(1)
+  if (blocks && blocks.length > 0) return false
+
   return true
 }

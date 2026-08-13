@@ -1,186 +1,35 @@
+import {
+  Badge,
+  Button,
+  Card,
+  Group,
+  Loader,
+  Modal,
+  NativeSelect,
+  SimpleGrid,
+  Stack,
+  Table,
+  Text,
+  TextInput,
+  Title,
+} from '@mantine/core'
 import { useEffect, useState } from 'react'
-import { getPagamentos, getAppointments, getClients, createPagamento, deletePagamento, getResumoFinanceiro } from '../../lib/api'
+import {
+  getPagamentos,
+  getAgendamentosPendentesPagamento,
+  getClients,
+  createPagamento,
+  deletePagamento,
+  getResumoFinanceiro,
+} from '../../lib/api'
+import { PageHeader } from '../../components/PageHeader'
+import { KPICard } from '../../components/KPICard'
+import { DollarSign, CreditCard } from 'lucide-react'
 
-const containerStyle: React.CSSProperties = {
-  minHeight: '100vh',
-  backgroundColor: '#0d0d0d',
-  color: '#f5f5f5',
-  padding: '32px',
-  fontFamily: 'Arial, Helvetica, sans-serif',
-}
 
-const titleStyle: React.CSSProperties = {
-  fontSize: '28px',
-  fontWeight: 700,
-  color: '#D4AF37',
-  marginBottom: '24px',
-  borderBottom: '1px solid #222',
-  paddingBottom: '12px',
-}
-
-const cardStyle: React.CSSProperties = {
-  backgroundColor: '#161616',
-  border: '1px solid #222',
-  borderRadius: '8px',
-  padding: '24px',
-  marginBottom: '24px',
-}
-
-const resumoGrid: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-  gap: '16px',
-  marginBottom: '24px',
-}
-
-const resumoCard: React.CSSProperties = {
-  backgroundColor: '#1a1a1a',
-  border: '1px solid #333',
-  borderRadius: '8px',
-  padding: '20px',
-  textAlign: 'center',
-}
-
-const resumoValor: React.CSSProperties = {
-  fontSize: '24px',
-  fontWeight: 700,
-  color: '#4caf50',
-  marginTop: '8px',
-}
-
-const sectionTitle: React.CSSProperties = {
-  fontSize: '18px',
-  color: '#D4AF37',
-  marginBottom: '16px',
-  fontWeight: 600,
-}
-
-const tableStyle: React.CSSProperties = {
-  width: '100%',
-  borderCollapse: 'collapse',
-  fontSize: '14px',
-}
-
-const thStyle: React.CSSProperties = {
-  textAlign: 'left',
-  padding: '10px 12px',
-  borderBottom: '1px solid #333',
-  color: '#aaa',
-  fontWeight: 600,
-}
-
-const tdStyle: React.CSSProperties = {
-  padding: '10px 12px',
-  borderBottom: '1px solid #222',
-}
-
-const statusPago: React.CSSProperties = {
-  backgroundColor: '#1a3a1a',
-  color: '#4caf50',
-  padding: '4px 10px',
-  borderRadius: '4px',
-  fontSize: '12px',
-  fontWeight: 600,
-}
-
-const statusPendente: React.CSSProperties = {
-  backgroundColor: '#3a2a1a',
-  color: '#ff9800',
-  padding: '4px 10px',
-  borderRadius: '4px',
-  fontSize: '12px',
-  fontWeight: 600,
-}
-
-const btnNovo: React.CSSProperties = {
-  backgroundColor: '#D4AF37',
-  color: '#0d0d0d',
-  border: 'none',
-  borderRadius: '6px',
-  padding: '10px 20px',
-  fontSize: '14px',
-  fontWeight: 700,
-  cursor: 'pointer',
-  marginBottom: '16px',
-}
-
-const btnExcluir: React.CSSProperties = {
-  backgroundColor: 'transparent',
-  color: '#ff6b6b',
-  border: '1px solid #ff6b6b',
-  borderRadius: '4px',
-  padding: '4px 10px',
-  fontSize: '12px',
-  cursor: 'pointer',
-}
-
-const btnSalvar: React.CSSProperties = {
-  backgroundColor: '#D4AF37',
-  color: '#0d0d0d',
-  border: 'none',
-  borderRadius: '6px',
-  padding: '10px 24px',
-  fontSize: '14px',
-  fontWeight: 700,
-  cursor: 'pointer',
-}
-
-const btnCancelar: React.CSSProperties = {
-  backgroundColor: 'transparent',
-  color: '#aaa',
-  border: '1px solid #444',
-  borderRadius: '6px',
-  padding: '10px 24px',
-  fontSize: '14px',
-  cursor: 'pointer',
-}
-
-const modalOverlay: React.CSSProperties = {
-  position: 'fixed',
-  top: 0,
-  left: 0,
-  right: 0,
-  bottom: 0,
-  backgroundColor: 'rgba(0,0,0,0.7)',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  zIndex: 1000,
-}
-
-const modalContent: React.CSSProperties = {
-  backgroundColor: '#1a1a1a',
-  border: '1px solid #333',
-  borderRadius: '8px',
-  padding: '32px',
-  width: '90%',
-  maxWidth: '500px',
-}
-
-const inputStyle: React.CSSProperties = {
-  backgroundColor: '#0d0d0d',
-  border: '1px solid #333',
-  borderRadius: '6px',
-  padding: '10px 12px',
-  color: '#f5f5f5',
-  fontSize: '14px',
-  outline: 'none',
-  width: '100%',
-  boxSizing: 'border-box',
-}
-
-const labelStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '6px',
-  fontSize: '14px',
-  color: '#cfcfcf',
-  marginBottom: '16px',
-}
-
-const selectStyle: React.CSSProperties = {
-  ...inputStyle,
-  appearance: 'auto',
+const inputStyles = {
+  input: { background: '#0d0d0d', borderColor: 'rgba(197,160,89,0.2)', color: '#f5f5f5' },
+  label: { color: '#cfcfcf' },
 }
 
 export default function Financeiro() {
@@ -201,7 +50,7 @@ export default function Financeiro() {
       const [p, r, a, c] = await Promise.all([
         getPagamentos(),
         getResumoFinanceiro(),
-        getAppointments(),
+        getAgendamentosPendentesPagamento(),
         getClients(),
       ])
       setPagamentos(p)
@@ -227,17 +76,16 @@ export default function Financeiro() {
     const ag = agendamentos.find((a) => a.id === agendamentoId)
     if (!ag) return { servico: 'N/A', barbeiro: 'N/A' }
     return {
-      servico: ag.servico || ag.servico_nome || 'Serviço',
-      barbeiro: ag.barbeiro || ag.barbeiro_nome || 'Barbeiro',
+      servico: ag.servico || ag.servico_nome || ag.servicos?.nome || 'Serviço',
+      barbeiro: ag.barbeiro || ag.barbeiro_nome || ag.barbeiros?.nome || 'Barbeiro',
     }
   }
 
-  // 🔥 Quando seleciona o agendamento, já preenche o valor automaticamente
   function handleSelectAgendamento(id: string) {
     setFormAgendamento(id)
     const ag = agendamentos.find((a) => a.id === id)
     if (ag) {
-      const preco = ag.preco || ag.valor || ag.servico_preco || 0
+      const preco = ag.preco || ag.valor || ag.servico_preco || ag.servicos?.preco || 0
       setFormValor(preco.toString().replace('.', ','))
     }
   }
@@ -248,7 +96,6 @@ export default function Financeiro() {
       return
     }
 
-    // 🔥 Converte vírgula para ponto antes de salvar
     const valorLimpo = formValor.replace(/\./g, '').replace(',', '.')
     const valorNumerico = Number(valorLimpo)
 
@@ -269,8 +116,6 @@ export default function Financeiro() {
         status: 'Pago',
       }
 
-      console.log('📤 Enviando pagamento:', JSON.stringify(dadosPagamento, null, 2))
-
       await createPagamento(dadosPagamento)
 
       setShowModal(false)
@@ -280,7 +125,6 @@ export default function Financeiro() {
       await loadData()
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : JSON.stringify(err)
-      console.error('❌ Erro completo ao criar pagamento:', err)
       alert('Erro ao criar pagamento: ' + message)
     } finally {
       setSaving(false)
@@ -292,157 +136,152 @@ export default function Financeiro() {
     try {
       await deletePagamento(id)
       await loadData()
-    } catch (err) {
+    } catch {
       alert('Erro ao excluir pagamento')
     }
   }
 
   if (loading) {
     return (
-      <div style={containerStyle}>
-        <p>Carregando financeiro...</p>
-      </div>
+      <Group justify="center" py="xl">
+        <Loader color="gold" />
+        <Text c="dimmed">Carregando financeiro...</Text>
+      </Group>
     )
   }
 
   return (
-    <div style={containerStyle}>
-      <h1 style={titleStyle}>💰 Financeiro</h1>
+    <Stack gap="lg">
+      <PageHeader
+        title="Financeiro"
+        description="Pagamentos e resumo de receitas"
+        action={
+          <Button color="gold" c="#0A0A0A" onClick={() => setShowModal(true)}>
+            + Novo Pagamento
+          </Button>
+        }
+      />
 
-      <div style={resumoGrid}>
-        <div style={resumoCard}>
-          <p>Total Recebido</p>
-          <p style={resumoValor}>R$ {resumo.total.toFixed(2)}</p>
-        </div>
-        <div style={resumoCard}>
-          <p>Pagamentos Hoje</p>
-          <p style={resumoValor}>{resumo.quantidade}</p>
-        </div>
+      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
+        <KPICard title="Total Recebido" value={`R$ ${resumo.total.toFixed(2)}`} icon={DollarSign} />
+        <KPICard title="Pagamentos Hoje" value={resumo.quantidade} icon={CreditCard} />
         {Object.entries(resumo.porForma).map(([forma, valor]) => (
-          <div key={forma} style={resumoCard}>
-            <p>{forma}</p>
-            <p style={resumoValor}>R$ {Number(valor).toFixed(2)}</p>
-          </div>
+          <KPICard
+            key={forma}
+            title={forma}
+            value={`R$ ${Number(valor).toFixed(2)}`}
+            icon={CreditCard}
+          />
         ))}
-      </div>
+      </SimpleGrid>
 
-      <button onClick={() => setShowModal(true)} style={btnNovo}>
-        + Novo Pagamento
-      </button>
-
-      <div style={cardStyle}>
-        <h2 style={sectionTitle}>Histórico de Pagamentos</h2>
-        {pagamentos.length === 0 && (
-          <p>Nenhum pagamento registrado.</p>
+      <Card withBorder padding="lg" radius="lg">
+        <Title order={4} c="gold" mb="md">
+          Histórico de Pagamentos
+        </Title>
+        {pagamentos.length === 0 ? (
+          <Text c="dimmed">Nenhum pagamento registrado.</Text>
+        ) : (
+          <Table.ScrollContainer minWidth={800}>
+            <Table highlightOnHover verticalSpacing="sm">
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Cliente</Table.Th>
+                  <Table.Th>Serviço</Table.Th>
+                  <Table.Th>Barbeiro</Table.Th>
+                  <Table.Th>Valor</Table.Th>
+                  <Table.Th>Forma</Table.Th>
+                  <Table.Th>Status</Table.Th>
+                  <Table.Th>Data</Table.Th>
+                  <Table.Th />
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {pagamentos.map((p) => {
+                  const info = getAgendamentoInfo(p.agendamento_id)
+                  return (
+                    <Table.Tr key={p.id}>
+                      <Table.Td>{getClienteNome(p.cliente_id)}</Table.Td>
+                      <Table.Td>{info.servico}</Table.Td>
+                      <Table.Td>{info.barbeiro}</Table.Td>
+                      <Table.Td>R$ {Number(p.valor).toFixed(2)}</Table.Td>
+                      <Table.Td>{p.forma_pagamento}</Table.Td>
+                      <Table.Td>
+                        <Badge color={p.status === 'Pago' ? 'teal' : 'orange'} variant="light">
+                          {p.status}
+                        </Badge>
+                      </Table.Td>
+                      <Table.Td>
+                        {p.created_at ? new Date(p.created_at).toLocaleDateString('pt-BR') : '-'}
+                      </Table.Td>
+                      <Table.Td>
+                        <Button size="xs" variant="outline" color="red" onClick={() => handleExcluir(p.id)}>
+                          Excluir
+                        </Button>
+                      </Table.Td>
+                    </Table.Tr>
+                  )
+                })}
+              </Table.Tbody>
+            </Table>
+          </Table.ScrollContainer>
         )}
-        {pagamentos.length > 0 && (
-          <table style={tableStyle}>
-            <thead>
-              <tr>
-                <th style={thStyle}>Cliente</th>
-                <th style={thStyle}>Serviço</th>
-                <th style={thStyle}>Barbeiro</th>
-                <th style={thStyle}>Valor</th>
-                <th style={thStyle}>Forma</th>
-                <th style={thStyle}>Status</th>
-                <th style={thStyle}>Data</th>
-                <th style={thStyle}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {pagamentos.map((p) => {
-                const info = getAgendamentoInfo(p.agendamento_id)
-                return (
-                  <tr key={p.id}>
-                    <td style={tdStyle}>{getClienteNome(p.cliente_id)}</td>
-                    <td style={tdStyle}>{info.servico}</td>
-                    <td style={tdStyle}>{info.barbeiro}</td>
-                    <td style={tdStyle}>R$ {Number(p.valor).toFixed(2)}</td>
-                    <td style={tdStyle}>{p.forma_pagamento}</td>
-                    <td style={tdStyle}>
-                      <span style={p.status === 'Pago' ? statusPago : statusPendente}>
-                        {p.status}
-                      </span>
-                    </td>
-                    <td style={tdStyle}>
-                      {p.created_at
-                        ? new Date(p.created_at).toLocaleDateString('pt-BR')
-                        : '-'}
-                    </td>
-                    <td style={tdStyle}>
-                      <button onClick={() => handleExcluir(p.id)} style={btnExcluir}>
-                        Excluir
-                      </button>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
+      </Card>
 
-      {showModal && (
-        <div style={modalOverlay} onClick={() => setShowModal(false)}>
-          <div style={modalContent} onClick={(e) => e.stopPropagation()}>
-            <h2 style={sectionTitle}>Novo Pagamento</h2>
-
-            <label style={labelStyle}>
-              Agendamento
-              <select
-                style={selectStyle}
-                value={formAgendamento}
-                onChange={(e) => handleSelectAgendamento(e.target.value)}
-              >
-                <option value="">Selecione um agendamento...</option>
-                {agendamentos
-                  .filter((a) => a.status !== 'Cancelado')
-                  .map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {getClienteNome(a.cliente_id)} - {a.servico || a.servico_nome} ({new Date(a.data || a.created_at).toLocaleDateString('pt-BR')})
-                    </option>
-                  ))}
-              </select>
-            </label>
-
-            <label style={labelStyle}>
-              Valor (R$)
-              <input
-                style={inputStyle}
-                type="text"
-                inputMode="decimal"
-                value={formValor}
-                onChange={(e) => setFormValor(e.target.value)}
-                placeholder="59,90"
-              />
-            </label>
-
-            <label style={labelStyle}>
-              Forma de Pagamento
-              <select
-                style={selectStyle}
-                value={formForma}
-                onChange={(e) => setFormForma(e.target.value)}
-              >
-                <option value="Dinheiro">Dinheiro</option>
-                <option value="Cartão Débito">Cartão Débito</option>
-                <option value="Cartão Crédito">Cartão Crédito</option>
-                <option value="PIX">PIX</option>
-                <option value="Outro">Outro</option>
-              </select>
-            </label>
-
-            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '24px' }}>
-              <button onClick={() => setShowModal(false)} style={btnCancelar}>
-                Cancelar
-              </button>
-              <button onClick={handleCriarPagamento} style={btnSalvar} disabled={saving}>
-                {saving ? 'Salvando...' : 'Registrar Pagamento'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+      <Modal
+        opened={showModal}
+        onClose={() => setShowModal(false)}
+        title={
+          <Title order={4} c="gold">
+            Novo Pagamento
+          </Title>
+        }
+        centered
+        styles={{
+          content: { background: '#1a1a1a', border: '1px solid rgba(197,160,89,0.2)' },
+          header: { background: '#1a1a1a' },
+          body: { background: '#1a1a1a' },
+        }}
+      >
+        <Stack gap="md">
+          <NativeSelect
+            label="Agendamento"
+            value={formAgendamento}
+            onChange={(e) => handleSelectAgendamento(e.currentTarget.value)}
+            data={[
+              { value: '', label: 'Selecione um agendamento pendente...' },
+              ...agendamentos.map((a) => ({
+                value: a.id,
+                label: `${getClienteNome(a.cliente_id) || a.clientes?.nome || 'Cliente'} - ${a.servico || a.servico_nome || a.servicos?.nome || 'Serviço'} (${new Date((a.data || a.created_at) + 'T12:00:00').toLocaleDateString('pt-BR')})`,
+              })),
+            ]}
+            styles={inputStyles}
+          />
+          <TextInput
+            label="Valor (R$)"
+            inputMode="decimal"
+            value={formValor}
+            onChange={(e) => setFormValor(e.currentTarget.value)}
+            placeholder="59,90"
+            styles={inputStyles}
+          />
+          <NativeSelect
+            label="Forma de Pagamento"
+            value={formForma}
+            onChange={(e) => setFormForma(e.currentTarget.value)}
+            data={['Dinheiro', 'Cartão Débito', 'Cartão Crédito', 'PIX', 'Outro']}
+            styles={inputStyles}
+          />
+          <Group justify="flex-end">
+            <Button variant="outline" color="gray" onClick={() => setShowModal(false)}>
+              Cancelar
+            </Button>
+            <Button color="gold" c="#0A0A0A" onClick={handleCriarPagamento} loading={saving}>
+              Registrar Pagamento
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+    </Stack>
   )
 }

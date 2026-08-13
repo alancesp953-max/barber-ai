@@ -1,47 +1,39 @@
+import { AppShell, Burger, Group, Text } from '@mantine/core'
+import { useDisclosure } from '@mantine/hooks'
 import { Outlet } from '@tanstack/react-router'
-
 import { useTranslation } from 'react-i18next'
-
 import { AdminSidebar } from './AdminSidebar'
 
-
-
 export function AdminLayout() {
-
   const { t } = useTranslation()
-
-
+  const [opened, { toggle }] = useDisclosure()
 
   return (
-
-    <div className="flex min-h-screen bg-barber-black">
-
-      <AdminSidebar />
-
-      <div className="flex flex-1 flex-col overflow-hidden">
-
-        <header className="border-b border-barber-gray bg-barber-gray/50 px-8 py-4 backdrop-blur">
-
-          <p className="text-sm text-barber-white/60">
-
+    <AppShell
+      header={{ height: 56 }}
+      navbar={{
+        width: 260,
+        breakpoint: 'sm',
+        collapsed: { mobile: !opened },
+      }}
+      padding="md"
+    >
+      <AppShell.Header>
+        <Group h="100%" px="md">
+          <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
+          <Text size="sm" c="dimmed">
             {t('adminLayout.welcome')}
+          </Text>
+        </Group>
+      </AppShell.Header>
 
-          </p>
+      <AppShell.Navbar p="md">
+        <AdminSidebar onNavigate={() => opened && toggle()} />
+      </AppShell.Navbar>
 
-        </header>
-
-        <main className="flex-1 overflow-y-auto p-8">
-
-          <Outlet />
-
-        </main>
-
-      </div>
-
-    </div>
-
+      <AppShell.Main>
+        <Outlet />
+      </AppShell.Main>
+    </AppShell>
   )
-
 }
-
-

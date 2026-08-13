@@ -1,31 +1,41 @@
+import { Group, Paper, Stack, Text, ThemeIcon } from '@mantine/core'
 import type { LucideIcon } from 'lucide-react'
+import type { ReactNode } from 'react'
 
 interface KPICardProps {
   title: string
   value: string | number
   subtitle?: string
-  icon: LucideIcon
+  icon: LucideIcon | ((props: { size?: number }) => ReactNode)
   trend?: string
 }
 
 export function KPICard({ title, value, subtitle, icon: Icon, trend }: KPICardProps) {
   return (
-    <div className="rounded-2xl border border-barber-gray bg-barber-gray/40 p-6 transition-colors hover:border-barber-gold/30">
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="text-sm font-medium text-barber-white/60">{title}</p>
-          <p className="mt-2 font-serif text-3xl font-bold text-barber-gold">{value}</p>
+    <Paper p="md">
+      <Group justify="space-between" align="flex-start" wrap="nowrap">
+        <Stack gap={2} style={{ minWidth: 0 }}>
+          <Text size="xs" c="dimmed" tt="uppercase" fw={600} lts={0.5}>
+            {title}
+          </Text>
+          <Text fz={26} fw={700} lh={1.15} style={{ letterSpacing: '-0.02em' }}>
+            {value}
+          </Text>
           {subtitle && (
-            <p className="mt-1 text-xs text-barber-white/50">{subtitle}</p>
+            <Text size="xs" c="dimmed">
+              {subtitle}
+            </Text>
           )}
           {trend && (
-            <p className="mt-2 text-xs text-emerald-400">{trend}</p>
+            <Text size="xs" c="teal">
+              {trend}
+            </Text>
           )}
-        </div>
-        <div className="rounded-xl bg-barber-gold/10 p-3">
-          <Icon className="h-6 w-6 text-barber-gold" />
-        </div>
-      </div>
-    </div>
+        </Stack>
+        <ThemeIcon size={42} radius="md" variant="light" color="gold">
+          <Icon size={20} />
+        </ThemeIcon>
+      </Group>
+    </Paper>
   )
 }
