@@ -47,8 +47,13 @@ export async function getBarbers(): Promise<Barber[]> {
   const { data, error } = await supabase
     .from('barbeiros')
     .select('*')
-    .order('created_at', { ascending: false })
-  if (error) throw new Error(`Erro ao buscar barbeiros: ${error.message}`)
+    .order('ordem_rodizio', { ascending: true, nullsFirst: false })
+    .order('nome', { ascending: true })
+  if (error) {
+    const fallback = await supabase.from('barbeiros').select('*').order('nome')
+    if (fallback.error) throw new Error(`Erro ao buscar barbeiros: ${error.message}`)
+    return fallback.data ?? []
+  }
   return data ?? []
 }
 
@@ -63,6 +68,14 @@ export async function getBarber(id: string): Promise<Barber> {
 }
 
 export async function createBarber(barber: CreateBarberInput): Promise<Barber> {
+  const { data: maxRow } = await supabase
+    .from('barbeiros')
+    .select('ordem_rodizio')
+    .order('ordem_rodizio', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  const nextOrdem = (Number(maxRow?.ordem_rodizio) || 0) + 1
+
   const { data, error } = await supabase
     .from('barbeiros')
     .insert({
@@ -76,6 +89,8 @@ export async function createBarber(barber: CreateBarberInput): Promise<Barber> {
       comissao_produto_tipo: barber.comissao_produto_tipo ?? 'porcentagem',
       avaliacao: barber.avaliacao ?? 5,
       foto_url: barber.foto_url ?? null,
+      ordem_rodizio: nextOrdem,
+      ativo: true,
     })
     .select()
     .single()
@@ -92,6 +107,17 @@ export async function updateBarber(id: string, updates: Partial<Barber>): Promis
     .single()
   if (error) throw new Error(`Erro ao atualizar barbeiro: ${error.message}`)
   return data
+}
+
+/** Define a ordem do rodízio (1 = próximo da fila). */
+export async function setBarberQueueOrder(orderedIds: string[]): Promise<void> {
+  for (let i = 0; i < orderedIds.length; i++) {
+    const { error } = await supabase
+      .from('barbeiros')
+      .update({ ordem_rodizio: i + 1 })
+      .eq('id', orderedIds[i])
+    if (error) throw new Error(`Erro ao salvar fila: ${error.message}`)
+  }
 }
 
 export async function deleteBarber(id: string) {
@@ -142,6 +168,14 @@ export async function createBarberUser(params: {
   if (!userId) throw new Error('Não foi possível criar a conta de login. Verifique se o e-mail já não está cadastrado.')
 
   // 2. Cria o barbeiro ligado à conta de login
+  const { data: maxRow } = await supabase
+    .from('barbeiros')
+    .select('ordem_rodizio')
+    .order('ordem_rodizio', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  const nextOrdem = (Number(maxRow?.ordem_rodizio) || 0) + 1
+
   const { data, error } = await supabase
     .from('barbeiros')
     .insert({
@@ -156,6 +190,8 @@ export async function createBarberUser(params: {
       avaliacao: params.avaliacao ?? 5,
       foto_url: params.foto_url || null,
       user_id: userId,
+      ordem_rodizio: nextOrdem,
+      ativo: true,
       senha_temporaria: params.senha,
     })
     .select()
