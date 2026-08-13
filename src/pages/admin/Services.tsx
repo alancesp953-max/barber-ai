@@ -13,11 +13,11 @@ import {
   TextInput,
   Title,
 } from '@mantine/core'
-import { Clock, Plus, Trash2 } from 'lucide-react'
+import { Clock, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../../components/PageHeader'
-import { createService, deleteService, getServices } from '../../lib/api'
+import { createService, deleteService, getServices, updateService } from '../../lib/api'
 import { formatCurrency } from '../../lib/format'
 import type { Service } from '../../types/database'
 
@@ -32,6 +32,8 @@ export default function Services() {
   const [services, setServices] = useState<Service[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
+  const [editing, setEditing] = useState<Service | null>(null)
+  const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [price, setPrice] = useState<number | string>('')
@@ -52,23 +54,57 @@ export default function Services() {
     load()
   }, [])
 
-  const handleCreate = async (e: React.FormEvent) => {
+  const resetForm = () => {
+    setShowForm(false)
+    setEditing(null)
+    setName('')
+    setPrice('')
+    setDuration('')
+    setDescription('')
+  }
+
+  const openCreate = () => {
+    setError(null)
+    setEditing(null)
+    setName('')
+    setPrice('')
+    setDuration('')
+    setDescription('')
+    setShowForm(true)
+  }
+
+  const openEdit = (service: Service) => {
+    setError(null)
+    setEditing(service)
+    setName(service.nome)
+    setPrice(Number(service.preco))
+    setDuration(service.duracao_minutos)
+    setDescription(service.descricao || '')
+    setShowForm(true)
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    setSaving(true)
+    setError(null)
     try {
-      await createService({
-        nome: name,
-        descricao: description || null,
+      const payload = {
+        nome: name.trim(),
+        descricao: description.trim() || null,
         duracao_minutos: Number(duration),
         preco: Number(price),
-      })
-      setShowForm(false)
-      setName('')
-      setPrice('')
-      setDuration('')
-      setDescription('')
+      }
+      if (editing) {
+        await updateService(editing.id, payload)
+      } else {
+        await createService(payload)
+      }
+      resetForm()
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : t('common.failedToCreate'))
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -76,6 +112,7 @@ export default function Services() {
     if (!confirm(t('services.deleteConfirm'))) return
     try {
       await deleteService(id)
+      if (editing?.id === id) resetForm()
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : t('common.failedToDelete'))
@@ -92,7 +129,7 @@ export default function Services() {
             color="gold"
             c="#0A0A0A"
             leftSection={<Plus size={16} />}
-            onClick={() => setShowForm(!showForm)}
+            onClick={() => (showForm && !editing ? resetForm() : openCreate())}
           >
             {t('services.addService')}
           </Button>
@@ -106,7 +143,10 @@ export default function Services() {
       )}
 
       {showForm && (
-        <Card withBorder padding="lg" radius="lg" component="form" onSubmit={handleCreate}>
+        <Card withBorder padding="lg" radius="lg" component="form" onSubmit={handleSubmit}>
+          <Title order={5} c="white" mb="md" style={{ fontFamily: 'Syne, DM Sans, sans-serif' }}>
+            {editing ? t('services.edit') : t('services.new')}
+          </Title>
           <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
             <TextInput
               label={t('services.serviceName')}
@@ -119,6 +159,7 @@ export default function Services() {
               label={t('common.price')}
               required
               decimalScale={2}
+              min={0}
               value={price}
               onChange={setPrice}
               styles={inputStyles}
@@ -126,6 +167,7 @@ export default function Services() {
             <NumberInput
               label={t('services.durationMinutes')}
               required
+              min={1}
               value={duration}
               onChange={setDuration}
               styles={inputStyles}
@@ -139,10 +181,10 @@ export default function Services() {
             />
           </SimpleGrid>
           <Group mt="md">
-            <Button type="submit" color="gold" c="#0A0A0A">
+            <Button type="submit" color="gold" c="#0A0A0A" loading={saving}>
               {t('services.saveService')}
             </Button>
-            <Button variant="outline" color="gray" onClick={() => setShowForm(false)}>
+            <Button variant="outline" color="gray" onClick={resetForm}>
               {t('common.cancel')}
             </Button>
           </Group>
@@ -175,7 +217,15 @@ export default function Services() {
                   <Text size="sm">{t('services.minutes', { count: service.duracao_minutos })}</Text>
                 </Group>
               </Group>
-              <Group mt="md">
+              <Group mt="md" gap="xs">
+                <ActionIcon
+                  variant="outline"
+                  color="gold"
+                  onClick={() => openEdit(service)}
+                  aria-label="Editar"
+                >
+                  <Pencil size={14} />
+                </ActionIcon>
                 <ActionIcon
                   variant="outline"
                   color="red"

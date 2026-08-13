@@ -313,7 +313,7 @@ async function startBooking(
 ): Promise<string> {
   const { data: services } = await db
     .from('servicos')
-    .select('id, nome, preco, duracao_minutos')
+    .select('id, nome, preco, duracao_minutos, ativo')
     .order('nome')
 
   const list = (services || []).filter((s: { ativo?: boolean }) => s.ativo !== false)

@@ -126,15 +126,17 @@ export async function runBarberTool(
       case 'list_services': {
         const { data, error } = await db
           .from('servicos')
-          .select('id, nome, preco, duracao_minutos')
+          .select('id, nome, preco, duracao_minutos, ativo')
           .order('nome')
         if (error) return JSON.stringify({ error: error.message })
-        const list = (data || []).map((s) => ({
-          id: s.id,
-          nome: s.nome,
-          preco: Number(s.preco),
-          duracao_minutos: s.duracao_minutos,
-        }))
+        const list = (data || [])
+          .filter((s: { ativo?: boolean }) => s.ativo !== false)
+          .map((s) => ({
+            id: s.id,
+            nome: s.nome,
+            preco: Number(s.preco),
+            duracao_minutos: s.duracao_minutos,
+          }))
         return JSON.stringify({ servicos: list })
       }
 

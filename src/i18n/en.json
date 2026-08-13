@@ -210,7 +210,7 @@
     "loading": "Carregando serviços...",
     "minutes": "{{count}} min",
     "noServices": "Nenhum serviço encontrado",
-    "deleteConfirm": "Deseja realmente excluir este serviço?",
+    "deleteConfirm": "Deseja desativar este serviço? Ele sai da lista de novos agendamentos, mas o histórico é preservado.",
     "createSuccess": "Serviço criado com sucesso",
     "updateSuccess": "Serviço atualizado com sucesso",
     "deleteSuccess": "Serviço excluído com sucesso"

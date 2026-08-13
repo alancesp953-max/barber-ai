@@ -484,28 +484,56 @@ export async function getAgendaBarbeiro(barbeiroId: string) {
 // =====================
 // Serviços
 // =====================
-export async function getServices() {
-  const { data, error } = await supabase
-    .from('servicos')
-    .select('*')
-  if (error) throw new Error(`Erro ao buscar serviços: ${error.message}`)
+export async function getServices(opts?: { includeInactive?: boolean }) {
+  let query = supabase.from('servicos').select('*').order('nome')
+  if (!opts?.includeInactive) {
+    query = query.eq('ativo', true)
+  }
+  const { data, error } = await query
+  if (error) {
+    // Fallback se a coluna ativo ainda não existir no banco
+    const fallback = await supabase.from('servicos').select('*').order('nome')
+    if (fallback.error) throw new Error(`Erro ao buscar serviços: ${error.message}`)
+    return fallback.data ?? []
+  }
   return data ?? []
 }
 
 export async function createService(service: any) {
   const { data, error } = await supabase
     .from('servicos')
-    .insert(service)
+    .insert({ ...service, ativo: true })
     .select()
     .single()
   if (error) throw new Error(`Erro ao criar serviço: ${error.message}`)
   return data
 }
 
+export async function updateService(
+  id: string,
+  service: {
+    nome?: string
+    descricao?: string | null
+    duracao_minutos?: number
+    preco?: number
+    ativo?: boolean
+  },
+) {
+  const { data, error } = await supabase
+    .from('servicos')
+    .update(service)
+    .eq('id', id)
+    .select()
+    .single()
+  if (error) throw new Error(`Erro ao atualizar serviço: ${error.message}`)
+  return data
+}
+
+/** Soft-delete: marca inativo para não quebrar agendamentos (FK). */
 export async function deleteService(id: string) {
   const { error } = await supabase
     .from('servicos')
-    .delete()
+    .update({ ativo: false })
     .eq('id', id)
   if (error) throw new Error(`Erro ao excluir serviço: ${error.message}`)
 }
