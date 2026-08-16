@@ -38,6 +38,7 @@ export default function Services() {
   const [name, setName] = useState('')
   const [price, setPrice] = useState<number | string>('')
   const [duration, setDuration] = useState<number | string>('')
+  const [buffer, setBuffer] = useState<number | string>(10)
   const [description, setDescription] = useState('')
 
   const load = async () => {
@@ -60,6 +61,7 @@ export default function Services() {
     setName('')
     setPrice('')
     setDuration('')
+    setBuffer(10)
     setDescription('')
   }
 
@@ -69,6 +71,7 @@ export default function Services() {
     setName('')
     setPrice('')
     setDuration('')
+    setBuffer(10)
     setDescription('')
     setShowForm(true)
   }
@@ -79,6 +82,7 @@ export default function Services() {
     setName(service.nome)
     setPrice(Number(service.preco))
     setDuration(service.duracao_minutos)
+    setBuffer(Number((service as any).buffer_minutos ?? 10))
     setDescription(service.descricao || '')
     setShowForm(true)
   }
@@ -92,6 +96,7 @@ export default function Services() {
         nome: name.trim(),
         descricao: description.trim() || null,
         duracao_minutos: Number(duration),
+        buffer_minutos: Number(buffer) || 10,
         preco: Number(price),
       }
       if (editing) {
@@ -170,6 +175,15 @@ export default function Services() {
               min={1}
               value={duration}
               onChange={setDuration}
+              styles={inputStyles}
+            />
+            <NumberInput
+              label="Intervalo / buffer (min)"
+              description="Margem após o serviço (ex.: 10 → 40min de serviço libera às 15:50 se começou 15:00)"
+              min={0}
+              max={60}
+              value={buffer}
+              onChange={setBuffer}
               styles={inputStyles}
             />
             <Textarea

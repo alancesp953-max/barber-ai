@@ -1,5 +1,5 @@
 /**
- * Slot availability helpers (Brazil timezone + rodízio + recheck before booking)
+ * Slot availability helpers (Brazil timezone + rodízio + reserva atômica)
  */
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1'
 import { formatDateBR } from './db.ts'
@@ -87,6 +87,7 @@ export async function listBarbersForRotation(
 
 /**
  * Após atribuição automática: move o barbeiro para o fim da fila.
+ * Preferir create_appointment_atomic (já rotaciona). Mantido para compat.
  */
 export async function rotateBarberQueue(db: SupabaseClient, barbeiroId: string): Promise<void> {
   if (!barbeiroId) return
@@ -95,13 +96,68 @@ export async function rotateBarberQueue(db: SupabaseClient, barbeiroId: string):
   const others = list.filter((b) => b.id !== barbeiroId)
   const rotated = [...others, ...list.filter((b) => b.id === barbeiroId)]
   for (let i = 0; i < rotated.length; i++) {
+    await db.from('barbeiros').update({ ordem_rodizio: i + 1 + 10000 }).eq('id', rotated[i].id)
+  }
+  for (let i = 0; i < rotated.length; i++) {
     await db.from('barbeiros').update({ ordem_rodizio: i + 1 }).eq('id', rotated[i].id)
+  }
+}
+
+export type AtomicBookingResult =
+  | {
+      ok: true
+      id: string
+      barbeiro_id: string | null
+      barbeiro_nome: string | null
+      from_rotation: boolean
+      horario: string
+      data: string
+    }
+  | { ok: false; error: string }
+
+/** Reserva atômica no banco (rodízio + buffer + conflitos). */
+export async function createAppointmentAtomic(
+  db: SupabaseClient,
+  opts: {
+    clienteId: string
+    servicoId: string
+    data: string
+    horario: string
+    barbeiroId?: string | null
+    status?: string
+    valor?: number | null
+    useRotation?: boolean
+  },
+): Promise<AtomicBookingResult> {
+  const horario = normalizeHorario(opts.horario)
+  const { data, error } = await db.rpc('create_appointment_atomic', {
+    p_cliente_id: opts.clienteId,
+    p_servico_id: opts.servicoId,
+    p_data: opts.data,
+    p_horario: horario.length === 5 ? `${horario}:00` : horario,
+    p_barbeiro_id: opts.barbeiroId || null,
+    p_status: opts.status || 'pendente',
+    p_valor: opts.valor ?? null,
+    p_use_rotation: opts.useRotation !== false,
+  })
+  if (error) return { ok: false, error: error.message }
+  const row = data as Record<string, unknown>
+  if (!row?.ok) {
+    return { ok: false, error: String(row?.error || 'Falha ao reservar horário') }
+  }
+  return {
+    ok: true,
+    id: String(row.id),
+    barbeiro_id: (row.barbeiro_id as string) || null,
+    barbeiro_nome: (row.barbeiro_nome as string) || null,
+    from_rotation: Boolean(row.from_rotation),
+    horario: String(row.horario || horario),
+    data: String(row.data || opts.data),
   }
 }
 
 /**
  * True if horario is free for the given barber (or any free barber when barbeiroId is null).
- * Returns which barber to assign when "any" was requested (rodízio).
  */
 export async function checkSlotAvailability(
   db: SupabaseClient,
@@ -136,15 +192,13 @@ export async function checkSlotAvailability(
   if (opts.barbeiroId) {
     const { slots, error } = await fetchAvailableSlots(db, data, opts.servicoId, opts.barbeiroId)
     if (error) {
-      const free = await isBarberFreeAt(db, data, opts.servicoId, opts.barbeiroId, horario)
-      if (!free) {
-        const nome = opts.barbeiroNome || 'Esse barbeiro'
-        return {
-          ok: false,
-          message: `*${nome}* não tem o horário *${horario}* disponível em ${formatDateBR(data)} (já está ocupado). Escolha outro horário ou barbeiro.`,
-        }
+      return {
+        ok: false,
+        message:
+          'Não consegui consultar a agenda agora. Tenta de novo em instantes, por favor.',
       }
-    } else if (!slots.includes(horario)) {
+    }
+    if (!slots.includes(horario)) {
       const nome = opts.barbeiroNome || 'Esse barbeiro'
       return {
         ok: false,
@@ -159,9 +213,15 @@ export async function checkSlotAvailability(
     }
   }
 
-  // Qualquer barbeiro: topo da fila de rodízio que estiver livre
   if (!list.length) {
-    const { slots } = await fetchAvailableSlots(db, data, opts.servicoId, null)
+    const { slots, error } = await fetchAvailableSlots(db, data, opts.servicoId, null)
+    if (error) {
+      return {
+        ok: false,
+        message:
+          'Não consegui consultar a agenda agora. Tenta de novo em instantes, por favor.',
+      }
+    }
     if (!slots.includes(horario)) {
       return {
         ok: false,
@@ -172,7 +232,8 @@ export async function checkSlotAvailability(
   }
 
   for (const b of list) {
-    const { slots } = await fetchAvailableSlots(db, data, opts.servicoId, b.id)
+    const { slots, error } = await fetchAvailableSlots(db, data, opts.servicoId, b.id)
+    if (error) continue
     if (slots.includes(horario)) {
       return { ok: true, barbeiro_id: b.id, barbeiro_nome: b.nome, from_rotation: true }
     }
@@ -182,51 +243,4 @@ export async function checkSlotAvailability(
     ok: false,
     message: `Nenhum barbeiro tem o horário *${horario}* livre em ${formatDateBR(data)}. Escolha outro horário.`,
   }
-}
-
-async function isBarberFreeAt(
-  db: SupabaseClient,
-  data: string,
-  servicoId: string,
-  barbeiroId: string,
-  horario: string,
-): Promise<boolean> {
-  const { data: svc } = await db.from('servicos').select('duracao_minutos').eq('id', servicoId).maybeSingle()
-  const dur = Number(svc?.duracao_minutos) || 30
-  const [hh, mm] = horario.split(':').map(Number)
-  const startMin = hh * 60 + mm
-  const endMin = startMin + dur
-
-  const { data: busy } = await db
-    .from('agendamentos')
-    .select('horario, barbeiro_id, servicos(duracao_minutos)')
-    .eq('data', data)
-    .in('status', ['pendente', 'confirmado'])
-
-  for (const a of busy || []) {
-    if (a.barbeiro_id && a.barbeiro_id !== barbeiroId) continue
-    const ah = String(a.horario).slice(0, 5)
-    const [ahH, ahM] = ah.split(':').map(Number)
-    const aStart = ahH * 60 + ahM
-    const aServ = Array.isArray(a.servicos) ? a.servicos[0] : a.servicos
-    const aDur = Number(aServ?.duracao_minutos) || 30
-    const aEnd = aStart + aDur
-    if (aStart < endMin && aEnd > startMin) return false
-  }
-
-  // Bloqueios do barbeiro
-  const startIso = `${data}T${horario}:00-03:00`
-  const endH = Math.floor(endMin / 60)
-  const endM = endMin % 60
-  const endIso = `${data}T${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}:00-03:00`
-  const { data: blocks } = await db
-    .from('barbeiro_bloqueios')
-    .select('id')
-    .eq('barbeiro_id', barbeiroId)
-    .lt('inicio', endIso)
-    .gt('fim', startIso)
-    .limit(1)
-  if (blocks && blocks.length > 0) return false
-
-  return true
 }

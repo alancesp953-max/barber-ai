@@ -21,6 +21,7 @@ import { Route as AdminUsuariosRouteImport } from './routes/admin/usuarios'
 import { Route as AdminServicesRouteImport } from './routes/admin/services'
 import { Route as AdminRelatoriosRouteImport } from './routes/admin/relatorios'
 import { Route as AdminProdutosRouteImport } from './routes/admin/produtos'
+import { Route as AdminMarketingRouteImport } from './routes/admin/marketing'
 import { Route as AdminFinanceiroRouteImport } from './routes/admin/financeiro'
 import { Route as AdminDashboardRouteImport } from './routes/admin/dashboard'
 import { Route as AdminConfiguracoesRouteImport } from './routes/admin/configuracoes'
@@ -88,6 +89,11 @@ const AdminProdutosRoute = AdminProdutosRouteImport.update({
   path: '/produtos',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminMarketingRoute = AdminMarketingRouteImport.update({
+  id: '/marketing',
+  path: '/marketing',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminFinanceiroRoute = AdminFinanceiroRouteImport.update({
   id: '/financeiro',
   path: '/financeiro',
@@ -131,6 +137,7 @@ export interface FileRoutesByFullPath {
   '/admin/configuracoes': typeof AdminConfiguracoesRoute
   '/admin/dashboard': typeof AdminDashboardRoute
   '/admin/financeiro': typeof AdminFinanceiroRoute
+  '/admin/marketing': typeof AdminMarketingRoute
   '/admin/produtos': typeof AdminProdutosRoute
   '/admin/relatorios': typeof AdminRelatoriosRoute
   '/admin/services': typeof AdminServicesRoute
@@ -151,6 +158,7 @@ export interface FileRoutesByTo {
   '/admin/configuracoes': typeof AdminConfiguracoesRoute
   '/admin/dashboard': typeof AdminDashboardRoute
   '/admin/financeiro': typeof AdminFinanceiroRoute
+  '/admin/marketing': typeof AdminMarketingRoute
   '/admin/produtos': typeof AdminProdutosRoute
   '/admin/relatorios': typeof AdminRelatoriosRoute
   '/admin/services': typeof AdminServicesRoute
@@ -172,6 +180,7 @@ export interface FileRoutesById {
   '/admin/configuracoes': typeof AdminConfiguracoesRoute
   '/admin/dashboard': typeof AdminDashboardRoute
   '/admin/financeiro': typeof AdminFinanceiroRoute
+  '/admin/marketing': typeof AdminMarketingRoute
   '/admin/produtos': typeof AdminProdutosRoute
   '/admin/relatorios': typeof AdminRelatoriosRoute
   '/admin/services': typeof AdminServicesRoute
@@ -194,6 +203,7 @@ export interface FileRouteTypes {
     | '/admin/configuracoes'
     | '/admin/dashboard'
     | '/admin/financeiro'
+    | '/admin/marketing'
     | '/admin/produtos'
     | '/admin/relatorios'
     | '/admin/services'
@@ -214,6 +224,7 @@ export interface FileRouteTypes {
     | '/admin/configuracoes'
     | '/admin/dashboard'
     | '/admin/financeiro'
+    | '/admin/marketing'
     | '/admin/produtos'
     | '/admin/relatorios'
     | '/admin/services'
@@ -234,6 +245,7 @@ export interface FileRouteTypes {
     | '/admin/configuracoes'
     | '/admin/dashboard'
     | '/admin/financeiro'
+    | '/admin/marketing'
     | '/admin/produtos'
     | '/admin/relatorios'
     | '/admin/services'
@@ -337,6 +349,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminProdutosRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/marketing': {
+      id: '/admin/marketing'
+      path: '/marketing'
+      fullPath: '/admin/marketing'
+      preLoaderRoute: typeof AdminMarketingRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/financeiro': {
       id: '/admin/financeiro'
       path: '/financeiro'
@@ -389,6 +408,7 @@ interface AdminRouteChildren {
   AdminConfiguracoesRoute: typeof AdminConfiguracoesRoute
   AdminDashboardRoute: typeof AdminDashboardRoute
   AdminFinanceiroRoute: typeof AdminFinanceiroRoute
+  AdminMarketingRoute: typeof AdminMarketingRoute
   AdminProdutosRoute: typeof AdminProdutosRoute
   AdminRelatoriosRoute: typeof AdminRelatoriosRoute
   AdminServicesRoute: typeof AdminServicesRoute
@@ -402,6 +422,7 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminConfiguracoesRoute: AdminConfiguracoesRoute,
   AdminDashboardRoute: AdminDashboardRoute,
   AdminFinanceiroRoute: AdminFinanceiroRoute,
+  AdminMarketingRoute: AdminMarketingRoute,
   AdminProdutosRoute: AdminProdutosRoute,
   AdminRelatoriosRoute: AdminRelatoriosRoute,
   AdminServicesRoute: AdminServicesRoute,

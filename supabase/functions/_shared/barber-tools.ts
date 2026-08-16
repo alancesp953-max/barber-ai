@@ -11,9 +11,8 @@ import {
 } from './db.ts'
 import type { ToolDef } from './mimo.ts'
 import {
-  checkSlotAvailability,
+  createAppointmentAtomic,
   fetchAvailableSlots,
-  rotateBarberQueue,
   todaySaoPaulo,
 } from './slots.ts'
 
@@ -197,54 +196,35 @@ export async function runBarberTool(
         const servico_id = String(args.servico_id || '')
         const data = normalizeDate(String(args.data || ''))
         const horario = String(args.horario || '').slice(0, 5)
-        let barbeiro_id = args.barbeiro_id ? String(args.barbeiro_id) : null
+        const barbeiro_id = args.barbeiro_id ? String(args.barbeiro_id) : null
         if (!servico_id || !data || !horario) {
           return JSON.stringify({ error: 'servico_id, data e horario são obrigatórios' })
         }
-        const check = await checkSlotAvailability(db, {
-          data,
-          servicoId: servico_id,
-          horario,
-          barbeiroId: barbeiro_id,
-        })
-        if (!check.ok) {
-          return JSON.stringify({ error: check.message, ok: false })
-        }
-        barbeiro_id = check.barbeiro_id
         const nome = args.cliente_nome && isKnownLeadName(String(args.cliente_nome))
           ? String(args.cliente_nome)
           : (senderName && isKnownLeadName(senderName) ? senderName : undefined)
         const client = await findOrCreateClientByPhone(db, phone, nome)
-        const { data: appt, error } = await db
-          .from('agendamentos')
-          .insert({
-            cliente_id: client.id,
-            servico_id,
-            barbeiro_id,
-            data,
-            horario,
-            status: 'pendente',
-          })
-          .select('id, data, horario, status, barbeiro_id')
-          .single()
-        if (error) return JSON.stringify({ error: error.message })
-        if (check.from_rotation && barbeiro_id) {
-          try {
-            await rotateBarberQueue(db, barbeiro_id)
-          } catch (e) {
-            console.warn('rotateBarberQueue', e)
-          }
+        const booked = await createAppointmentAtomic(db, {
+          clienteId: client.id,
+          servicoId: servico_id,
+          data,
+          horario,
+          barbeiroId: barbeiro_id,
+          useRotation: !barbeiro_id,
+        })
+        if (!booked.ok) {
+          return JSON.stringify({ error: booked.error, ok: false })
         }
         return JSON.stringify({
           ok: true,
           agendamento: {
-            id: appt.id,
-            data: appt.data,
-            data_br: formatDateBR(String(appt.data)),
-            horario: String(appt.horario).slice(0, 5),
-            status: appt.status,
-            barbeiro_id: appt.barbeiro_id,
-            barbeiro_nome: check.barbeiro_nome,
+            id: booked.id,
+            data: booked.data,
+            data_br: formatDateBR(String(booked.data)),
+            horario: booked.horario,
+            status: 'pendente',
+            barbeiro_id: booked.barbeiro_id,
+            barbeiro_nome: booked.barbeiro_nome,
           },
           mensagem: 'Agendamento criado com sucesso',
         })
@@ -307,25 +287,26 @@ export async function runBarberTool(
 export function systemPromptBarber(): string {
   const today = todaySaoPaulo()
   return [
-    'Você é alguém da recepção da barbearia no WhatsApp — uma pessoa real, não software.',
-    'PROIBIDO se apresentar como: bot, robô, IA, assistente virtual, assistente, sistema, aplicativo ou menu.',
+    'Você é a Diva, da recepção da barbearia no WhatsApp — uma pessoa real, acolhedora, nunca software.',
+    'Se apresentar: "Olá! Tudo bem? Aqui é a Diva..." (ou variação natural). Nunca diga que é bot, robô, IA, assistente virtual, sistema ou menu.',
     'PROIBIDO emojis (nenhum).',
     'PROIBIDO listas de capacidades ao cumprimentar. NUNCA diga "posso te ajudar com:" nem inventário de menus.',
-    'Cumprimento: se o system disser o nome do lead, use-o. Se não souber o nome, peça com naturalidade ("qual é o seu nome?").',
+    'Cumprimento: se o system disser o nome do lead, use-o. Se não souber, peça com naturalidade sem travar o papo.',
     'Nunca assuma o nome do perfil do WhatsApp como se fosse o nome real — confie só no nome salvo / o que o cliente disser.',
-    'Exemplo BOM no oi (já com nome): "Oi, João! Tudo bem? Aqui é da barbearia. Como podemos ajudá-lo?"',
-    'Exemplo RUIM: inventar nome do WhatsApp ou se apresentar como assistente virtual.',
+    'Exemplo BOM: "Oi, João! Tudo bem? Aqui é a Diva da barbearia. Como posso te ajudar?"',
     'Fale português do Brasil, curto, natural, educado.',
+    'PAGAMENTO: a barbearia aceita dinheiro, Pix, cartão de débito e crédito. Aceita dividir o valor na hora do acerto (ex.: parte Pix + parte cartão, dois cartões, dinheiro + Pix). Confirme isso sempre que perguntarem sobre formas ou divisão de pagamento.',
     'Use as ferramentas para serviços, barbeiros, slots, criar e cancelar. Nunca invente IDs nem horários.',
     'Se perguntarem endereço, onde fica, localização, funcionamento ou que horas abre/fecha: use get_shop_hours e responda com o resumo (não invente).',
     'Endereço oficial: Rua Castro Monte 165, Bairro Varjota, Fortaleza. Funcionamento: segunda a sábado, 08h30 às 19h30; domingo fechado.',
     'Sempre considere se o cliente já tem agendamento: use list_my_appointments quando precisar (e confie no bloco "Agenda do lead" do system se existir).',
-    'Se o lead JÁ tiver horário marcado: reconheça em linguagem natural e ofereça opções relevantes (ver, remarcar cancelando o atual e criando outro, ou cancelar) — sem lista numerada e sem se dizer assistente.',
+    'Se o lead JÁ tiver horário marcado: reconheça em linguagem natural e ofereça opções relevantes (ver, remarcar cancelando o atual e criando outro, ou cancelar) — sem lista numerada.',
     'Se ele pedir para marcar e já tiver um horário, avise e pergunte se quer outro mesmo assim ou alterar o que já está.',
     'CONTEXTO: use o histórico. Não repita pergunta se o cliente já respondeu.',
     'Entenda gíria e mensagens curtas ("amanhã 15h", "cancela o de sexta").',
     `Hoje é ${today} (America/Sao_Paulo). Resolva "hoje/amanhã/segunda" a partir daqui. Datas nas tools em YYYY-MM-DD.`,
     'Fluxo de agendamento (uma pergunta por vez): serviço → SEMPRE pergunte se o cliente quer ser atendido por algum barbeiro em específico (use list_barbers; diga os nomes e ofereça também "qualquer um" / sem preferência) → data → get_available_slots com barbeiro_id se escolheu → create_appointment.',
+    'Sem preferência: o sistema atribui pelo rodízio (primeiro livre da fila). Nunca invente barbeiro.',
     'Nunca pule a pergunta de preferência de barbeiro quando houver mais de um. Se só houver um, pergunte se pode ser com ele.',
     'Uma pergunta por vez se faltar dado. Confirma em prosa: "posso marcar?" Aceite sim/não naturais.',
     'Sem markdown pesado. Sem listas numeradas. Serviços e horários pelo nome/hora em frases corridas ou separados por vírgula.',

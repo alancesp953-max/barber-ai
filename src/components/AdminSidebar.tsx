@@ -10,6 +10,7 @@ import {
   IconPercentage,
   IconScissors,
   IconSettings,
+  IconSpeakerphone,
   IconUserPlus,
   IconUsers,
 } from '@tabler/icons-react'
@@ -26,6 +27,7 @@ const navItems = [
   { to: '/admin/usuarios', label: 'Usuários', icon: IconUserPlus },
   { to: '/admin/financeiro', label: 'Financeiro', icon: IconCash },
   { to: '/admin/comissoes', label: 'Comissões', icon: IconPercentage },
+  { to: '/admin/marketing', label: 'Marketing', icon: IconSpeakerphone },
   { to: '/admin/relatorios', labelKey: 'nav.reports', icon: IconChartBar },
   { to: '/admin/configuracoes', label: 'Configurações', icon: IconSettings },
 ] as const

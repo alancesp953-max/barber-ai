@@ -114,6 +114,13 @@ export async function setBarberQueueOrder(orderedIds: string[]): Promise<void> {
   for (let i = 0; i < orderedIds.length; i++) {
     const { error } = await supabase
       .from('barbeiros')
+      .update({ ordem_rodizio: i + 1 + 10000 })
+      .eq('id', orderedIds[i])
+    if (error) throw new Error(`Erro ao salvar fila: ${error.message}`)
+  }
+  for (let i = 0; i < orderedIds.length; i++) {
+    const { error } = await supabase
+      .from('barbeiros')
       .update({ ordem_rodizio: i + 1 })
       .eq('id', orderedIds[i])
     if (error) throw new Error(`Erro ao salvar fila: ${error.message}`)
@@ -273,91 +280,32 @@ export async function getAppointments() {
 }
 
 export async function createAppointment(appointment: any) {
-  let payload = { ...appointment }
-  let fromRotation = false
-
-  // Sem barbeiro: atribui pelo rodízio (primeiro livre na fila)
-  if (!payload.barbeiro_id && payload.servico_id && payload.data && payload.horario) {
-    const assigned = await assignBarberFromRotation({
-      data: payload.data,
-      horario: String(payload.horario).slice(0, 5),
-      servicoId: payload.servico_id,
-    })
-    if (assigned) {
-      payload.barbeiro_id = assigned.id
-      fromRotation = true
-    }
+  const payload = { ...appointment }
+  if (!payload.cliente_id || !payload.servico_id || !payload.data || !payload.horario) {
+    throw new Error('cliente_id, servico_id, data e horario são obrigatórios')
   }
 
-  // Preenche valor do serviço se não veio
-  if (payload.valor == null && payload.servico_id) {
-    const { data: svc } = await supabase
-      .from('servicos')
-      .select('preco')
-      .eq('id', payload.servico_id)
-      .maybeSingle()
-    if (svc?.preco != null) payload.valor = Number(svc.preco)
-  }
-
-  const { data, error } = await supabase
-    .from('agendamentos')
-    .insert(payload)
-    .select('*, barbeiros(nome), servicos(nome), clientes(nome, telefone)')
-    .single()
+  const useRotation = !payload.barbeiro_id
+  const { data: rpc, error } = await supabase.rpc('create_appointment_atomic', {
+    p_cliente_id: payload.cliente_id,
+    p_servico_id: payload.servico_id,
+    p_data: payload.data,
+    p_horario: String(payload.horario).slice(0, 5) + ':00',
+    p_barbeiro_id: payload.barbeiro_id || null,
+    p_status: payload.status || 'pendente',
+    p_valor: payload.valor ?? null,
+    p_use_rotation: useRotation,
+  })
   if (error) throw new Error(`Erro ao criar agendamento: ${error.message}`)
+  if (!rpc?.ok) throw new Error(String(rpc?.error || 'Falha ao reservar horário'))
 
-  if (fromRotation && payload.barbeiro_id) {
-    try {
-      await rotateBarberQueueClient(payload.barbeiro_id)
-    } catch (e) {
-      console.warn('rotateBarberQueueClient', e)
-    }
-  }
-
+  const { data, error: errGet } = await supabase
+    .from('agendamentos')
+    .select('*, barbeiros(nome), servicos(nome), clientes(nome, telefone)')
+    .eq('id', rpc.id)
+    .single()
+  if (errGet) throw new Error(`Agendamento criado, mas falhou ao carregar: ${errGet.message}`)
   return data
-}
-
-/** Atribui o barbeiro no topo da fila que estiver livre no horário. */
-async function assignBarberFromRotation(opts: {
-  data: string
-  horario: string
-  servicoId: string
-}): Promise<{ id: string; nome: string } | null> {
-  const { data: barbers } = await supabase
-    .from('barbeiros')
-    .select('id, nome, ordem_rodizio, ativo')
-    .order('ordem_rodizio', { ascending: true })
-    .order('nome', { ascending: true })
-
-  const list = (barbers || []).filter((b: any) => b.ativo !== false)
-  for (const b of list) {
-    const { data: slots, error } = await supabase.rpc('get_available_slots', {
-      p_data: opts.data,
-      p_servico_id: opts.servicoId,
-      p_barbeiro_id: b.id,
-    })
-    if (error) continue
-    const horarios = ((slots as { horario: string }[]) || []).map((s) => String(s.horario).slice(0, 5))
-    if (horarios.includes(opts.horario)) {
-      return { id: b.id, nome: b.nome }
-    }
-  }
-  return null
-}
-
-async function rotateBarberQueueClient(barbeiroId: string) {
-  const { data: barbers } = await supabase
-    .from('barbeiros')
-    .select('id, ordem_rodizio, ativo')
-    .order('ordem_rodizio', { ascending: true })
-    .order('nome', { ascending: true })
-  const list = (barbers || []).filter((b: any) => b.ativo !== false)
-  if (list.length <= 1) return
-  const others = list.filter((b: any) => b.id !== barbeiroId)
-  const rotated = [...others, ...list.filter((b: any) => b.id === barbeiroId)]
-  for (let i = 0; i < rotated.length; i++) {
-    await supabase.from('barbeiros').update({ ordem_rodizio: i + 1 }).eq('id', rotated[i].id)
-  }
 }
 
 /** Envia confirmação via Edge Function whatsapp-send (UAZAPI). Falhas não bloqueiam o fluxo. */
@@ -580,6 +528,7 @@ export async function updateService(
     nome?: string
     descricao?: string | null
     duracao_minutos?: number
+    buffer_minutos?: number
     preco?: number
     ativo?: boolean
   },
@@ -697,6 +646,52 @@ export async function runCrmDispatch(): Promise<{
     aniversario: data?.aniversario ?? 0,
     skipped: data?.skipped ?? 0,
     erros: data?.erros ?? [],
+  }
+}
+
+export type CampaignRow = {
+  id: string
+  mensagem: string
+  total_destinatarios: number
+  total_enviados: number
+  total_erros: number
+  status: string
+  created_at?: string
+  finished_at?: string | null
+}
+
+export async function getCampaigns(): Promise<CampaignRow[]> {
+  const { data, error } = await supabase
+    .from('campanhas')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(50)
+  if (error) throw new Error(`Erro ao buscar campanhas: ${error.message}`)
+  return (data as CampaignRow[]) ?? []
+}
+
+export async function sendWhatsAppCampaign(opts: {
+  mensagem: string
+  cliente_ids: string[]
+}): Promise<{
+  ok: boolean
+  enviados?: number
+  erros?: number
+  total?: number
+  campanha_id?: string
+  error?: string
+}> {
+  const { data, error } = await supabase.functions.invoke('whatsapp-campaign', {
+    body: opts,
+  })
+  if (error) return { ok: false, error: error.message }
+  if (data?.error) return { ok: false, error: String(data.error) }
+  return {
+    ok: true,
+    enviados: data?.enviados ?? 0,
+    erros: data?.erros ?? 0,
+    total: data?.total ?? 0,
+    campanha_id: data?.campanha_id,
   }
 }
 

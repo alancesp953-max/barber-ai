@@ -38,9 +38,9 @@ import { loadMimoConfig, mimoChat, type ChatMessage } from '../_shared/mimo.ts'
 import { resolveUazConfig } from '../_shared/resolve-uaz.ts'
 import {
   checkSlotAvailability,
+  createAppointmentAtomic,
   fetchAvailableSlots,
   filterPastSlots,
-  rotateBarberQueue,
   todaySaoPaulo,
 } from '../_shared/slots.ts'
 import { humanReply, normalizePhone, sendPresence } from '../_shared/uazapi.ts'
@@ -317,13 +317,12 @@ async function handleRateScore(
     origem: 'whatsapp',
   })
 
-  await resetSession(db, phone)
-
   const name =
     leadName && isKnownLeadName(leadName) ? leadName.trim().split(/\s+/)[0] : null
   const barberName = String(context.barbeiro_nome || 'barbeiro')
 
   if (!result.ok) {
+    await resetSession(db, phone)
     if (result.error === 'Já avaliado') {
       return name
         ? `Essa visita já tinha nota, ${name}. Valeu demais!`
@@ -333,12 +332,62 @@ async function handleRateScore(
     return 'Não consegui salvar agora, mas obrigado pelo feedback!'
   }
 
-  const thanks =
-    nota >= 4
-      ? `Nota *${nota}* registrada — o ${barberName} vai ficar feliz.`
-      : `Anotei a nota *${nota}*. Obrigado pela sinceridade, ajuda a gente a melhorar.`
+  if (nota <= 2) {
+    await saveSession(db, phone, 'rate_comment', {
+      ...context,
+      nota,
+      mode: 'rating',
+    })
+    return name
+      ? `Poxa, ${name}, sinto muito por isso. O que você não gostou especificamente pra gente melhorar?`
+      : 'Poxa, sinto muito por isso. O que você não gostou especificamente pra gente melhorar?'
+  }
 
-  return name ? `${name}, ${thanks}\n\nQualquer coisa, tô por aqui.` : `${thanks}\n\nQualquer coisa, tô por aqui.`
+  if (nota === 3) {
+    await saveSession(db, phone, 'rate_comment', {
+      ...context,
+      nota,
+      mode: 'rating',
+    })
+    return 'Obrigada pela nota. Tem alguma sugestão pra gente melhorar o atendimento?'
+  }
+
+  await resetSession(db, phone)
+  const thanks = name
+    ? `Que maravilha que você gostou, ${name}!`
+    : 'Que maravilha que você gostou!'
+  return [
+    thanks,
+    `Na próxima vez, se quiser, já agendamos direto com o *${barberName}* pra manter o padrão do seu corte.`,
+    '',
+    'Qualquer coisa, tô por aqui.',
+  ].join('\n')
+}
+
+async function handleRateComment(
+  db: ReturnType<typeof getServiceClient>,
+  phone: string,
+  text: string,
+  context: Record<string, unknown>,
+  leadName?: string | null,
+): Promise<string> {
+  const comentario = text.trim().slice(0, 800)
+  const agendamentoId = String(context.agendamento_id || '')
+  if (agendamentoId && comentario) {
+    await db.from('avaliacoes').update({ comentario }).eq('agendamento_id', agendamentoId)
+  }
+  await resetSession(db, phone)
+  const name =
+    leadName && isKnownLeadName(leadName) ? leadName.trim().split(/\s+/)[0] : null
+  const nota = Number(context.nota || 0)
+  if (nota <= 2) {
+    return name
+      ? `Obrigada por contar, ${name}. Vou levar isso pra equipe. Qualquer coisa, me chama.`
+      : 'Obrigada por contar. Vou levar isso pra equipe. Qualquer coisa, me chama.'
+  }
+  return name
+    ? `Anotei, ${name}. Valeu demais pelo retorno!`
+    : 'Anotei. Valeu demais pelo retorno!'
 }
 
 // ─── Flow handlers (só se a IA estiver indisponível) ─────────────────────────
@@ -727,23 +776,10 @@ async function handleChooseDate(
   const { slots: list, error } = await fetchAvailableSlots(db, data, servico_id, barbeiro_id)
 
   if (error) {
-    const fallback = filterPastSlots(data, await fallbackSlots(db, data, barbeiro_id))
-    if (!fallback.length) {
-      return [
-        `Sem horários livres em *${formatDateBR(data)}*`,
-        barbeiro_id && context.barbeiro_nome
-          ? `(com *${context.barbeiro_nome}*)`
-          : '',
-        '',
-        'Quer tentar *outra data*?',
-      ].filter(Boolean).join('\n')
-    }
-    await saveSession(db, phone, 'choose_time', {
-      ...context,
-      data,
-      slots: fallback,
-    })
-    return formatSlotList(data, fallback, context.barbeiro_nome as string | undefined)
+    return [
+      'Não consegui consultar a agenda agora.',
+      'Tenta de novo em instantes, ou me passa *outra data*.',
+    ].join('\n')
   }
 
   if (!list.length) {
@@ -763,30 +799,6 @@ async function handleChooseDate(
   })
 
   return formatSlotList(data, list, context.barbeiro_nome as string | undefined)
-}
-
-async function fallbackSlots(
-  db: ReturnType<typeof getServiceClient>,
-  data: string,
-  barbeiroId?: string | null,
-): Promise<string[]> {
-  const slotHours = [
-    '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
-    '14:00', '14:30', '15:00', '15:30', '16:00', '16:30', '17:00', '17:30',
-  ]
-  let q = db
-    .from('agendamentos')
-    .select('horario, barbeiro_id')
-    .eq('data', data)
-    .in('status', ['pendente', 'confirmado'])
-  const { data: busy } = await q
-
-  const taken = new Set<string>()
-  for (const b of busy || []) {
-    if (barbeiroId && b.barbeiro_id && b.barbeiro_id !== barbeiroId) continue
-    taken.add(String(b.horario).slice(0, 5))
-  }
-  return slotHours.filter((h) => !taken.has(h))
 }
 
 function formatSlotList(data: string, slots: string[], barbeiroNome?: string): string {
@@ -951,43 +963,29 @@ async function handleConfirm(
 
   const client = await findOrCreateClientByPhone(db, phone, senderName)
 
-  const payload = {
-    cliente_id: client.id,
-    servico_id: context.servico_id as string,
-    barbeiro_id: check.barbeiro_id,
-    data: context.data as string,
-    horario: context.horario as string,
-    status: 'pendente',
-  }
-
-  const { data: appt, error } = await db
-    .from('agendamentos')
-    .insert(payload)
-    .select('id')
-    .single()
-
-  if (!error && (context.from_rotation || check.from_rotation) && check.barbeiro_id) {
-    try {
-      await rotateBarberQueue(db, check.barbeiro_id)
-    } catch (e) {
-      console.warn('rotateBarberQueue', e)
-    }
-  }
+  const booked = await createAppointmentAtomic(db, {
+    clienteId: client.id,
+    servicoId: String(context.servico_id),
+    data: String(context.data),
+    horario: String(context.horario),
+    barbeiroId: check.barbeiro_id,
+    useRotation: Boolean(check.from_rotation || context.from_rotation),
+  })
 
   await resetSession(db, phone)
 
-  if (error) {
-    return `Não deu pra agendar: ${error.message}\n\n` + aftercareText()
+  if (!booked.ok) {
+    return `Não deu pra agendar: ${booked.error}\n\n` + aftercareText()
   }
 
   return [
     '✅ *Agendamento confirmado!*',
     '',
     `Serviço: ${context.servico_nome}`,
-    `Barbeiro: ${check.barbeiro_nome || context.barbeiro_nome || 'A definir'}`,
+    `Barbeiro: ${booked.barbeiro_nome || check.barbeiro_nome || context.barbeiro_nome || 'A definir'}`,
     `Data: ${formatDateBR(String(context.data))}`,
-    `Horário: ${String(context.horario).slice(0, 5)}`,
-    `Cód: ${String(appt?.id || '').slice(0, 8)}`,
+    `Horário: ${booked.horario}`,
+    `Cód: ${String(booked.id || '').slice(0, 8)}`,
     '',
     aftercareText(),
   ].join('\n')
@@ -1148,46 +1146,40 @@ async function processMessage(
   const session = await getSession(db, phone)
   const shop = await fetchShopName(db)
 
-  // ── Lead ainda não informou o nome ────────────────────────────────────────
-  if (session.step === 'ask_name' || !leadName) {
-    // Já está responder o nome
-    if (session.step === 'ask_name' && trimmed && isPlausiblePersonName(trimmed)) {
-      try {
-        leadName = await saveLeadName(db, phone, trimmed)
-      } catch (e) {
-        console.error('saveLeadName', e)
-        return 'Não consegui salvar o nome. Pode digitar de novo só o nome?'
-      }
-      let appts: Awaited<ReturnType<typeof fetchUpcomingAppointments>> = []
-      try {
-        appts = await fetchUpcomingAppointments(db, phone)
-      } catch {
-        /* ignore */
-      }
-      const hi = afterNameGreeting(leadName, shop, appts)
-      await saveSession(db, phone, 'chat', {
-        history: [
-          { role: 'user', content: trimmed },
-          { role: 'assistant', content: hi },
-        ],
-        mode: 'mimo',
-        lead_name: leadName,
-      })
-      return hi
-    }
+  // ── Captura de contato + nome (não bloqueia a conversa) ────────────────────
+  await findOrCreateClientByPhone(db, phone).catch(() => null)
+  leadName = await getLeadDisplayName(db, phone)
 
-    // Ainda sem nome válido: pede
-    if (!leadName) {
-      // se mandou cumprimento + já vamos pedir nome
-      if (session.step === 'ask_name' && trimmed && !isPlausiblePersonName(trimmed) && !isGreetingOnly(trimmed)) {
-        return 'Pode me falar só o seu *nome*? Assim te chamo direito nas próximas conversas.'
-      }
-      const ask = askNameText(shop)
-      await saveSession(db, phone, 'ask_name', {
-        mode: 'mimo',
-        awaiting_name: true,
-      })
-      return ask
+  if (session.step === 'ask_name' && trimmed && isPlausiblePersonName(trimmed)) {
+    try {
+      leadName = await saveLeadName(db, phone, trimmed)
+    } catch (e) {
+      console.error('saveLeadName', e)
+    }
+    let appts: Awaited<ReturnType<typeof fetchUpcomingAppointments>> = []
+    try {
+      appts = await fetchUpcomingAppointments(db, phone)
+    } catch {
+      /* ignore */
+    }
+    const hi = afterNameGreeting(leadName, shop, appts)
+    await saveSession(db, phone, 'chat', {
+      history: [
+        { role: 'user', content: trimmed },
+        { role: 'assistant', content: hi },
+      ],
+      mode: 'mimo',
+      lead_name: leadName,
+    })
+    return hi
+  }
+
+  // Se mandou só o nome no meio do chat, salva sem travar
+  if (!leadName && trimmed && isPlausiblePersonName(trimmed) && !isGreetingOnly(trimmed)) {
+    try {
+      leadName = await saveLeadName(db, phone, trimmed)
+    } catch {
+      /* ignore */
     }
   }
 
@@ -1198,8 +1190,11 @@ async function processMessage(
   if (session.step === 'rate_score') {
     return handleRateScore(db, phone, trimmed, session.context, leadName)
   }
+  if (session.step === 'rate_comment') {
+    return handleRateComment(db, phone, trimmed, session.context, leadName)
+  }
 
-  // ── Cumprimento puro com nome já salvo ────────────────────────────────────
+  // ── Cumprimento puro ───────────────────────────────────────────────────────
   if (!trimmed || isGreetingOnly(trimmed)) {
     let appts: Awaited<ReturnType<typeof fetchUpcomingAppointments>> = []
     try {

@@ -7,8 +7,9 @@ import { humanReply, normalizePhone } from '../_shared/uazapi.ts'
  * Body: { number: string, text: string }
  *
  * Auth:
- * - service role / user JWT (Authorization: Bearer ...)
- * - or x-webhook-secret matching WEBHOOK_SECRET
+ * - service role
+ * - x-webhook-secret matching WEBHOOK_SECRET
+ * - JWT de usuário admin (não barbeiro)
  */
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -25,26 +26,31 @@ Deno.serve(async (req) => {
     const headerSecret = req.headers.get('x-webhook-secret') || ''
     const anonKey = Deno.env.get('SUPABASE_ANON_KEY') || ''
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || ''
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 
     const token = authHeader.replace(/^Bearer\s+/i, '')
-    const authorized =
-      (webhookSecret && headerSecret === webhookSecret) ||
-      (token && (token === serviceKey || token === anonKey || token.length > 20))
+    const isService = Boolean(token && token === serviceKey)
+    const isWebhook = Boolean(webhookSecret && headerSecret === webhookSecret)
+
+    let authorized = isService || isWebhook
+
+    if (!authorized && token && token !== anonKey) {
+      const admin = createClient(supabaseUrl, serviceKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      })
+      const { data: userData, error } = await admin.auth.getUser(token)
+      if (!error && userData.user) {
+        const { data: barb } = await admin
+          .from('barbeiros')
+          .select('id')
+          .eq('user_id', userData.user.id)
+          .maybeSingle()
+        if (!barb) authorized = true
+      }
+    }
 
     if (!authorized) {
       return jsonResponse({ error: 'Unauthorized' }, 401)
-    }
-
-    // If JWT user, optionally check bot toggle is available; always allow service role
-    if (token && token !== serviceKey && token !== anonKey) {
-      const url = Deno.env.get('SUPABASE_URL')!
-      const supabase = createClient(url, anonKey, {
-        global: { headers: { Authorization: authHeader } },
-      })
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) {
-        return jsonResponse({ error: 'Unauthorized' }, 401)
-      }
     }
 
     const body = await req.json().catch(() => ({})) as {

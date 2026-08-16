@@ -31,9 +31,10 @@ import {
   IconTrendingUp,
 } from '@tabler/icons-react'
 import { useNavigate } from '@tanstack/react-router'
-import { type ReactNode, useEffect, useMemo, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import { getBarbers, getMovimentacoes, getProdutos, getResumoComissoes } from '../../lib/api'
 import type { Produto, ResumoComissaoBarbeiro } from '../../lib/api'
+import { monthBoundsBRT, msUntilNextMidnightBRT } from '../../lib/dateBr'
 import { gerarPDFResumoComissoes } from '../../utils/gerarPDF'
 
 function sparkFromSeed(seed: number, points = 8): number[] {
@@ -101,25 +102,19 @@ export default function Dashboard() {
   const [comissoes, setComissoes] = useState<ResumoComissaoBarbeiro[]>([])
   const [movRecentes, setMovRecentes] = useState<any[]>([])
   const [erro, setErro] = useState<string | null>(null)
+  const [periodoLabel, setPeriodoLabel] = useState('')
 
-  useEffect(() => {
-    carregarDados()
-  }, [])
-
-  async function carregarDados() {
+  const carregarDados = useCallback(async () => {
     setLoading(true)
     setErro(null)
     try {
+      const { dataInicio, dataFim, label } = monthBoundsBRT()
+      setPeriodoLabel(label)
       const [barbeiros, produtos, movimentacoes, comissoesData] = await Promise.all([
         getBarbers(),
         getProdutos(),
         getMovimentacoes(),
-        getResumoComissoes({
-          dataInicio: new Date(new Date().getFullYear(), new Date().getMonth(), 1)
-            .toISOString()
-            .split('T')[0],
-          dataFim: new Date().toISOString().split('T')[0],
-        }),
+        getResumoComissoes({ dataInicio, dataFim }),
       ])
       setStats({
         barbeiros: barbeiros.length,
@@ -133,13 +128,33 @@ export default function Dashboard() {
           .sort((a, b) => a.estoque_atual - b.estoque_atual),
       )
       setComissoes(comissoesData)
-      setMovRecentes(movimentacoes.slice(0, 5))
+      const movMes = (movimentacoes || []).filter((m: any) => {
+        const d = String(m.created_at || '').slice(0, 10)
+        return d >= dataInicio && d <= dataFim
+      })
+      setMovRecentes(movMes.slice(0, 5))
     } catch (err: any) {
       setErro(err.message)
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    void carregarDados()
+  }, [carregarDados])
+
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === 'visible') void carregarDados()
+    }
+    document.addEventListener('visibilitychange', onVis)
+    const t = window.setTimeout(() => void carregarDados(), msUntilNextMidnightBRT())
+    return () => {
+      document.removeEventListener('visibilitychange', onVis)
+      window.clearTimeout(t)
+    }
+  }, [carregarDados])
 
   const totalComissao = comissoes.reduce((a, r) => a + r.total_a_receber, 0)
   const totalServicosValor = comissoes.reduce((a, r) => a + r.valor_servicos, 0)
@@ -176,10 +191,7 @@ export default function Dashboard() {
 
   const handleExportarPDF = () => {
     if (comissoes.length === 0) return
-    const dataInicio = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
-      .toISOString()
-      .split('T')[0]
-    const dataFim = new Date().toISOString().split('T')[0]
+    const { dataInicio, dataFim } = monthBoundsBRT()
     gerarPDFResumoComissoes(comissoes, dataInicio, dataFim)
   }
 
@@ -218,7 +230,7 @@ export default function Dashboard() {
                 </Badge>
               </Group>
               <Text size="sm" c="dimmed">
-                Visão geral inteligente · comissões, estoque e movimento do mês
+                Visão do mês atual{periodoLabel ? ` · ${periodoLabel}` : ''} · dados históricos em Relatórios
               </Text>
             </Stack>
           </Group>

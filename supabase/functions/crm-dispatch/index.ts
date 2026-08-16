@@ -203,14 +203,8 @@ Deno.serve(async (req) => {
               result.skipped++
               continue
             }
-            if (await alreadySent(db, c.id, 'ausencia', ref)) {
-              result.skipped++
-              continue
-            }
-            // Também evita reenviar se já houve ausência nesta mesma "janela" recente
             const last = lastVisit.get(c.id)!
             const dias = daysBetween(last, today)
-            // Referência por janela de dias desde a visita (evita 1 msg/dia)
             const windowRef = `visita-${last}-d${diasLimite}`
             if (await alreadySent(db, c.id, 'ausencia', windowRef)) {
               result.skipped++

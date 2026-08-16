@@ -39,6 +39,7 @@ export interface Service {
   nome: string
   preco: number
   duracao_minutos: number
+  buffer_minutos?: number
   descricao?: string | null
   ativo?: boolean
   created_at?: string

@@ -199,16 +199,16 @@ export function firstNameFrom(senderName?: string | null): string | null {
   return first
 }
 
-/** Cumprimento da barbearia — sem se dizer assistente/bot. */
+/** Cumprimento da barbearia — Diva, sem se dizer assistente/bot. */
 export function greetingText(
   senderName?: string | null,
   shopName?: string | null,
 ): string {
   const first = firstNameFrom(senderName)
   const place = (shopName || '').trim()
-  const fromLine = place ? `Aqui é da ${place}.` : 'Aqui é da barbearia.'
+  const fromLine = place ? `Aqui é a Diva da ${place}.` : 'Aqui é a Diva da barbearia.'
   const hi = first ? `Oi, ${first}! Tudo bem?` : 'Oi! Tudo bem?'
-  return `${hi} ${fromLine} Como podemos ajudá-lo?`
+  return `${hi} ${fromLine} Como posso te ajudar?`
 }
 
 /** @deprecated use greetingText */
@@ -401,7 +401,7 @@ export function greetingWithAppointments(
 /** Primeiro contato: pede nome (não usa perfil WhatsApp). */
 export function askNameText(shopName?: string | null): string {
   const shop = (shopName || '').trim()
-  const from = shop ? `Aqui é da ${shop}.` : 'Aqui é da barbearia.'
+  const from = shop ? `Aqui é a Diva da ${shop}.` : 'Aqui é a Diva da barbearia.'
   return `Oi! Tudo bem? ${from} Qual é o seu nome?`
 }
 
@@ -413,8 +413,8 @@ export function afterNameGreeting(
 ): string {
   const first = firstNameFrom(fullName) || fullName.trim().split(/\s+/)[0]
   const shop = (shopName || '').trim()
-  const from = shop ? `Aqui é da ${shop}.` : 'Aqui é da barbearia.'
-  const base = `Prazer, ${first}! ${from} Como podemos ajudá-lo?`
+  const from = shop ? `Aqui é a Diva da ${shop}.` : 'Aqui é a Diva da barbearia.'
+  const base = `Prazer, ${first}! ${from} Como posso te ajudar?`
   if (!appts.length) return base
   if (appts.length === 1) {
     const a = appts[0]
