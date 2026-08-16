@@ -1222,7 +1222,7 @@ export type BarberBlock = {
   id: string
   barbeiro_id: string
   inicio: string
-  fim: string
+  fim: string | null
   motivo: string | null
   created_at?: string
 }
@@ -1260,7 +1260,7 @@ export async function getBarbeiroBloqueios(barbeiroId: string): Promise<BarberBl
     .from('barbeiro_bloqueios')
     .select('*')
     .eq('barbeiro_id', barbeiroId)
-    .gte('fim', hoje.toISOString())
+    .or(`fim.gte.${hoje.toISOString()},fim.is.null`)
     .order('inicio', { ascending: true })
   if (error) throw new Error(`Erro ao buscar bloqueios: ${error.message}`)
   return data ?? []
@@ -1269,7 +1269,7 @@ export async function getBarbeiroBloqueios(barbeiroId: string): Promise<BarberBl
 export async function createBarbeiroBloqueio(params: {
   barbeiro_id: string
   inicio: string
-  fim: string
+  fim?: string | null
   motivo?: string
 }) {
   const { data, error } = await supabase

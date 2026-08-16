@@ -620,12 +620,11 @@ async function proceedAfterService(
 ): Promise<string> {
   const { data: barbers } = await db
     .from('barbeiros')
-    .select('id, nome')
+    .select('id, nome, ativo')
+    .eq('ativo', true)
     .order('nome')
 
-  const list = (barbers || []).filter((b: { ativo?: boolean; active?: boolean }) =>
-    b.ativo !== false && b.active !== false
-  )
+  const list = barbers || []
 
   if (!list.length) {
     await saveSession(db, phone, 'choose_date', {
