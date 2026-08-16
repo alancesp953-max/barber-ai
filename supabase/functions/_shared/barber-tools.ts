@@ -160,7 +160,7 @@ export async function runBarberTool(
           endereco: info.endereco,
           horarios: info.horarios,
           resumo: info.resumo,
-          dica: 'Responda em prosa natural com endereço e funcionamento (seg–sáb 08h30–19h30; domingo fechado).',
+          dica: `Responda em prosa natural usando EXATAMENTE estes horários salvos (não invente 08h00 nem outro horário). Resumo: ${info.resumo}`,
         })
       }
 
@@ -180,15 +180,19 @@ export async function runBarberTool(
             aviso: `rpc: ${error}`,
           })
         }
+        const primeiro = horarios[0] || null
+        const ultimo = horarios.length ? horarios[horarios.length - 1] : null
         return JSON.stringify({
           data,
           data_br: formatDateBR(data),
           barbeiro_id,
           horarios,
+          primeiro_horario: primeiro,
+          ultimo_horario: ultimo,
           dica:
             horarios.length === 0
-              ? 'Sem horários livres (ocupados ou já passaram no dia de hoje). Peça outra data ou barbeiro.'
-              : 'Só liste horários desta lista ao cliente. Horários passados não aparecem.',
+              ? 'Sem horários livres (ocupados, fora do funcionamento salvo em Configurações, ou já passaram no dia de hoje). Peça outra data ou barbeiro.'
+              : `SÓ liste horários desta lista. O primeiro disponível é ${primeiro} (não diga que abre às 08:00 se a lista não começar assim).`,
         })
       }
 
@@ -298,7 +302,8 @@ export function systemPromptBarber(): string {
     'PAGAMENTO: a barbearia aceita dinheiro, Pix, cartão de débito e crédito. Aceita dividir o valor na hora do acerto (ex.: parte Pix + parte cartão, dois cartões, dinheiro + Pix). Confirme isso sempre que perguntarem sobre formas ou divisão de pagamento.',
     'Use as ferramentas para serviços, barbeiros, slots, criar e cancelar. Nunca invente IDs nem horários.',
     'Se perguntarem endereço, onde fica, localização, funcionamento ou que horas abre/fecha: use get_shop_hours e responda com o resumo (não invente).',
-    'Endereço oficial: Rua Castro Monte 165, Bairro Varjota, Fortaleza. Funcionamento: segunda a sábado, 08h30 às 19h30; domingo fechado.',
+    'PROIBIDO inventar horário de funcionamento (ex.: dizer 08h00 se a config/tool disser 08h30). Sempre confie em get_shop_hours e na lista de get_available_slots.',
+    'Endereço: use get_shop_hours (não memorize horário de abertura/fechamento).',
     'Sempre considere se o cliente já tem agendamento: use list_my_appointments quando precisar (e confie no bloco "Agenda do lead" do system se existir).',
     'Se o lead JÁ tiver horário marcado: reconheça em linguagem natural e ofereça opções relevantes (ver, remarcar cancelando o atual e criando outro, ou cancelar) — sem lista numerada.',
     'Se ele pedir para marcar e já tiver um horário, avise e pergunte se quer outro mesmo assim ou alterar o que já está.',

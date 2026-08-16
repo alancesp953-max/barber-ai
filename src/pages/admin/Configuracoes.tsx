@@ -582,6 +582,7 @@ export default function Configuracoes() {
               value={form[dia.chave] || ''}
               onChange={(e) => handleChange(dia.chave, e.currentTarget.value)}
               placeholder="08:30 - 19:30"
+              description="Formato: HH:MM - HH:MM (ex.: 08:30 - 19:30). Use Fechado se não abrir."
               styles={inputStyles}
             />
           ))}

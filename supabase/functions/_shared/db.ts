@@ -247,11 +247,45 @@ export type ShopPublicInfo = {
   resumo: string
 }
 
-export function shopInfoResumo(endereco: string, openLabel = '08h30 às 19h30'): string {
-  return [
-    `Endereço: ${endereco}`,
-    `Funcionamento: segunda a sábado, ${openLabel}. Domingo fechado.`,
-  ].join('\n')
+function isClosedLabel(raw: string): boolean {
+  const t = raw.trim().toLowerCase()
+  return !t || t === '-' || t === 'fechado' || t === 'closed'
+}
+
+/** "08:30 - 19:30" / "8.30-19.30" / "08h30 às 19h30" → "08h30 às 19h30" */
+export function hoursRangeToPt(raw: string, fallback = '08h30 às 19h30'): string {
+  if (isClosedLabel(raw)) return 'fechado'
+  let s = raw
+    .trim()
+    .replace(/[–—]/g, '-')
+    .replace(/\s+às\s+/gi, '-')
+    .replace(/\s+as\s+/gi, '-')
+  const parts = s.split('-').map((p) => p.trim()).filter(Boolean)
+  if (parts.length < 2) return fallback
+  const norm = (tok: string) => {
+    const t = tok.toLowerCase().replace(/h/g, ':').replace(/\./g, ':').replace(',', ':')
+    const m = t.match(/^(\d{1,2}):(\d{1,2})/)
+    if (!m) return null
+    return `${m[1].padStart(2, '0')}h${m[2].padStart(2, '0')}`
+  }
+  const a = norm(parts[0])
+  const b = norm(parts[1])
+  if (!a || !b) return fallback
+  return `${a} às ${b}`
+}
+
+export function shopInfoResumo(
+  endereco: string,
+  openLabel = '08h30 às 19h30',
+  domingoLabel = 'fechado',
+): string {
+  const dom =
+    !domingoLabel || isClosedLabel(domingoLabel)
+      ? 'Domingo fechado.'
+      : `Domingo ${hoursRangeToPt(domingoLabel)}.`
+  return [`Endereço: ${endereco}`, `Funcionamento: segunda a sábado, ${openLabel}. ${dom}`].join(
+    '\n',
+  )
 }
 
 export async function fetchShopPublicInfo(db: SupabaseClient): Promise<ShopPublicInfo> {
@@ -270,11 +304,27 @@ export async function fetchShopPublicInfo(db: SupabaseClient): Promise<ShopPubli
     sabado: (c.horario_sabado as string)?.trim() || open,
     domingo: (c.horario_domingo as string)?.trim() || closed,
   }
+  const week = [
+    horarios.segunda,
+    horarios.terca,
+    horarios.quarta,
+    horarios.quinta,
+    horarios.sexta,
+    horarios.sabado,
+  ]
+  const openOnes = week.filter((h) => !isClosedLabel(h))
+  const unique = [...new Set(openOnes.map((h) => hoursRangeToPt(h)))]
+  const openLabel =
+    unique.length === 1
+      ? unique[0]
+      : unique.length > 1
+        ? unique.join(' / ')
+        : hoursRangeToPt(open)
   return {
     nome: typeof c.nome_barbearia === 'string' ? c.nome_barbearia.trim() || null : null,
     endereco,
     horarios,
-    resumo: shopInfoResumo(endereco),
+    resumo: shopInfoResumo(endereco, openLabel, horarios.domingo),
   }
 }
 
