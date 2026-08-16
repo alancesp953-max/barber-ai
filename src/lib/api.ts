@@ -1277,7 +1277,7 @@ export async function createBarbeiroBloqueio(params: {
     .insert({
       barbeiro_id: params.barbeiro_id,
       inicio: params.inicio,
-      fim: params.fim,
+      fim: params.fim ?? null,
       motivo: params.motivo || null,
     })
     .select()

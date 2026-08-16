@@ -14,7 +14,7 @@ import {
   TextInput,
   Title,
 } from '@mantine/core'
-import { ChevronDown, ChevronUp, Plus, Trash2, Edit2, Star, Percent, ListOrdered } from 'lucide-react'
+import { CalendarOff, ChevronDown, ChevronUp, Plus, Trash2, Edit2, Star, Percent, ListOrdered } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import {
   getBarbers,
@@ -25,6 +25,7 @@ import {
 } from '../../lib/api'
 import type { Barber } from '../../types/database'
 import { PageHeader } from '../../components/PageHeader'
+import { BarberBlocksManager } from '../../components/BarberBlocksManager'
 
 
 const inputStyles = {
@@ -332,6 +333,15 @@ export default function Barbeiros() {
                               size="xs"
                               variant="outline"
                               color="gold"
+                              leftSection={<CalendarOff size={12} />}
+                              onClick={() => abrirModal('folgas', b)}
+                            >
+                              Folgas
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              color="gold"
                               leftSection={<Edit2 size={12} />}
                               onClick={() => abrirModal('editar', b)}
                             >
@@ -460,6 +470,31 @@ export default function Barbeiros() {
             </Button>
           </Group>
         </Stack>
+      </Modal>
+
+      <Modal
+        opened={modalAberto === 'folgas' && Boolean(barbeiroEditando)}
+        onClose={fecharModal}
+        title={
+          <Title order={4} c="gold">
+            Folgas — {barbeiroEditando?.nome}
+          </Title>
+        }
+        centered
+        size="lg"
+        styles={{
+          content: { background: '#1a1a1a', border: '1px solid rgba(197,160,89,0.2)' },
+          header: { background: '#1a1a1a' },
+          body: { background: '#1a1a1a' },
+        }}
+      >
+        {barbeiroEditando && (
+          <BarberBlocksManager
+            barbeiroId={barbeiroEditando.id}
+            barbeiroNome={barbeiroEditando.nome}
+            inputStyles={inputStyles}
+          />
+        )}
       </Modal>
     </Stack>
   )
