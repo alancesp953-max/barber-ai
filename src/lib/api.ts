@@ -295,6 +295,7 @@ export async function createAppointment(appointment: any) {
     p_status: payload.status || 'pendente',
     p_valor: payload.valor ?? null,
     p_use_rotation: useRotation,
+    p_allow_past: true,
   })
   if (error) throw new Error(`Erro ao criar agendamento: ${error.message}`)
   if (!rpc?.ok) throw new Error(String(rpc?.error || 'Falha ao reservar horário'))
