@@ -67,6 +67,45 @@ export async function fetchAvailableSlots(
   return { slots }
 }
 
+function ymdDow(ymd: string): number {
+  const [y, m, d] = ymd.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d, 12, 0, 0)).getUTCDay()
+}
+
+function shopHoursKey(dow: number): string {
+  return [
+    'horario_domingo',
+    'horario_segunda',
+    'horario_terca',
+    'horario_quarta',
+    'horario_quinta',
+    'horario_sexta',
+    'horario_sabado',
+  ][dow]
+}
+
+function parseHoursRange(raw: string | null | undefined): { open: string; close: string } | null {
+  const t = String(raw || '').trim().toLowerCase()
+  if (!t || t === 'fechado' || t === 'closed' || t === '-') return null
+  let s = t.replace(/[–—]/g, '-').replace(/\s+às\s+/g, '-').replace(/\s+as\s+/g, '-')
+  const parts = s.split('-').map((p) => p.trim()).filter(Boolean)
+  if (parts.length < 2) return null
+  const norm = (tok: string) => {
+    const x = tok.replace(/h/g, ':').replace(/\./g, ':').replace(',', ':')
+    const m = x.match(/^(\d{1,2}):(\d{1,2})/)
+    if (!m) return null
+    return `${m[1].padStart(2, '0')}:${m[2].padStart(2, '0')}`
+  }
+  const open = norm(parts[0])
+  const close = norm(parts[1])
+  if (!open || !close) return null
+  return { open, close }
+}
+
+function toBrtMs(ymd: string, hm: string): number {
+  return new Date(`${ymd}T${hm.length === 5 ? `${hm}:00` : hm}-03:00`).getTime()
+}
+
 /** Barbeiros ativos na ordem da fila de rodízio. */
 export async function listBarbersForRotation(
   db: SupabaseClient,
@@ -83,6 +122,82 @@ export async function listBarbersForRotation(
       nome: b.nome,
       ordem_rodizio: Number(b.ordem_rodizio) || 0,
     }))
+}
+
+export type BookableBarber = { id: string; nome: string }
+
+/**
+ * Barbeiros ativos que NÃO estão de folga/bloqueio cobrindo o expediente na data.
+ * dataYmd padrão: hoje (America/Sao_Paulo).
+ */
+export async function listBookableBarbers(
+  db: SupabaseClient,
+  dataYmd?: string | null,
+): Promise<BookableBarber[]> {
+  const ymd = dataYmd && /^\d{4}-\d{2}-\d{2}$/.test(dataYmd) ? dataYmd : todaySaoPaulo()
+  const all = await listBarbersForRotation(db)
+  if (!all.length) return []
+
+  const dow = ymdDow(ymd)
+  const dayStart = toBrtMs(ymd, '00:00')
+  const dayEnd = toBrtMs(ymd, '23:59')
+
+  const [{ data: cfg }, { data: hoursRows }, { data: blocks }] = await Promise.all([
+    db.from('configuracoes').select('*').eq('id', 1).maybeSingle(),
+    db.from('barbeiro_horarios').select('barbeiro_id, dia_semana, abertura, fechamento, fechado').eq('dia_semana', dow),
+    db
+      .from('barbeiro_bloqueios')
+      .select('barbeiro_id, inicio, fim')
+      .in('barbeiro_id', all.map((b) => b.id))
+      .lt('inicio', new Date(dayEnd + 60_000).toISOString()),
+  ])
+
+  const shopRange = parseHoursRange((cfg as Record<string, unknown> | null)?.[shopHoursKey(dow)] as string)
+
+  const hoursByBarber = new Map<
+    string,
+    { fechado: boolean; abertura: string | null; fechamento: string | null }
+  >()
+  for (const h of (hoursRows || []) as {
+    barbeiro_id: string
+    fechado: boolean
+    abertura: string | null
+    fechamento: string | null
+  }[]) {
+    hoursByBarber.set(h.barbeiro_id, h)
+  }
+
+  const blocksByBarber = new Map<string, { inicio: string; fim: string | null }[]>()
+  for (const bl of (blocks || []) as { barbeiro_id: string; inicio: string; fim: string | null }[]) {
+    const start = new Date(bl.inicio).getTime()
+    const end = bl.fim ? new Date(bl.fim).getTime() : Number.POSITIVE_INFINITY
+    if (end <= dayStart || start >= dayEnd + 60_000) continue
+    const list = blocksByBarber.get(bl.barbeiro_id) || []
+    list.push(bl)
+    blocksByBarber.set(bl.barbeiro_id, list)
+  }
+
+  const out: BookableBarber[] = []
+  for (const b of all) {
+    const bh = hoursByBarber.get(b.id)
+    let work: { open: string; close: string } | null = shopRange
+    if (bh) {
+      if (bh.fechado || !bh.abertura || !bh.fechamento) continue
+      work = { open: String(bh.abertura).slice(0, 5), close: String(bh.fechamento).slice(0, 5) }
+    }
+    if (!work) continue
+
+    const workStart = toBrtMs(ymd, work.open)
+    const workEnd = toBrtMs(ymd, work.close)
+    const fullDayOff = (blocksByBarber.get(b.id) || []).some((bl) => {
+      const start = new Date(bl.inicio).getTime()
+      const end = bl.fim ? new Date(bl.fim).getTime() : Number.POSITIVE_INFINITY
+      return start <= workStart && end >= workEnd
+    })
+    if (fullDayOff) continue
+    out.push({ id: b.id, nome: b.nome })
+  }
+  return out
 }
 
 /**

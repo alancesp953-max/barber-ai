@@ -13,6 +13,7 @@ import type { ToolDef } from './mimo.ts'
 import {
   createAppointmentAtomic,
   fetchAvailableSlots,
+  listBookableBarbers,
   todaySaoPaulo,
 } from './slots.ts'
 
@@ -29,8 +30,15 @@ export const BARBER_TOOLS: ToolDef[] = [
     type: 'function',
     function: {
       name: 'list_barbers',
-      description: 'Lista barbeiros disponíveis',
-      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      description:
+        'Lista barbeiros na escala na data (padrão: hoje). Exclui quem está de folga/bloqueio cobrindo o expediente. Passe data se o cliente perguntou de outro dia.',
+      parameters: {
+        type: 'object',
+        properties: {
+          data: { type: 'string', description: 'YYYY-MM-DD ou DD/MM/AAAA (opcional; default hoje)' },
+        },
+        additionalProperties: false,
+      },
     },
   },
   {
@@ -140,16 +148,16 @@ export async function runBarberTool(
       }
 
       case 'list_barbers': {
-        const { data, error } = await db.from('barbeiros').select('id, nome').eq('ativo', true).order('ordem_rodizio').order('nome')
-        if (error) {
-          const { data: fallback, error: err2 } = await db.from('barbeiros').select('id, nome').order('nome')
-          if (err2) return JSON.stringify({ error: err2.message })
-          return JSON.stringify({
-            barbeiros: (fallback || []).map((b) => ({ id: b.id, nome: b.nome })),
-          })
-        }
+        const dataYmd = normalizeDate(String(args.data || '')) || todaySaoPaulo()
+        const barbeiros = await listBookableBarbers(db, dataYmd)
         return JSON.stringify({
-          barbeiros: (data || []).map((b) => ({ id: b.id, nome: b.nome })),
+          data: dataYmd,
+          data_br: formatDateBR(dataYmd),
+          barbeiros,
+          dica:
+            barbeiros.length === 0
+              ? 'Nenhum barbeiro na escala nesta data (folga/bloqueio). Não cite nomes de quem não está nesta lista.'
+              : 'SÓ mencione estes nomes. Quem está de folga/bloqueio NÃO aparece e NÃO deve ser citado nem sugerido.',
         })
       }
 
@@ -310,9 +318,11 @@ export function systemPromptBarber(): string {
     'CONTEXTO: use o histórico. Não repita pergunta se o cliente já respondeu.',
     'Entenda gíria e mensagens curtas ("amanhã 15h", "cancela o de sexta").',
     `Hoje é ${today} (America/Sao_Paulo). Resolva "hoje/amanhã/segunda" a partir daqui. Datas nas tools em YYYY-MM-DD.`,
-    'Fluxo de agendamento (uma pergunta por vez): serviço → SEMPRE pergunte se o cliente quer ser atendido por algum barbeiro em específico (use list_barbers; diga os nomes e ofereça também "qualquer um" / sem preferência) → data → get_available_slots com barbeiro_id se escolheu → create_appointment.',
+    'Fluxo de agendamento (uma pergunta por vez): serviço → SEMPRE pergunte se o cliente quer ser atendido por algum barbeiro em específico (use list_barbers com a data se já souber; diga SÓ os nomes retornados e ofereça também "qualquer um" / sem preferência) → data → get_available_slots com barbeiro_id se escolheu → create_appointment.',
+    'PROIBIDO citar, sugerir ou lembrar nome de barbeiro que não veio em list_barbers. Folga/bloqueio = oculto. Se o cliente pedir alguém que não está na lista: diga que não está na escala nesse dia e ofereça só os nomes da tool — sem inventar o resto da equipe.',
+    'Perguntas tipo "quem está atendendo hoje/amanhã" ou "quem tem horário": use list_barbers com essa data. Nunca recorra à memória de nomes antigos.',
     'Sem preferência: o sistema atribui pelo rodízio (primeiro livre da fila). Nunca invente barbeiro.',
-    'Nunca pule a pergunta de preferência de barbeiro quando houver mais de um. Se só houver um, pergunte se pode ser com ele.',
+    'Nunca pule a pergunta de preferência de barbeiro quando houver mais de um na lista da tool. Se só houver um, pergunte se pode ser com ele.',
     'Uma pergunta por vez se faltar dado. Confirma em prosa: "posso marcar?" Aceite sim/não naturais.',
     'Sem markdown pesado. Sem listas numeradas. Serviços e horários pelo nome/hora em frases corridas ou separados por vírgula.',
   ].join('\n')

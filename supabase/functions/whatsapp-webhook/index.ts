@@ -41,6 +41,7 @@ import {
   createAppointmentAtomic,
   fetchAvailableSlots,
   filterPastSlots,
+  listBookableBarbers,
   todaySaoPaulo,
 } from '../_shared/slots.ts'
 import { humanReply, normalizePhone, sendPresence } from '../_shared/uazapi.ts'
@@ -618,13 +619,8 @@ async function proceedAfterService(
   context: Record<string, unknown>,
   service: { id: string; nome: string; preco: number; duracao: number },
 ): Promise<string> {
-  const { data: barbers } = await db
-    .from('barbeiros')
-    .select('id, nome, ativo')
-    .eq('ativo', true)
-    .order('nome')
-
-  const list = barbers || []
+  const dateHint = typeof context.data === 'string' ? String(context.data) : todaySaoPaulo()
+  const list = await listBookableBarbers(db, dateHint)
 
   if (!list.length) {
     await saveSession(db, phone, 'choose_date', {
@@ -642,7 +638,7 @@ async function proceedAfterService(
     ...context,
     servico_id: service.id,
     servico_nome: service.nome,
-    barbers: list.map((b: { id: string; nome: string }) => ({ id: b.id, nome: b.nome })),
+    barbers: list.map((b) => ({ id: b.id, nome: b.nome })),
   })
 
   if (list.length === 1) {
@@ -652,7 +648,7 @@ async function proceedAfterService(
     ].join(' ')
   }
 
-  const names = list.map((b: { nome: string }) => b.nome).join(', ')
+  const names = list.map((b) => b.nome).join(', ')
   return [
     `Beleza, *${service.nome}*.`,
     `Quer ser atendido por algum barbeiro em específico? Temos ${names}.`,
