@@ -457,8 +457,10 @@ export default function Agendamentos() {
               label="Horário *"
               type="time"
               required
+              step={60}
               value={time}
               onChange={(e) => setTime(e.currentTarget.value)}
+              description="Pode ser qualquer horário (ex.: 17:40), não precisa ser de 15 em 15."
               styles={inputStyles}
             />
             <NativeSelect
