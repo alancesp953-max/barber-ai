@@ -7,9 +7,11 @@ import {
   findOrCreateClientByPhone,
   formatDateBR,
   formatServicePriceList,
+  getSession,
   isKnownLeadName,
   parseDateBR,
   punctualityConfirmText,
+  saveSession,
 } from './db.ts'
 import type { ToolDef } from './mimo.ts'
 import {
@@ -151,6 +153,15 @@ switch (name) {
 case 'list_barbers': {
 const dataYmd = normalizeDate(String(args.data || '')) || todaySaoPaulo()
 const barbeiros = await listBookableBarbers(db, dataYmd)
+try {
+  const sess = await getSession(db, phone)
+  await saveSession(db, phone, sess.step || 'chat', {
+    last_barbers: barbeiros,
+    last_barbers_data: dataYmd,
+  })
+} catch {
+  /* ignore */
+}
 return JSON.stringify({
 data: dataYmd,
 data_br: formatDateBR(dataYmd),
@@ -178,15 +189,25 @@ const barbeiro_id = args.barbeiro_id ? String(args.barbeiro_id) : null
 if (!data || !servico_id) {
 return JSON.stringify({ error: 'data e servico_id são obrigatórios' })
 }
-const { slots: horarios, error } = await fetchAvailableSlots(db, data, servico_id, barbeiro_id)
-if (error) {
-return JSON.stringify({
-data,
-data_br: formatDateBR(data),
-horarios,
-aviso: `rpc: ${error}`,
-})
-}
+        const { slots: horarios, error } = await fetchAvailableSlots(db, data, servico_id, barbeiro_id)
+        if (error) {
+          return JSON.stringify({
+            data,
+            data_br: formatDateBR(data),
+            horarios,
+            aviso: `rpc: ${error}`,
+          })
+        }
+        try {
+          await saveSession(db, phone, (await getSession(db, phone)).step || 'chat', {
+            last_slots: horarios,
+            last_slots_data: data,
+            last_slots_servico_id: servico_id,
+            last_slots_barbeiro_id: barbeiro_id,
+          })
+        } catch {
+          /* ignore */
+        }
 const primeiro = horarios[0] || null
 const ultimo = horarios.length ? horarios[horarios.length - 1] : null
 return JSON.stringify({
@@ -209,6 +230,21 @@ const horario = String(args.horario || '').slice(0, 5)
 const barbeiro_id = args.barbeiro_id ? String(args.barbeiro_id) : null
 if (!servico_id || !data || !horario) {
 return JSON.stringify({ error: 'servico_id, data e horario são obrigatórios' })
+}
+try {
+  const sess = await getSession(db, phone)
+  const lastSlots = Array.isArray(sess.context.last_slots)
+    ? (sess.context.last_slots as string[]).map((h) => String(h).slice(0, 5))
+    : []
+  if (lastSlots.length && !lastSlots.includes(horario)) {
+    return JSON.stringify({
+      error: 'Horário fora da última lista de vagas. Chame get_available_slots de novo.',
+      horarios: lastSlots,
+      ok: false,
+    })
+  }
+} catch {
+  /* ignore */
 }
 const nome =
 args.cliente_nome && isKnownLeadName(String(args.cliente_nome))
@@ -301,8 +337,8 @@ export function systemPromptBarber(): string {
     'Ao listar serviços: primeiro "vou lhe enviar as opções de serviços abaixo" e depois cole o campo tabela da tool list_services, sem mudar nomes nem preços.',
     'TOM: amigável, curto, WhatsApp. PROIBIDO emojis. Sem markdown pesado, sem listas numeradas de menu.',
     `Hoje é ${today} (America/Sao_Paulo). Datas nas tools em YYYY-MM-DD.`,
-    'NOME: se o system disser que o nome NÃO está confirmado, NÃO chame o cliente por apelido inventado e NÃO use palavras como agendamento/corte/barba como se fossem o nome. Peça o nome. Nunca grave intenção como nome.',
-    'PRIMEIRO CONTATO: "Olá! Eu sou a Diva da Divina Barbearia da Varjota. Qual é o seu nome?"',
+    'NOME: só peça o nome no PRIMEIRO contato, se o system disser que ainda não está confirmado E o passo NÃO for agenda. NUNCA peça nome no meio de horário/barbeiro/confirmação. Nunca grave intenção nem nome de barbeiro como nome do cliente.',
+    'PRIMEIRO CONTATO (sem passo de agenda): "Olá! Eu sou a Diva da Divina Barbearia da Varjota. Qual é o seu nome?"',
     'Depois do nome: "Prazer em te conhecer, [Nome]! Vamos agendar?"',
     'CLIENTE RECORRENTE: "Olá, [Nome]! Que bom te ver de volta! Vamos agendar?"',
     'FORA DO EXPEDIENTE: se o system disser que a loja está fechada, avise que o expediente de hoje já encerrou e ofereça agendar para amanhã ou outra data. Não encerre o papo.',
@@ -312,6 +348,6 @@ export function systemPromptBarber(): string {
     'CONFIRMAÇÃO: confirme serviço, data, horário e barbeiro. Depois de criar, envie OBRIGATORIAMENTE o campo mensagem da tool (pontualidade) sem inventar minutos de atraso.',
     'CANCELAMENTO: cancele no sistema e informe serviço, barbeiro, data e horário.',
     'AVALIAÇÃO: após o corte, peça nota de 1 a 5.',
-    'SEGURANÇA: NUNCA invente horários, preços ou IDs. Uma pergunta por vez.',
+    'SEGURANÇA: NUNCA invente horários, preços, IDs ou nomes de barbeiro. Só use o que veio nas tools. Uma pergunta por vez. Se o system disser PASSO TRAVADO, não mude de assunto nem peça o nome.',
   ].join('\n')
 }

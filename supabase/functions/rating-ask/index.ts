@@ -6,7 +6,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1'
 import { corsHeaders, jsonResponse } from '../_shared/cors.ts'
 import { normalizePhone, humanReply } from '../_shared/uazapi.ts'
 import { resolveUazConfig } from '../_shared/resolve-uaz.ts'
-import { saveSession, isKnownLeadName } from '../_shared/db.ts'
+import { saveSession, isKnownLeadName, getSession, isBookingStep } from '../_shared/db.ts'
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -89,6 +89,10 @@ Deno.serve(async (req) => {
     }
 
     const phone = normalizePhone(phoneRaw)
+    const sess = await getSession(db, phone)
+    if (isBookingStep(sess.step)) {
+      return jsonResponse({ ok: false, skipped: true, reason: 'agendamento_em_andamento' })
+    }
     const barberName = (barbeiro?.nome as string) || 'seu barbeiro'
     const clientName = cliente?.nome as string | undefined
     const firstName =

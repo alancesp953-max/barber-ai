@@ -23,6 +23,8 @@ import {
   isKnownLeadName,
   isNegative,
   isPlausiblePersonName,
+  isBookingStep,
+  logBotEvent,
   isShopOpenNow,
   closedShopNotice,
   formatServicePriceList,
@@ -226,7 +228,9 @@ async function reply(
   text: string,
   db: ReturnType<typeof getServiceClient>,
   config?: { baseUrl: string; token: string } | null,
+  opts?: { senderName?: string | null; userText?: string },
 ) {
+  const out = humanizeOutbound(text, { senderName: opts?.senderName, userText: opts?.userText })
   let uaz = config
   if (!uaz) {
     const resolved = await resolveUazConfig(db)
@@ -236,7 +240,7 @@ async function reply(
     }
     uaz = resolved.config
   }
-  const result = await humanReply(phone, text, uaz)
+  const result = await humanReply(phone, out, uaz)
   if (!result.ok) {
     console.error('reply send failed', result.error)
     throw new Error(result.error || 'Falha ao enviar WhatsApp')
@@ -248,11 +252,11 @@ function wantsRestart(text: string): boolean {
   return [
     'recomecar',
     'comecar de novo',
-    'esquece',
-    'deixa pra la',
-    'deixa pra la',
-    'voltar',
+    'começar de novo',
     'cancela tudo',
+    'reset',
+    'limpar',
+    '/start',
   ].includes(t)
 }
 
@@ -1042,7 +1046,11 @@ async function processWithMimo(
     shopOpen = true
   }
 
+  const bookingLocked = isBookingStep(session.step)
   const system = systemPromptBarber() +
+    (bookingLocked
+      ? `\nPASSO TRAVADO: ${session.step}. Não peça o nome. Não mude de assunto. Continue este passo.`
+      : '') +
     (shopOpen
       ? ''
       : `\nLOJA FECHADA AGORA: ${closedShopNotice()} Avise isso e continue o agendamento para amanhã/outras datas.`) +
@@ -1064,12 +1072,28 @@ async function processWithMimo(
     },
   ]
 
+  const tChoice = normalizeMatch(text)
+  let toolChoice: 'auto' | { type: 'function'; function: { name: string } } = 'auto'
+  if (!isGreetingOnly(text)) {
+    if (
+      tChoice.includes('endereco') ||
+      tChoice.includes('funcionamento') ||
+      tChoice.includes('que horas') ||
+      (tChoice.includes('abre') && tChoice.includes('fecha'))
+    ) {
+      toolChoice = { type: 'function', function: { name: 'get_shop_hours' } }
+    } else if (tChoice.includes('preco') || tChoice.includes('quanto custa')) {
+      toolChoice = { type: 'function', function: { name: 'list_services' } }
+    }
+  }
+
+  let usedTools: string[] = []
   for (let round = 0; round < 8; round++) {
     const res = await mimoChat({
       config,
       messages,
       tools: BARBER_TOOLS,
-      tool_choice: 'auto',
+      tool_choice: round === 0 ? toolChoice : 'auto',
       temperature: 0.4,
       max_completion_tokens: 500,
     })
@@ -1092,6 +1116,7 @@ async function processWithMimo(
     if (msg.tool_calls?.length) {
       for (const tc of msg.tool_calls) {
         const fnName = tc.function?.name || ''
+        usedTools.push(fnName)
         const fnArgs = tc.function?.arguments || '{}'
         // tools usam o nome salvo do lead, não o perfil WhatsApp
         const toolResult = await runBarberTool(db, phone, fnName, fnArgs, leadName || undefined)
@@ -1107,9 +1132,40 @@ async function processWithMimo(
 
     let answer = String(msg.content || '').trim()
     if (!answer) {
-      answer = 'Não entendi direito. Pode repetir?'
+      logBotEvent('bot_fallback', { reason: 'empty_mimo', phone: phone.slice(-4), tools: usedTools })
+      return null
     }
-    answer = humanizeOutbound(answer, { senderName: leadName, userText: text })
+
+    const fresh = await getSession(db, phone)
+    const lastSlots = Array.isArray(fresh.context.last_slots)
+      ? (fresh.context.last_slots as string[]).map((h) => String(h).slice(0, 5))
+      : []
+    if (lastSlots.length) {
+      const mentioned = [...answer.matchAll(/\b(\d{1,2})[:hH](\d{2})\b/g)]
+      const invented = mentioned.some((m) => {
+        const hm = `${m[1].padStart(2, '0')}:${m[2]}`
+        return !lastSlots.includes(hm)
+      })
+      if (invented) {
+        logBotEvent('bot_fallback', { reason: 'invented_slot', phone: phone.slice(-4) })
+        answer = [
+          `Em ${fresh.context.last_slots_data || 'essa data'} ainda rola:`,
+          lastSlots.join(', '),
+          '',
+          'Qual horário fica melhor pra você?',
+        ].join('\n')
+      }
+    }
+    if (/08h00|08:00/.test(answer) && usedTools.includes('get_shop_hours')) {
+      try {
+        const info = await fetchShopPublicInfo(db)
+        if (!/08h00|08:00/.test(info.resumo)) {
+          answer = answer.replace(/08h00/g, '08h30').replace(/08:00/g, '08:30')
+        }
+      } catch {
+        /* ignore */
+      }
+    }
 
     const toStore = messages
       .filter((m) => m.role !== 'system')
@@ -1127,7 +1183,8 @@ async function processWithMimo(
       })
       .slice(-28)
 
-    await saveSession(db, phone, 'chat', {
+    const keepStep = isBookingStep(session.step) ? session.step : 'chat'
+    await saveSession(db, phone, keepStep, {
       history: toStore,
       mode: 'mimo',
       lead_name: leadName || undefined,
@@ -1135,13 +1192,12 @@ async function processWithMimo(
     return answer
   }
 
-  return 'Me confundi um pouco. Pode me dizer de novo o que você precisa?'
+  logBotEvent('bot_fallback', { reason: 'mimo_rounds_exhausted', phone: phone.slice(-4) })
+  return null
 }
 
 function sessionHasBookingContext(session: { step?: string; context: Record<string, unknown> }): boolean {
-  if (session.step && ['choose_service', 'choose_barber', 'choose_date', 'choose_time', 'confirm'].includes(session.step)) {
-    return true
-  }
+  if (isBookingStep(session.step)) return true
   const hist = session.context?.history
   if (!Array.isArray(hist) || !hist.length) return false
   const blob = hist
@@ -1186,9 +1242,40 @@ async function processMessage(
     return handleRateComment(db, phone, trimmed, session.context, leadName)
   }
 
+  if (isBookingStep(session.step)) {
+    return dispatchWizard(db, phone, trimmed, session, leadName)
+  }
+
+  let namedBarber = false
+  try {
+    const cached = Array.isArray(session.context.last_barbers)
+      ? (session.context.last_barbers as { nome: string }[])
+      : []
+    const barbers = cached.length ? cached : await listBookableBarbers(db)
+    namedBarber = Boolean(matchByName(trimmed, barbers))
+  } catch {
+    namedBarber = false
+  }
+  const lastSlots = Array.isArray(session.context.last_slots)
+    ? (session.context.last_slots as string[])
+    : Array.isArray(session.context.slots)
+      ? (session.context.slots as string[])
+      : []
+  const namedSlot = Boolean(lastSlots.length && matchSlot(trimmed, lastSlots))
+
   if (session.step === 'ask_name') {
-    const midBooking = sessionHasBookingContext(session) || looksLikeBookingUtterance(trimmed)
-    if (trimmed && isPlausiblePersonName(trimmed) && !looksLikeBookingUtterance(trimmed)) {
+    const midBooking =
+      sessionHasBookingContext(session) ||
+      looksLikeBookingUtterance(trimmed) ||
+      namedBarber ||
+      namedSlot
+    if (
+      trimmed &&
+      isPlausiblePersonName(trimmed) &&
+      !looksLikeBookingUtterance(trimmed) &&
+      !namedBarber &&
+      !namedSlot
+    ) {
       try {
         leadName = await saveLeadName(db, phone, trimmed)
       } catch (e) {
@@ -1228,7 +1315,13 @@ async function processMessage(
   }
 
   // Números novos: pede o nome ANTES da IA, salvo se o papo de agenda já começou
-  if (!isKnownLeadName(leadName) && !sessionHasBookingContext(session) && !looksLikeBookingUtterance(trimmed)) {
+  if (
+    !isKnownLeadName(leadName) &&
+    !sessionHasBookingContext(session) &&
+    !looksLikeBookingUtterance(trimmed) &&
+    !namedBarber &&
+    !namedSlot
+  ) {
     if (trimmed && isPlausiblePersonName(trimmed) && !isGreetingOnly(trimmed)) {
       try {
         leadName = await saveLeadName(db, phone, trimmed)
@@ -1339,75 +1432,46 @@ async function processMessage(
 
   const { step, context } = session
 
-  // SEMPRE tenta a IA primeiro — contexto e memória do chat
-  try {
-    const ai = await processWithMimo(db, phone, trimmed, leadName)
-    if (ai) return ai
-  } catch (e) {
-    console.error('processWithMimo failed', e)
-  }
-
-  // Sem IA: só então usa fluxo guiado por intent / passo (ainda em prosa)
-  const wizardSteps = [
-    'choose_service',
-    'choose_barber',
-    'choose_date',
-    'choose_time',
-    'confirm',
-    'cancel_pick',
-  ]
-
-  let fallback = ''
-  if (wizardSteps.includes(step) && context.mode !== 'mimo') {
-    switch (step) {
-      case 'choose_service':
-        fallback = await handleChooseService(db, phone, trimmed, context)
-        break
-      case 'choose_barber':
-        fallback = await handleChooseBarber(db, phone, trimmed, context)
-        break
-      case 'choose_date':
-        fallback = await handleChooseDate(db, phone, trimmed, context)
-        break
-      case 'choose_time':
-        fallback = await handleChooseTime(db, phone, trimmed, context)
-        break
-      case 'confirm':
-        fallback = await handleConfirm(db, phone, trimmed, context, leadName || undefined)
-        break
-      case 'cancel_pick':
-        fallback = await handleCancelPick(db, phone, trimmed, context)
-        break
-    }
-  } else {
-    switch (step) {
-      case 'choose_service':
-        fallback = await handleChooseService(db, phone, trimmed, context)
-        break
-      case 'choose_barber':
-        fallback = await handleChooseBarber(db, phone, trimmed, context)
-        break
-      case 'choose_date':
-        fallback = await handleChooseDate(db, phone, trimmed, context)
-        break
-      case 'choose_time':
-        fallback = await handleChooseTime(db, phone, trimmed, context)
-        break
-      case 'confirm':
-        fallback = await handleConfirm(db, phone, trimmed, context, leadName || undefined)
-        break
-      case 'cancel_pick':
-        fallback = await handleCancelPick(db, phone, trimmed, context)
-        break
-      default:
-        fallback = await handleFallbackIntent(db, phone, trimmed)
+  if (!isBookingStep(step)) {
+    try {
+      const ai = await processWithMimo(db, phone, trimmed, leadName)
+      if (ai) return ai
+    } catch (e) {
+      console.error('processWithMimo failed', e)
     }
   }
 
-  return humanizeOutbound(fallback || 'Me conta o que você precisa.', {
-    senderName: leadName,
-    userText: trimmed,
-  })
+  const fallback = await dispatchWizard(db, phone, trimmed, session, leadName)
+  if (!fallback) {
+    logBotEvent('bot_fallback', { reason: 'fallback_intent', phone: phone.slice(-4), step })
+  }
+  return fallback || 'Me conta o que você precisa.'
+}
+
+async function dispatchWizard(
+  db: ReturnType<typeof getServiceClient>,
+  phone: string,
+  trimmed: string,
+  session: { step: string; context: Record<string, unknown> },
+  leadName?: string | null,
+): Promise<string> {
+  const { step, context } = session
+  switch (step) {
+    case 'choose_service':
+      return handleChooseService(db, phone, trimmed, context)
+    case 'choose_barber':
+      return handleChooseBarber(db, phone, trimmed, context)
+    case 'choose_date':
+      return handleChooseDate(db, phone, trimmed, context)
+    case 'choose_time':
+      return handleChooseTime(db, phone, trimmed, context)
+    case 'confirm':
+      return handleConfirm(db, phone, trimmed, context, leadName || undefined)
+    case 'cancel_pick':
+      return handleCancelPick(db, phone, trimmed, context)
+    default:
+      return handleFallbackIntent(db, phone, trimmed)
+  }
 }
 
 // ─── HTTP entry ──────────────────────────────────────────────────────────────
@@ -1419,7 +1483,9 @@ Deno.serve(async (req) => {
 
   // Health check
   if (req.method === 'GET') {
-    return jsonResponse({ ok: true, service: 'whatsapp-webhook', ai: 'mimo' })
+    const db = getServiceClient()
+    const uaz = await resolveUazConfig(db)
+    return jsonResponse({ ok: true, service: 'whatsapp-webhook', ai: 'mimo', uaz_ok: Boolean(uaz.config) })
   }
 
   if (req.method !== 'POST') {
@@ -1458,6 +1524,10 @@ Deno.serve(async (req) => {
     const ownerPhone = instanceOwnerPhone(payload)
 
     const db = getServiceClient()
+    const uazReady = await resolveUazConfig(db)
+    if (!uazReady.config) {
+      return jsonResponse({ ok: false, error: uazReady.error || 'UAZAPI inválida' }, 503)
+    }
     const active = await isBotActive(db)
     if (!active) {
       return jsonResponse({ ok: true, bot: 'disabled' })
@@ -1469,6 +1539,15 @@ Deno.serve(async (req) => {
       if (shouldIgnore(msg)) {
         results.push({ phone: '', ok: true, note: 'ignored_fromMe_or_group' })
         continue
+      }
+
+      const mid = String(msg.messageid || msg.messageidHex || '').trim()
+      if (mid) {
+        const { error: dupErr } = await db.from('whatsapp_processed_messages').insert({ messageid: mid })
+        if (dupErr && (dupErr.code === '23505' || /duplicate|unique/i.test(dupErr.message || ''))) {
+          results.push({ phone: '', ok: true, note: 'duplicate' })
+          continue
+        }
       }
 
       const phone = extractPhone(msg, payload)
@@ -1483,26 +1562,40 @@ Deno.serve(async (req) => {
         continue
       }
 
-      // Só responder no número da instância se a conversa for realmente com ele
-      // (teste do dono). Nunca usar owner só porque veio no root do payload.
-      if (ownerPhone && phone === ownerPhone) {
-        console.info('whatsapp-webhook: reply to instance owner (self-test or same number)', phone)
-      }
+      await db.rpc('lock_whatsapp_phone', { p_phone: phone }).catch(() => null)
+      try {
+        if (ownerPhone && phone === ownerPhone) {
+          console.info('whatsapp-webhook: reply to instance owner (self-test or same number)', phone)
+        }
 
-      const text = extractText(msg)
-      // Perfil WhatsApp NÃO é mais usado para chamar o lead
-      const uazCfg = await beginTyping(phone, db, 15000)
+        const text = extractText(msg)
+        const uazCfg = await beginTyping(phone, db, 15000)
+        if (!uazCfg) {
+          results.push({ phone, ok: false, note: 'uaz_unavailable' })
+          continue
+        }
 
-      if (!text) {
-        const answer = await processMessage(db, phone, 'oi')
-        await reply(phone, answer, db, uazCfg)
+        if (!text) {
+          const sess = await getSession(db, phone)
+          const hist = Array.isArray(sess.context.history) ? sess.context.history : []
+          if (hist.length) {
+            results.push({ phone, ok: true, note: 'empty_ignored' })
+            continue
+          }
+          const leadName = await getLeadDisplayName(db, phone)
+          const answer = await processMessage(db, phone, 'oi')
+          await reply(phone, answer, db, uazCfg, { senderName: leadName, userText: 'oi' })
+          results.push({ phone, ok: true })
+          continue
+        }
+
+        const leadName = await getLeadDisplayName(db, phone)
+        const answer = await processMessage(db, phone, text)
+        await reply(phone, answer, db, uazCfg, { senderName: leadName, userText: text })
         results.push({ phone, ok: true })
-        continue
+      } finally {
+        await db.rpc('unlock_whatsapp_phone', { p_phone: phone }).catch(() => null)
       }
-
-      const answer = await processMessage(db, phone, text)
-      await reply(phone, answer, db, uazCfg)
-      results.push({ phone, ok: true })
     }
 
     return jsonResponse({

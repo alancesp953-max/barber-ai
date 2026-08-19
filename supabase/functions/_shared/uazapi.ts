@@ -161,6 +161,9 @@ export async function humanReply(
   text: string,
   config?: UazapiConfig,
 ): Promise<{ ok: boolean; data?: unknown; error?: string }> {
+  if (!config?.baseUrl || !config?.token) {
+    return { ok: false, error: 'UAZAPI config obrigatória (use resolveUazConfig)' }
+  }
   const phone = normalizePhone(number)
   const delay = typingDelayMs(text)
 

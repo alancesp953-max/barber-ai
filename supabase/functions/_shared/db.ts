@@ -37,23 +37,49 @@ export async function getSession(db: SupabaseClient, phone: string): Promise<Ses
   return { phone: p, step: 'chat', context: {} }
 }
 
+export const BOOKING_STEPS = [
+  'choose_service',
+  'choose_barber',
+  'choose_date',
+  'choose_time',
+  'confirm',
+  'cancel_pick',
+] as const
+
+export type BookingStep = (typeof BOOKING_STEPS)[number]
+
+export function isBookingStep(step?: string | null): boolean {
+  return !!step && (BOOKING_STEPS as readonly string[]).includes(step)
+}
+
 export async function saveSession(
   db: SupabaseClient,
   phone: string,
   step: string,
   context: Record<string, unknown> = {},
+  opts?: { merge?: boolean },
 ): Promise<void> {
   const p = normalizePhone(phone)
+  const merge = opts?.merge !== false
+  let next = context
+  if (merge) {
+    const prev = await getSession(db, phone)
+    next = { ...prev.context, ...context }
+  }
   await db.from('whatsapp_sessions').upsert({
     phone: p,
     step,
-    context,
+    context: next,
     updated_at: new Date().toISOString(),
   })
 }
 
 export async function resetSession(db: SupabaseClient, phone: string): Promise<void> {
-  await saveSession(db, phone, 'chat', {})
+  await saveSession(db, phone, 'chat', {}, { merge: false })
+}
+
+export function logBotEvent(event: string, extra: Record<string, unknown> = {}): void {
+  console.warn(JSON.stringify({ event, ts: new Date().toISOString(), ...extra }))
 }
 
 export async function findOrCreateClientByPhone(
@@ -149,6 +175,7 @@ export function isPlausiblePersonName(text: string): boolean {
   const raw = text.trim().replace(/^me chamo\s+/i, '').replace(/^sou\s+(o|a)\s+/i, '').replace(/^é\s+/i, '').trim()
   if (!raw || raw.length > 50) return false
   if (isGreetingOnly(raw)) return false
+  if (isAffirmative(raw) || isNegative(raw)) return false
   if (looksLikeIntentNotName(raw)) return false
   if (/\d{3,}/.test(raw)) return false
   const words = raw.split(/\s+/).filter(Boolean)
@@ -175,6 +202,14 @@ export async function saveLeadName(
   nome: string,
 ): Promise<string> {
   const cleaned = cleanLeadName(nome)
+  if (
+    !isPlausiblePersonName(cleaned) ||
+    looksLikeIntentNotName(cleaned) ||
+    looksLikeBookingUtterance(cleaned)
+  ) {
+    const client = await findOrCreateClientByPhone(db, phone)
+    return isKnownLeadName(client.nome) ? String(client.nome) : client.nome
+  }
   const client = await findOrCreateClientByPhone(db, phone, cleaned)
   if (isKnownLeadName(client.nome) && normalizeMatch(client.nome) === normalizeMatch(cleaned)) {
     return client.nome
@@ -652,13 +687,14 @@ export function looksLikeRobotMenu(text: string): boolean {
   if (normalizeMatch(raw).includes('seu agendamento foi confirmado')) {
     return false
   }
-  // Só trata como menu se parecer inventário de capacidades (1. agendar 2. cancelar…)
+  // Só trata como menu numerado de capacidades (1. agendar 2. cancelar…)
   const numbered = lines.filter((l) => /^\d+[\).\-]/.test(l)).length
-  if (numbered >= 3 && /agendar|cancelar|servicos|serviços|funcionamento/.test(t)) {
+  if (
+    numbered >= 3 &&
+    (t.includes('assistente') || t.includes('o que deseja fazer') || t.includes('posso te ajudar com'))
+  ) {
     return true
   }
-  const emojiCount = (raw.match(/\p{Extended_Pictographic}/gu) || []).length
-  if (emojiCount >= 2 && lines.length >= 3) return true
   return false
 }
 
@@ -667,15 +703,32 @@ export function looksLikeBookingUtterance(text: string): boolean {
   if (!raw) return false
   const t = normalizeMatch(raw)
   if (/\d{1,2}\s*h\s*\d{0,2}/.test(t) || /\d{1,2}:\d{2}/.test(t)) return true
+  if (/^(hoje|amanha|sabado|domingo|segunda|terca|quarta|quinta|sexta)$/.test(t)) return true
   if (
     /\b(hoje|amanha|sabado|domingo|segunda|terca|quarta|quinta|sexta)\b/.test(t) &&
     t.split(/\s+/).length >= 2
   ) {
     return true
   }
+  if (t === 'pode ser' || t === 'qualquer um' || t === 'tanto faz') return true
   if (/\b(corte|barba|combo|pezinho|sobrancelha|marcar|remarcar|cancelar)\b/.test(t)) {
     return !isPlausiblePersonName(raw)
   }
+  return false
+}
+
+export function isProtectedOutbound(text: string): boolean {
+  const c = (text || '').trim()
+  if (!c) return false
+  const n = normalizeMatch(c)
+  if (/^opções de serviço/i.test(c) || /^opcoes de servico/i.test(c)) return true
+  if (n.includes('seu agendamento foi confirmado')) return true
+  if (n.includes('vou lhe enviar as opcoes de servicos abaixo')) return true
+  if (n.includes('preferencia por algum barbeiro')) return true
+  if (/posso (fechar|confirmar|agendar)/i.test(c)) return true
+  if (n.includes('ainda rola')) return true
+  if (n.includes('pontualidade')) return true
+  if (/serviço:/i.test(c) && /barbeiro:|data:|horário:/i.test(c)) return true
   return false
 }
 
@@ -688,20 +741,19 @@ export function humanizeOutbound(
   opts?: { senderName?: string | null; userText?: string },
 ): string {
   const cleaned = stripBotChrome(text)
-  const keepAsIs =
-    /^opções de serviço:/i.test(cleaned) ||
-    /^opcoes de servico:/i.test(cleaned) ||
-    /seu agendamento foi confirmado/i.test(cleaned) ||
-    /vou lhe enviar as opções de serviços abaixo/i.test(cleaned) ||
-    /prefer[eê]ncia por algum barbeiro/i.test(cleaned) ||
-    /posso (fechar|confirmar|agendar)/i.test(cleaned)
-  if (keepAsIs) return cleaned
+  if (isProtectedOutbound(cleaned) || isProtectedOutbound(text)) return cleaned || text.trim()
   if (!cleaned) {
+    logBotEvent('bot_fallback', { reason: 'empty_cleaned', inbound: String(opts?.userText || '').slice(0, 80) })
     return isGreetingOnly(opts?.userText || '')
       ? greetingText(opts?.senderName)
       : 'Me conta o que você precisa.'
   }
-  if (looksLikeRobotMenu(cleaned) || looksLikeRobotMenu(text)) {
+  if (looksLikeRobotMenu(cleaned)) {
+    logBotEvent('bot_fallback', {
+      reason: 'robot_menu',
+      inbound: String(opts?.userText || '').slice(0, 80),
+      outbound: cleaned.slice(0, 120),
+    })
     if (opts?.userText && isGreetingOnly(opts.userText)) {
       return greetingText(opts.senderName)
     }
