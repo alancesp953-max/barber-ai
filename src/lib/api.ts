@@ -329,7 +329,7 @@ export async function notifyAppointmentWhatsApp(params: {
       : params.date
 
   const text = [
-    '✅ *Agendamento confirmado!*',
+    'Seu agendamento foi confirmado!',
     '',
     params.clientName ? `Cliente: ${params.clientName}` : null,
     params.serviceName ? `Serviço: ${params.serviceName}` : null,
@@ -337,7 +337,7 @@ export async function notifyAppointmentWhatsApp(params: {
     `Data: ${dateBr}`,
     `Horário: ${time}`,
     '',
-    'Responda no WhatsApp da barbearia se precisar remarcar ou cancelar.',
+    'Pedimos pontualidade, pois trabalhamos com tolerância mínima para atrasos e, caso passe do horário, a vaga será passada para o próximo atendimento.',
   ]
     .filter(Boolean)
     .join('\n')
@@ -565,12 +565,38 @@ export async function getClients() {
   return data ?? []
 }
 
+export async function searchClients(query: string) {
+  const raw = query.trim()
+  if (raw.length < 2) return []
+  const safe = raw.replace(/[%_,()]/g, ' ').replace(/\s+/g, ' ').trim()
+  const digits = raw.replace(/\D/g, '')
+  const orParts = [`nome.ilike.%${safe}%`]
+  if (digits.length >= 4) orParts.push(`telefone.ilike.%${digits}%`)
+  const { data, error } = await supabase
+    .from('clientes')
+    .select('id, nome, telefone, email, data_nascimento')
+    .or(orParts.join(','))
+    .order('nome')
+    .limit(20)
+  if (error) throw new Error(`Erro ao buscar clientes: ${error.message}`)
+  return data ?? []
+}
+
 export async function findOrCreateClient(cliente: {
+  id?: string
   nome: string
   telefone?: string
   email?: string
   data_nascimento?: string | null
 }) {
+  if (cliente.id) {
+    const { data: byId } = await supabase
+      .from('clientes')
+      .select('*')
+      .eq('id', cliente.id)
+      .maybeSingle()
+    if (byId) return byId
+  }
   let query = supabase.from('clientes').select('*')
   if (cliente.telefone)
     query = query.eq('telefone', cliente.telefone)
@@ -1252,6 +1278,37 @@ export async function upsertBarbeiroHorario(row: {
     .single()
   if (error) throw new Error(`Erro ao salvar horário: ${error.message}`)
   return data
+}
+
+export async function saveBarbeiroDiasAtendimento(
+  barbeiroId: string,
+  openDays: number[],
+  hoursByDay?: Record<number, { abertura?: string | null; fechamento?: string | null }>,
+) {
+  const existing = await getBarbeiroHorarios(barbeiroId)
+  const openSet = new Set(openDays)
+  const rows = []
+  for (let dia = 0; dia <= 6; dia++) {
+    const prev = existing.find((h) => h.dia_semana === dia)
+    const extra = hoursByDay?.[dia]
+    const aberto = openSet.has(dia)
+    const abertura = aberto
+      ? extra?.abertura || prev?.abertura || '08:30'
+      : null
+    const fechamento = aberto
+      ? extra?.fechamento || prev?.fechamento || '19:30'
+      : null
+    rows.push(
+      upsertBarbeiroHorario({
+        barbeiro_id: barbeiroId,
+        dia_semana: dia,
+        abertura,
+        fechamento,
+        fechado: !aberto,
+      }),
+    )
+  }
+  await Promise.all(rows)
 }
 
 export async function getBarbeiroBloqueios(barbeiroId: string): Promise<BarberBlock[]> {

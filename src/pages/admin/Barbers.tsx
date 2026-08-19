@@ -14,7 +14,7 @@ import {
   TextInput,
   Title,
 } from '@mantine/core'
-import { CalendarOff, ChevronDown, ChevronUp, Plus, Trash2, Edit2, Star, Percent, ListOrdered } from 'lucide-react'
+import { CalendarOff, CalendarDays, ChevronDown, ChevronUp, Plus, Trash2, Edit2, Star, Percent, ListOrdered } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import {
   getBarbers,
@@ -26,6 +26,7 @@ import {
 import type { Barber } from '../../types/database'
 import { PageHeader } from '../../components/PageHeader'
 import { BarberBlocksManager } from '../../components/BarberBlocksManager'
+import { BarberWeeklyDays } from '../../components/BarberWeeklyDays'
 
 
 const inputStyles = {
@@ -333,6 +334,15 @@ export default function Barbeiros() {
                               size="xs"
                               variant="outline"
                               color="gold"
+                              leftSection={<CalendarDays size={12} />}
+                              onClick={() => abrirModal('dias', b)}
+                            >
+                              Dias
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              color="gold"
                               leftSection={<CalendarOff size={12} />}
                               onClick={() => abrirModal('folgas', b)}
                             >
@@ -495,6 +505,25 @@ export default function Barbeiros() {
             inputStyles={inputStyles}
           />
         )}
+      </Modal>
+
+      <Modal
+        opened={modalAberto === 'dias' && Boolean(barbeiroEditando)}
+        onClose={fecharModal}
+        title={
+          <Title order={4} c="gold">
+            Dias que atende — {barbeiroEditando?.nome}
+          </Title>
+        }
+        centered
+        size="lg"
+        styles={{
+          content: { background: '#1a1a1a', border: '1px solid rgba(197,160,89,0.2)' },
+          header: { background: '#1a1a1a' },
+          body: { background: '#1a1a1a' },
+        }}
+      >
+        {barbeiroEditando && <BarberWeeklyDays barbeiroId={barbeiroEditando.id} />}
       </Modal>
     </Stack>
   )

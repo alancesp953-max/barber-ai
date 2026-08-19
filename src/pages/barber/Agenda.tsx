@@ -36,11 +36,11 @@ import {
   getBarbeiroBloqueios,
   getBarbeiroByUserId,
   getBarbeiroHorarios,
-  upsertBarbeiroHorario,
+  saveBarbeiroDiasAtendimento,
   type BarberBlock,
   type BarberDayHours,
 } from '../../lib/api'
-import { supabase } from '../../services/supabaseClient'
+import { BarberWeeklyDays } from '../../components/BarberWeeklyDays'
 
 type AgendaItem = {
   id: string
@@ -279,17 +279,24 @@ export default function BarberAgenda() {
     if (!barbeiro) return
     const current = horarios[dia]
     const next = { ...current, ...patch, barbeiro_id: barbeiro.id, dia_semana: dia }
-    setHorarios((prev) => ({ ...prev, [dia]: next }))
+    const nextMap = { ...horarios, [dia]: next }
+    setHorarios(nextMap)
     try {
-      await upsertBarbeiroHorario({
-        barbeiro_id: barbeiro.id,
-        dia_semana: dia,
-        abertura: next.fechado ? null : next.abertura,
-        fechamento: next.fechado ? null : next.fechamento,
-        fechado: Boolean(next.fechado),
-      })
+      const openDays = DIAS
+        .map((d) => d.dia)
+        .filter((d) => !Boolean((d === dia ? next : nextMap[d])?.fechado))
+      await saveBarbeiroDiasAtendimento(
+        barbeiro.id,
+        openDays,
+        Object.fromEntries(
+          DIAS.map((d) => {
+            const h = d.dia === dia ? next : nextMap[d.dia]
+            return [d.dia, { abertura: h?.abertura, fechamento: h?.fechamento }]
+          }),
+        ),
+      )
       setAvailMsgTone('gold')
-      setAvailMsg('Horário salvo.')
+      setAvailMsg('Horário salvo. Dias sem atendimento ficam fechados na agenda.')
     } catch (e) {
       setAvailMsgTone('red')
       setAvailMsg(e instanceof Error ? e.message : 'Erro ao salvar horário')
@@ -573,12 +580,25 @@ export default function BarberAgenda() {
                   </Alert>
                 )}
 
+                {barbeiro && (
+                <Card withBorder padding="lg">
+                  <Group gap="xs" mb="xs">
+                    <CalendarDays size={18} color="#c5a059" />
+                    <Title order={4}>Dias que atende</Title>
+                  </Group>
+                  <BarberWeeklyDays
+                    barbeiroId={barbeiro.id}
+                    onSaved={() => void loadAvailability(barbeiro.id)}
+                  />
+                </Card>
+                )}
+
                 <Card withBorder padding="lg">
                   <Title order={4} mb="xs">
                     Dias e horários de trabalho
                   </Title>
                   <Text size="sm" c="dimmed" mb="md">
-                    Se não configurar, vale o horário da barbearia. Dias fechados não aceitam agendamento.
+                    Ao salvar, os dias não marcados ficam fechados (não usa o horário da loja).
                   </Text>
                   <Stack gap="sm">
                     {DIAS.map((d) => {

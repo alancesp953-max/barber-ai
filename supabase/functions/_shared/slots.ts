@@ -142,18 +142,23 @@ export async function listBookableBarbers(
   const dayStart = toBrtMs(ymd, '00:00')
   const dayEnd = toBrtMs(ymd, '23:59')
 
-  const [{ data: cfg }, { data: hoursRows }, { data: blocks }] = await Promise.all([
+  const ids = all.map((b) => b.id)
+  const [{ data: cfg }, { data: hoursRows }, { data: anyHoursRows }, { data: blocks }] = await Promise.all([
     db.from('configuracoes').select('*').eq('id', 1).maybeSingle(),
     db.from('barbeiro_horarios').select('barbeiro_id, dia_semana, abertura, fechamento, fechado').eq('dia_semana', dow),
+    db.from('barbeiro_horarios').select('barbeiro_id').in('barbeiro_id', ids),
     db
       .from('barbeiro_bloqueios')
       .select('barbeiro_id, inicio, fim')
-      .in('barbeiro_id', all.map((b) => b.id))
+      .in('barbeiro_id', ids)
       .lt('inicio', new Date(dayEnd + 60_000).toISOString()),
   ])
 
   const shopRange = parseHoursRange((cfg as Record<string, unknown> | null)?.[shopHoursKey(dow)] as string)
 
+  const hasCustomHours = new Set(
+    ((anyHoursRows || []) as { barbeiro_id: string }[]).map((h) => h.barbeiro_id),
+  )
   const hoursByBarber = new Map<
     string,
     { fechado: boolean; abertura: string | null; fechamento: string | null }
@@ -181,7 +186,10 @@ export async function listBookableBarbers(
   for (const b of all) {
     const bh = hoursByBarber.get(b.id)
     let work: { open: string; close: string } | null = shopRange
-    if (bh) {
+    if (hasCustomHours.has(b.id)) {
+      if (!bh || bh.fechado || !bh.abertura || !bh.fechamento) continue
+      work = { open: String(bh.abertura).slice(0, 5), close: String(bh.fechamento).slice(0, 5) }
+    } else if (bh) {
       if (bh.fechado || !bh.abertura || !bh.fechamento) continue
       work = { open: String(bh.abertura).slice(0, 5), close: String(bh.fechamento).slice(0, 5) }
     }

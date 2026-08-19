@@ -23,6 +23,11 @@ import {
   isKnownLeadName,
   isNegative,
   isPlausiblePersonName,
+  isShopOpenNow,
+  closedShopNotice,
+  formatServicePriceList,
+  punctualityConfirmText,
+  askNameAgainText,
   matchByName,
   matchSlot,
   normalizeMatch,
@@ -477,16 +482,12 @@ async function startBooking(
     })),
   })
 
-  const lines = list.map(
-    (s: { nome: string; preco: number; duracao_minutos: number }) =>
-      `• *${s.nome}* — R$ ${Number(s.preco).toFixed(2)} (${s.duracao_minutos} min)`,
-  )
   return [
-    'Beleza. Qual serviço você quer?',
+    'Vou lhe enviar as opções de serviços abaixo',
     '',
-    ...lines,
+    formatServicePriceList(list),
     '',
-    'Pode falar o nome (tipo "corte").',
+    'Qual você quer?',
   ].join('\n')
 }
 
@@ -974,15 +975,12 @@ async function handleConfirm(
   }
 
   return [
-    '✅ *Agendamento confirmado!*',
-    '',
     `Serviço: ${context.servico_nome}`,
     `Barbeiro: ${booked.barbeiro_nome || check.barbeiro_nome || context.barbeiro_nome || 'A definir'}`,
     `Data: ${formatDateBR(String(context.data))}`,
     `Horário: ${booked.horario}`,
-    `Cód: ${String(booked.id || '').slice(0, 8)}`,
     '',
-    aftercareText(),
+    punctualityConfirmText(),
   ].join('\n')
 }
 
@@ -1036,7 +1034,17 @@ async function processWithMimo(
     console.warn('fetchUpcomingAppointments failed', e)
   }
 
+  let shopOpen = true
+  try {
+    shopOpen = await isShopOpenNow(db)
+  } catch {
+    shopOpen = true
+  }
+
   const system = systemPromptBarber() +
+    (shopOpen
+      ? ''
+      : `\nLOJA FECHADA AGORA: ${closedShopNotice()} Avise isso e continue o agendamento para amanhã/outras datas.`) +
     (ctxLines.length
       ? `\nContexto parcial já conhecido desta conversa (não pergunte de novo se já souber):\n- ${ctxLines.join('\n- ')}`
       : '') +
@@ -1145,40 +1153,7 @@ async function processMessage(
   await findOrCreateClientByPhone(db, phone).catch(() => null)
   leadName = await getLeadDisplayName(db, phone)
 
-  if (session.step === 'ask_name' && trimmed && isPlausiblePersonName(trimmed)) {
-    try {
-      leadName = await saveLeadName(db, phone, trimmed)
-    } catch (e) {
-      console.error('saveLeadName', e)
-    }
-    let appts: Awaited<ReturnType<typeof fetchUpcomingAppointments>> = []
-    try {
-      appts = await fetchUpcomingAppointments(db, phone)
-    } catch {
-      /* ignore */
-    }
-    const hi = afterNameGreeting(leadName, shop, appts)
-    await saveSession(db, phone, 'chat', {
-      history: [
-        { role: 'user', content: trimmed },
-        { role: 'assistant', content: hi },
-      ],
-      mode: 'mimo',
-      lead_name: leadName,
-    })
-    return hi
-  }
-
-  // Se mandou só o nome no meio do chat, salva sem travar
-  if (!leadName && trimmed && isPlausiblePersonName(trimmed) && !isGreetingOnly(trimmed)) {
-    try {
-      leadName = await saveLeadName(db, phone, trimmed)
-    } catch {
-      /* ignore */
-    }
-  }
-
-  // ── Avaliação pós-corte (antes da IA / cumprimentos) ───────────────────────
+  // ── Avaliação pós-corte (antes da captura de nome / IA) ────────────────────
   if (session.step === 'rate_ask') {
     return handleRateAsk(db, phone, trimmed, session.context, leadName)
   }
@@ -1189,6 +1164,75 @@ async function processMessage(
     return handleRateComment(db, phone, trimmed, session.context, leadName)
   }
 
+  if (session.step === 'ask_name') {
+    if (trimmed && isPlausiblePersonName(trimmed)) {
+      try {
+        leadName = await saveLeadName(db, phone, trimmed)
+      } catch (e) {
+        console.error('saveLeadName', e)
+      }
+      let appts: Awaited<ReturnType<typeof fetchUpcomingAppointments>> = []
+      try {
+        appts = await fetchUpcomingAppointments(db, phone)
+      } catch {
+        /* ignore */
+      }
+      let hi = afterNameGreeting(leadName, shop, appts)
+      try {
+        if (!(await isShopOpenNow(db))) hi = `${hi}\n\n${closedShopNotice()}`
+      } catch {
+        /* ignore */
+      }
+      await saveSession(db, phone, 'chat', {
+        history: [
+          { role: 'user', content: trimmed },
+          { role: 'assistant', content: hi },
+        ],
+        mode: 'mimo',
+        lead_name: leadName,
+      })
+      return hi
+    }
+    await saveSession(db, phone, 'ask_name', { awaiting_name: true })
+    return trimmed && !isGreetingOnly(trimmed) ? askNameAgainText() : askNameText(shop)
+  }
+
+  // Números novos: pede o nome ANTES da IA / agendamento
+  if (!isKnownLeadName(leadName)) {
+    if (trimmed && isPlausiblePersonName(trimmed) && !isGreetingOnly(trimmed)) {
+      try {
+        leadName = await saveLeadName(db, phone, trimmed)
+      } catch {
+        /* ignore */
+      }
+      if (isKnownLeadName(leadName)) {
+        let appts: Awaited<ReturnType<typeof fetchUpcomingAppointments>> = []
+        try {
+          appts = await fetchUpcomingAppointments(db, phone)
+        } catch {
+          /* ignore */
+        }
+        let hi = afterNameGreeting(leadName, shop, appts)
+        try {
+          if (!(await isShopOpenNow(db))) hi = `${hi}\n\n${closedShopNotice()}`
+        } catch {
+          /* ignore */
+        }
+        await saveSession(db, phone, 'chat', {
+          history: [
+            { role: 'user', content: trimmed },
+            { role: 'assistant', content: hi },
+          ],
+          mode: 'mimo',
+          lead_name: leadName,
+        })
+        return hi
+      }
+    }
+    await saveSession(db, phone, 'ask_name', { awaiting_name: true })
+    return askNameText(shop)
+  }
+
   // ── Cumprimento puro ───────────────────────────────────────────────────────
   if (!trimmed || isGreetingOnly(trimmed)) {
     let appts: Awaited<ReturnType<typeof fetchUpcomingAppointments>> = []
@@ -1197,7 +1241,12 @@ async function processMessage(
     } catch (e) {
       console.warn('greeting appointments', e)
     }
-    const hi = greetingWithAppointments(leadName, shop, appts)
+    let hi = greetingWithAppointments(leadName, shop, appts)
+    try {
+      if (!(await isShopOpenNow(db))) hi = `${hi}\n\n${closedShopNotice()}`
+    } catch {
+      /* ignore */
+    }
     try {
       const prev = Array.isArray(session.context.history)
         ? (session.context.history as ChatMessage[])

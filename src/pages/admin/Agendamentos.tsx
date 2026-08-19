@@ -1,4 +1,5 @@
 import {
+  Autocomplete,
   ActionIcon,
   Alert,
   Box,
@@ -23,6 +24,7 @@ import {
   createAppointment,
   deleteAppointment,
   findOrCreateClient,
+  searchClients,
   getAppointments,
   getBarbers,
   getServices,
@@ -228,6 +230,10 @@ export default function Agendamentos() {
   const [clientEmail, setClientEmail] = useState('')
   const [clientPhone, setClientPhone] = useState('')
   const [clientBirthdate, setClientBirthdate] = useState('')
+  const [selectedClientId, setSelectedClientId] = useState<string | null>(null)
+  const [clientHits, setClientHits] = useState<
+    { id: string; nome: string; telefone: string | null; email: string | null; data_nascimento: string | null }[]
+  >([])
   const [date, setDate] = useState('')
   const [time, setTime] = useState('')
   const [barberId, setBarberId] = useState('')
@@ -249,6 +255,20 @@ export default function Agendamentos() {
   useEffect(() => {
     load()
   }, [])
+
+  useEffect(() => {
+    const q = clientName.trim()
+    if (q.length < 2) {
+      setClientHits([])
+      return
+    }
+    const t = window.setTimeout(() => {
+      void searchClients(q)
+        .then(setClientHits)
+        .catch(() => setClientHits([]))
+    }, 250)
+    return () => window.clearTimeout(t)
+  }, [clientName])
 
   const appointmentsByDate = useMemo(() => {
     const grouped: Record<string, Appointment[]> = {}
@@ -304,6 +324,7 @@ export default function Agendamentos() {
     try {
       const phone = clientPhone.trim()
       const cliente = await findOrCreateClient({
+        id: selectedClientId || undefined,
         nome: clientName.trim(),
         email: clientEmail,
         telefone: phone || undefined,
@@ -340,6 +361,8 @@ export default function Agendamentos() {
       setClientEmail('')
       setClientPhone('')
       setClientBirthdate('')
+      setSelectedClientId(null)
+      setClientHits([])
       setDate('')
       setTime('')
       setBarberId('')
@@ -415,12 +438,28 @@ export default function Agendamentos() {
           onSubmit={handleCreate}
         >
           <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
-            <TextInput
+            <Autocomplete
               label={`${t('appointments.clientName')} *`}
               required
               value={clientName}
-              onChange={(e) => setClientName(e.currentTarget.value)}
-              placeholder="Nome do cliente"
+              onChange={(v) => {
+                setClientName(v)
+                setSelectedClientId(null)
+              }}
+              data={clientHits.map((c) => ({
+                value: c.id,
+                label: `${c.nome}${c.telefone ? ` — ${c.telefone}` : ''}`,
+              }))}
+              onOptionSubmit={(id) => {
+                const c = clientHits.find((x) => x.id === id)
+                if (!c) return
+                setSelectedClientId(c.id)
+                setClientName(c.nome)
+                setClientPhone(c.telefone || '')
+                setClientEmail(c.email || '')
+                setClientBirthdate(c.data_nascimento || '')
+              }}
+              placeholder="Buscar por nome ou telefone"
               styles={inputStyles}
             />
             <TextInput

@@ -110,6 +110,28 @@ export async function findOrCreateClientByPhone(
   return data
 }
 
+const INTENT_NAME_BLOCK = [
+  'agendar', 'agendamento', 'agendamentos', 'marcar', 'marcacao', 'marcação',
+  'cancelar', 'desmarcar', 'horarios', 'horario', 'preco', 'precos', 'preços',
+  'servico', 'servicos', 'barba', 'corte', 'cabelo', 'pezinho', 'sobrancelha',
+  'combo', 'remarc', 'remarcar', 'disponivel', 'disponiveis', 'opcoes', 'opções',
+  'meu nome', 'nao sei', 'tanto faz', 'qualquer', 'diva', 'barbearia',
+  'pode', 'apenas', 'sistema', 'obg', 'obrigado', 'valeu', 'sim', 'nao',
+  'domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado',
+]
+
+export function looksLikeIntentNotName(text: string): boolean {
+  const n = normalizeMatch(text)
+  if (!n) return false
+  const words = n.split(/\s+/).filter(Boolean)
+  return INTENT_NAME_BLOCK.some((b) => {
+    const nb = normalizeMatch(b)
+    if (!nb) return false
+    if (n === nb) return true
+    return words.includes(nb)
+  })
+}
+
 /** Nome vindo do cadastro e não placeholder genérico. */
 export function isKnownLeadName(nome?: string | null): boolean {
   if (!nome?.trim()) return false
@@ -117,6 +139,7 @@ export function isKnownLeadName(nome?: string | null): boolean {
   const n = normalizeMatch(t)
   if (n.startsWith('cliente ')) return false
   if (['cliente', 'user', 'usuario', 'usuário', 'undefined', 'null'].includes(n)) return false
+  if (looksLikeIntentNotName(t)) return false
   if (t.length < 2) return false
   return true
 }
@@ -126,14 +149,7 @@ export function isPlausiblePersonName(text: string): boolean {
   const raw = text.trim().replace(/^me chamo\s+/i, '').replace(/^sou\s+(o|a)\s+/i, '').replace(/^é\s+/i, '').trim()
   if (!raw || raw.length > 50) return false
   if (isGreetingOnly(raw)) return false
-  const n = normalizeMatch(raw)
-  // intenções comuns que não são nome
-  const blocked = [
-    'agendar', 'marcar', 'cancelar', 'desmarcar', 'horarios', 'horario',
-    'preco', 'preços', 'servico', 'servicos', 'barba', 'corte', 'remarc',
-    'meu nome', 'nao sei', 'tanto faz',
-  ]
-  if (blocked.some((b) => n === b || n.startsWith(b + ' '))) return false
+  if (looksLikeIntentNotName(raw)) return false
   if (/\d{3,}/.test(raw)) return false
   const words = raw.split(/\s+/).filter(Boolean)
   if (words.length < 1 || words.length > 5) return false
@@ -191,24 +207,42 @@ export async function isBotActive(db: SupabaseClient): Promise<boolean> {
 }
 
 export function firstNameFrom(senderName?: string | null): string | null {
-  if (!senderName) return null
+  if (!senderName || !isKnownLeadName(senderName)) return null
   const first = senderName.trim().split(/\s+/)[0] || ''
   if (first.length < 2 || /^\d+$/.test(first)) return null
-  // ignora nomes genéricos do WhatsApp
-  if (['cliente', 'user', 'usuario', 'usuário'].includes(normalizeMatch(first))) return null
+  if (looksLikeIntentNotName(first)) return null
   return first
+}
+
+export const DIVA_IDENTITY = 'Eu sou a Diva da Divina Barbearia da Varjota'
+
+export function punctualityConfirmText(): string {
+  return 'Seu agendamento foi confirmado! Pedimos pontualidade, pois trabalhamos com tolerância mínima para atrasos e, caso passe do horário, a vaga será passada para o próximo atendimento.'
+}
+
+export function formatBrl(value: number): string {
+  return `R$ ${Number(value).toFixed(2).replace('.', ',')}`
+}
+
+export function formatServicePriceList(
+  services: { nome: string; preco: number }[],
+): string {
+  const lines = services.map((s) => `${s.nome}: ${formatBrl(s.preco)}`)
+  return ['Opções de serviço:', ...lines].join('\n')
+}
+
+export function closedShopNotice(): string {
+  return 'O expediente de atendimento de hoje já está encerrado. Posso agendar para amanhã ou outra data disponível, se quiser. Vamos agendar?'
 }
 
 /** Cumprimento da barbearia — Diva, sem se dizer assistente/bot. */
 export function greetingText(
   senderName?: string | null,
-  shopName?: string | null,
+  _shopName?: string | null,
 ): string {
   const first = firstNameFrom(senderName)
-  const place = (shopName || '').trim()
-  const fromLine = place ? `Aqui é a Diva da ${place}.` : 'Aqui é a Diva da barbearia.'
   const hi = first ? `Oi, ${first}! Tudo bem?` : 'Oi! Tudo bem?'
-  return `${hi} ${fromLine} Como posso te ajudar?`
+  return `${hi} ${DIVA_IDENTITY}. Vamos agendar?`
 }
 
 /** @deprecated use greetingText */
@@ -326,6 +360,53 @@ export async function fetchShopPublicInfo(db: SupabaseClient): Promise<ShopPubli
     horarios,
     resumo: shopInfoResumo(endereco, openLabel, horarios.domingo),
   }
+}
+
+function parseHmRange(raw: string): { open: string; close: string } | null {
+  if (isClosedLabel(raw)) return null
+  let s = raw.trim().replace(/[–—]/g, '-').replace(/\s+às\s+/gi, '-').replace(/\s+as\s+/gi, '-')
+  const parts = s.split('-').map((p) => p.trim()).filter(Boolean)
+  if (parts.length < 2) return null
+  const norm = (tok: string) => {
+    const t = tok.toLowerCase().replace(/h/g, ':').replace(/\./g, ':').replace(',', ':')
+    const m = t.match(/^(\d{1,2}):(\d{1,2})/)
+    if (!m) return null
+    return `${m[1].padStart(2, '0')}:${m[2].padStart(2, '0')}`
+  }
+  const open = norm(parts[0])
+  const close = norm(parts[1])
+  if (!open || !close) return null
+  return { open, close }
+}
+
+/** Expediente da loja agora (America/Sao_Paulo), com horários salvos em Configurações. */
+export async function isShopOpenNow(db: SupabaseClient): Promise<boolean> {
+  const info = await fetchShopPublicInfo(db)
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date())
+  const map: Record<string, string> = {}
+  for (const p of parts) {
+    if (p.type !== 'literal') map[p.type] = p.value
+  }
+  const wd = (map.weekday || '').slice(0, 3).toLowerCase()
+  const key =
+    wd.startsWith('sun') || wd === 'dom' ? 'domingo'
+    : wd.startsWith('mon') || wd === 'seg' ? 'segunda'
+    : wd.startsWith('tue') || wd === 'ter' ? 'terca'
+    : wd.startsWith('wed') || wd === 'qua' ? 'quarta'
+    : wd.startsWith('thu') || wd === 'qui' ? 'quinta'
+    : wd.startsWith('fri') || wd === 'sex' ? 'sexta'
+    : 'sabado'
+  const range = parseHmRange(info.horarios[key as keyof typeof info.horarios])
+  if (!range) return false
+  const hour = map.hour === '24' ? '00' : map.hour
+  const now = `${hour}:${map.minute}`
+  return now >= range.open && now < range.close
 }
 
 /** Cliente perguntando endereço / funcionamento (não horário de agendamento). */
@@ -449,10 +530,12 @@ export function greetingWithAppointments(
 }
 
 /** Primeiro contato: pede nome (não usa perfil WhatsApp). */
-export function askNameText(shopName?: string | null): string {
-  const shop = (shopName || '').trim()
-  const from = shop ? `Aqui é a Diva da ${shop}.` : 'Aqui é a Diva da barbearia.'
-  return `Oi! Tudo bem? ${from} Qual é o seu nome?`
+export function askNameText(_shopName?: string | null): string {
+  return `Oi! Tudo bem? ${DIVA_IDENTITY}. Qual é o seu nome?`
+}
+
+export function askNameAgainText(): string {
+  return 'Pra te atender melhor, me diz só o seu nome (como você gosta de ser chamado).'
 }
 
 /** Depois que o lead informa o nome. */
@@ -462,9 +545,7 @@ export function afterNameGreeting(
   appts: UpcomingAppt[] = [],
 ): string {
   const first = firstNameFrom(fullName) || fullName.trim().split(/\s+/)[0]
-  const shop = (shopName || '').trim()
-  const from = shop ? `Aqui é a Diva da ${shop}.` : 'Aqui é a Diva da barbearia.'
-  const base = `Prazer, ${first}! ${from} Como posso te ajudar?`
+  const base = `Prazer, ${first}! ${DIVA_IDENTITY}. Vamos agendar?`
   if (!appts.length) return base
   if (appts.length === 1) {
     const a = appts[0]
@@ -554,6 +635,12 @@ export function looksLikeRobotMenu(text: string): boolean {
     return true
   }
   const lines = raw.split('\n').map((l) => l.trim()).filter(Boolean)
+  if (lines[0]?.toLowerCase().startsWith('opções de serviço') || lines[0]?.toLowerCase().startsWith('opcoes de servico')) {
+    return false
+  }
+  if (normalizeMatch(raw).includes('seu agendamento foi confirmado')) {
+    return false
+  }
   // 4+ linhas com vários "tópicos" = menu
   if (lines.length >= 5 && /agendar|cancelar|servicos|serviços|funcionamento|agendamento/.test(t)) {
     return true
@@ -572,6 +659,12 @@ export function humanizeOutbound(
   opts?: { senderName?: string | null; userText?: string },
 ): string {
   const cleaned = stripBotChrome(text)
+  const keepAsIs =
+    /^opções de serviço:/i.test(cleaned) ||
+    /^opcoes de servico:/i.test(cleaned) ||
+    /seu agendamento foi confirmado/i.test(cleaned) ||
+    /vou lhe enviar as opções de serviços abaixo/i.test(cleaned)
+  if (keepAsIs) return cleaned
   if (!cleaned) {
     return isGreetingOnly(opts?.userText || '')
       ? greetingText(opts?.senderName)
