@@ -1,6 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1'
 import { corsHeaders, jsonResponse } from '../_shared/cors.ts'
 import { humanReply, normalizePhone } from '../_shared/uazapi.ts'
+import { resolveUazConfig } from '../_shared/resolve-uaz.ts'
 
 /**
  * POST /functions/v1/whatsapp-send
@@ -29,7 +30,10 @@ Deno.serve(async (req) => {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 
     const token = authHeader.replace(/^Bearer\s+/i, '')
-    const isService = Boolean(token && token === serviceKey)
+    const apiKeyHeader = req.headers.get('apikey') || ''
+    const isService = Boolean(
+      (token && token === serviceKey) || (apiKeyHeader && apiKeyHeader === serviceKey),
+    )
     const isWebhook = Boolean(webhookSecret && headerSecret === webhookSecret)
 
     let authorized = isService || isWebhook
@@ -67,7 +71,15 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: 'number e text são obrigatórios' }, 400)
     }
 
-    const result = await humanReply(normalizePhone(number), text)
+    const db = createClient(supabaseUrl, serviceKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    })
+    const resolved = await resolveUazConfig(db)
+    if (!resolved.config) {
+      return jsonResponse({ error: resolved.error || 'UAZAPI não configurada' }, 502)
+    }
+
+    const result = await humanReply(normalizePhone(number), text, resolved.config)
     if (!result.ok) {
       return jsonResponse({ error: result.error, details: result.data }, 502)
     }
