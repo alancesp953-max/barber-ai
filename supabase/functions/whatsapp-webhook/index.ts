@@ -28,6 +28,7 @@ import {
   formatServicePriceList,
   punctualityConfirmText,
   askNameAgainText,
+  looksLikeBookingUtterance,
   matchByName,
   matchSlot,
   normalizeMatch,
@@ -1137,6 +1138,27 @@ async function processWithMimo(
   return 'Me confundi um pouco. Pode me dizer de novo o que você precisa?'
 }
 
+function sessionHasBookingContext(session: { step?: string; context: Record<string, unknown> }): boolean {
+  if (session.step && ['choose_service', 'choose_barber', 'choose_date', 'choose_time', 'confirm'].includes(session.step)) {
+    return true
+  }
+  const hist = session.context?.history
+  if (!Array.isArray(hist) || !hist.length) return false
+  const blob = hist
+    .map((m: { content?: unknown; name?: string }) => `${m.name || ''} ${typeof m.content === 'string' ? m.content : ''}`)
+    .join(' ')
+  const n = normalizeMatch(blob)
+  return (
+    n.includes('horario') ||
+    n.includes('barbeiro') ||
+    n.includes('servico') ||
+    n.includes('list_barbers') ||
+    n.includes('get_available') ||
+    n.includes('list_services') ||
+    n.includes('create_appointment')
+  )
+}
+
 async function processMessage(
   db: ReturnType<typeof getServiceClient>,
   phone: string,
@@ -1165,7 +1187,8 @@ async function processMessage(
   }
 
   if (session.step === 'ask_name') {
-    if (trimmed && isPlausiblePersonName(trimmed)) {
+    const midBooking = sessionHasBookingContext(session) || looksLikeBookingUtterance(trimmed)
+    if (trimmed && isPlausiblePersonName(trimmed) && !looksLikeBookingUtterance(trimmed)) {
       try {
         leadName = await saveLeadName(db, phone, trimmed)
       } catch (e) {
@@ -1183,22 +1206,29 @@ async function processMessage(
       } catch {
         /* ignore */
       }
+      const prev = Array.isArray(session.context.history)
+        ? (session.context.history as ChatMessage[])
+        : []
       await saveSession(db, phone, 'chat', {
         history: [
+          ...prev,
           { role: 'user', content: trimmed },
           { role: 'assistant', content: hi },
-        ],
+        ].slice(-28),
         mode: 'mimo',
         lead_name: leadName,
       })
       return hi
     }
-    await saveSession(db, phone, 'ask_name', { awaiting_name: true })
-    return trimmed && !isGreetingOnly(trimmed) ? askNameAgainText() : askNameText(shop)
+    if (!midBooking) {
+      await saveSession(db, phone, 'ask_name', { ...session.context, awaiting_name: true })
+      return trimmed && !isGreetingOnly(trimmed) ? askNameAgainText() : askNameText(shop)
+    }
+    // Horário / serviço / barbeiro no meio do pedido do nome: segue o agendamento
   }
 
-  // Números novos: pede o nome ANTES da IA / agendamento
-  if (!isKnownLeadName(leadName)) {
+  // Números novos: pede o nome ANTES da IA, salvo se o papo de agenda já começou
+  if (!isKnownLeadName(leadName) && !sessionHasBookingContext(session) && !looksLikeBookingUtterance(trimmed)) {
     if (trimmed && isPlausiblePersonName(trimmed) && !isGreetingOnly(trimmed)) {
       try {
         leadName = await saveLeadName(db, phone, trimmed)
@@ -1229,7 +1259,7 @@ async function processMessage(
         return hi
       }
     }
-    await saveSession(db, phone, 'ask_name', { awaiting_name: true })
+    await saveSession(db, phone, 'ask_name', { ...session.context, awaiting_name: true })
     return askNameText(shop)
   }
 
@@ -1312,7 +1342,7 @@ async function processMessage(
   // SEMPRE tenta a IA primeiro — contexto e memória do chat
   try {
     const ai = await processWithMimo(db, phone, trimmed, leadName)
-    if (ai) return humanizeOutbound(ai, { senderName: leadName, userText: trimmed })
+    if (ai) return ai
   } catch (e) {
     console.error('processWithMimo failed', e)
   }

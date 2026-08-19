@@ -634,6 +634,17 @@ export function looksLikeRobotMenu(text: string): boolean {
   ) {
     return true
   }
+  // Confirmação / horários / barbeiros NÃO são menu
+  if (
+    t.includes('barbeiro') ||
+    t.includes('horario') ||
+    t.includes('confirma') ||
+    t.includes('pontualidade') ||
+    t.includes('opcoes de servico') ||
+    t.includes('opções de serviço')
+  ) {
+    return false
+  }
   const lines = raw.split('\n').map((l) => l.trim()).filter(Boolean)
   if (lines[0]?.toLowerCase().startsWith('opções de serviço') || lines[0]?.toLowerCase().startsWith('opcoes de servico')) {
     return false
@@ -641,12 +652,30 @@ export function looksLikeRobotMenu(text: string): boolean {
   if (normalizeMatch(raw).includes('seu agendamento foi confirmado')) {
     return false
   }
-  // 4+ linhas com vários "tópicos" = menu
-  if (lines.length >= 5 && /agendar|cancelar|servicos|serviços|funcionamento|agendamento/.test(t)) {
+  // Só trata como menu se parecer inventário de capacidades (1. agendar 2. cancelar…)
+  const numbered = lines.filter((l) => /^\d+[\).\-]/.test(l)).length
+  if (numbered >= 3 && /agendar|cancelar|servicos|serviços|funcionamento/.test(t)) {
     return true
   }
   const emojiCount = (raw.match(/\p{Extended_Pictographic}/gu) || []).length
   if (emojiCount >= 2 && lines.length >= 3) return true
+  return false
+}
+
+export function looksLikeBookingUtterance(text: string): boolean {
+  const raw = text.trim()
+  if (!raw) return false
+  const t = normalizeMatch(raw)
+  if (/\d{1,2}\s*h\s*\d{0,2}/.test(t) || /\d{1,2}:\d{2}/.test(t)) return true
+  if (
+    /\b(hoje|amanha|sabado|domingo|segunda|terca|quarta|quinta|sexta)\b/.test(t) &&
+    t.split(/\s+/).length >= 2
+  ) {
+    return true
+  }
+  if (/\b(corte|barba|combo|pezinho|sobrancelha|marcar|remarcar|cancelar)\b/.test(t)) {
+    return !isPlausiblePersonName(raw)
+  }
   return false
 }
 
@@ -663,7 +692,9 @@ export function humanizeOutbound(
     /^opções de serviço:/i.test(cleaned) ||
     /^opcoes de servico:/i.test(cleaned) ||
     /seu agendamento foi confirmado/i.test(cleaned) ||
-    /vou lhe enviar as opções de serviços abaixo/i.test(cleaned)
+    /vou lhe enviar as opções de serviços abaixo/i.test(cleaned) ||
+    /prefer[eê]ncia por algum barbeiro/i.test(cleaned) ||
+    /posso (fechar|confirmar|agendar)/i.test(cleaned)
   if (keepAsIs) return cleaned
   if (!cleaned) {
     return isGreetingOnly(opts?.userText || '')
