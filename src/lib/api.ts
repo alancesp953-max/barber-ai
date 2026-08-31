@@ -649,3 +649,108 @@ export async function getResumoComissoes(params: {
       const produto = joinOne<{ preco_venda: number }>(
         v.produtos as { preco_venda: number } | { preco_venda: number }[] | null,
       )
+      return acc + Number(produto?.preco_venda ?? 0) * Number(v.quantidade ?? 0)
+    }, 0) ?? 0
+    const comissaoVendas = (vendas ?? []).reduce((acc, v) => {
+      const produto = joinOne<{ preco_venda: number }>(
+        v.produtos as { preco_venda: number } | { preco_venda: number }[] | null,
+      )
+      const valor = Number(produto?.preco_venda ?? 0) * Number(v.quantidade ?? 0)
+      const percentual = Number(v.comissao_percentual ?? barbeiro.percentual_produto ?? 0)
+      return acc + valor * (percentual / 100)
+    }, 0)
+    resultado.push({
+      barbeiro_id: barbeiro.id,
+      nome: barbeiro.nome,
+      total_servicos: totalServicos,
+      valor_servicos: valorServicos,
+      comissao_servicos: comissaoServicos,
+      total_vendas: totalVendas,
+      valor_vendas: valorVendas,
+      comissao_vendas: comissaoVendas,
+      total_a_receber: comissaoServicos + comissaoVendas,
+    })
+  }
+  return resultado
+}
+export async function getRelatorioComissoes(params: {
+  barbeiro_id: string
+  dataInicio: string
+  dataFim: string
+}): Promise<RelatorioComissaoCompleto> {
+  const { barbeiro_id, dataInicio, dataFim } = params
+  const { data: barbeiro, error: errBarbeiro } = await supabase
+    .from('barbeiros')
+    .select('id, nome, percentual_servico, percentual_produto')
+    .eq('id', barbeiro_id)
+    .single()
+  if (errBarbeiro) throw new Error(`Erro ao buscar barbeiro: ${errBarbeiro.message}`)
+  const { data: agendamentos, error: errServicos } = await supabase
+    .from('agendamentos')
+    .select('data, valor, servicos(nome)')
+    .eq('barbeiro_id', barbeiro_id)
+    .gte('data', dataInicio)
+    .lte('data', dataFim)
+  if (errServicos) throw new Error(`Erro ao buscar serviços: ${errServicos.message}`)
+  const servicos: DetalheServicoComissao[] = (agendamentos ?? [])
+    .filter(s => s.valor !== null && Number(s.valor) > 0)
+    .map(s => {
+      const servico = joinOne<{ nome: string }>(
+        s.servicos as { nome: string } | { nome: string }[] | null,
+      )
+      const valorCobrado = Number(s.valor || 0)
+      return {
+        data: s.data,
+        servico_nome: servico?.nome ?? 'Serviço',
+        valor_cobrado: valorCobrado,
+        percentual_comissao: barbeiro.percentual_servico,
+        valor_comissao: valorCobrado * (barbeiro.percentual_servico / 100),
+      }
+    })
+  const { data: vendasRaw, error: errVendas } = await supabase
+    .from('movimentacoes_estoque')
+    .select('created_at, quantidade, comissao_percentual, produtos!inner(nome, preco_venda)')
+    .eq('barbeiro_id', barbeiro_id)
+    .eq('motivo', 'venda')
+    .gte('created_at', `${dataInicio}T00:00:00`)
+    .lte('created_at', `${dataFim}T23:59:59`)
+  if (errVendas) throw new Error(`Erro ao buscar vendas: ${errVendas.message}`)
+  const vendas: DetalheVendaComissao[] = (vendasRaw ?? []).map(v => {
+    const produto = joinOne<{ nome: string; preco_venda: number }>(
+      v.produtos as { nome: string; preco_venda: number } | { nome: string; preco_venda: number }[] | null,
+    )
+    const valorTotal = Number(produto?.preco_venda ?? 0) * Number(v.quantidade ?? 0)
+    const percentual = Number(v.comissao_percentual ?? barbeiro.percentual_produto ?? 0)
+    return {
+      data: v.created_at,
+      produto_nome: produto?.nome ?? 'Produto',
+      quantidade: v.quantidade,
+      valor_total: valorTotal,
+      percentual_comissao: percentual,
+      valor_comissao: valorTotal * (percentual / 100),
+    }
+  })
+  const valorServicos = servicos.reduce((acc, s) => acc + s.valor_cobrado, 0)
+  const comissaoServicos = servicos.reduce((acc, s) => acc + s.valor_comissao, 0)
+  const valorVendas = vendas.reduce((acc, v) => acc + v.valor_total, 0)
+  const comissaoVendas = vendas.reduce((acc, v) => acc + v.valor_comissao, 0)
+  return {
+    barbeiro: {
+      id: barbeiro.id,
+      nome: barbeiro.nome,
+      percentual_servico: barbeiro.percentual_servico,
+      percentual_produto: barbeiro.percentual_produto,
+    },
+    servicos,
+    vendas,
+    totais: {
+      total_servicos: servicos.length,
+      valor_servicos: valorServicos,
+      comissao_servicos: comissaoServicos,
+      total_vendas: vendas.length,
+      valor_vendas: valorVendas,
+      comissao_vendas: comissaoVendas,
+      total_a_receber: comissaoServicos + comissaoVendas,
+    },
+  }
+}
