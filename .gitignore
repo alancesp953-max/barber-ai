@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+supabase/.temp/
+.webhook-secret.local
+

@@ -1,0 +1,13 @@
+# BarberAI Supabase functions config (optional project-level)
+
+[functions.whatsapp-webhook]
+verify_jwt = false
+
+[functions.whatsapp-send]
+verify_jwt = false
+
+[functions.whatsapp-instance]
+verify_jwt = true
+
+[functions.appointment-remind]
+verify_jwt = false

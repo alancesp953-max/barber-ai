@@ -1,8 +1,17 @@
+import {
+  Alert,
+  Anchor,
+  Button,
+  PasswordInput,
+  Stack,
+  Text,
+  TextInput,
+  Title,
+} from '@mantine/core'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { Link, useNavigate } from '@tanstack/react-router'
-import { AlertCircle, Loader2, Scissors } from 'lucide-react'
-
+import { AuthCard, AuthShell } from '../../components/AuthShell'
 import { getBarbeiroByUserId } from '../../lib/api'
 import { supabase } from '../../services/supabaseClient'
 
@@ -26,13 +35,19 @@ export default function BarberLogin() {
         email: email.trim().toLowerCase(),
         password,
       })
-      if (signInError) throw new Error(signInError.message)
+      if (signInError) {
+        const msg = signInError.message.toLowerCase()
+        if (msg.includes('invalid login') || msg.includes('invalid credentials')) {
+          throw new Error('E-mail ou senha inválidos.')
+        }
+        throw new Error(signInError.message)
+      }
       if (!data.user) throw new Error('Não foi possível entrar.')
 
       const barbeiro = await getBarbeiroByUserId(data.user.id)
       if (!barbeiro) {
         await supabase.auth.signOut()
-        throw new Error('Este e-mail não está vinculado a um barbeiro. Fale com o administrador.')
+        throw new Error('Este e-mail não está vinculado a um barbeiro. Peça ao admin para criar seu acesso em Usuários.')
       }
 
       navigate({ to: '/barber/agenda' })
@@ -44,67 +59,56 @@ export default function BarberLogin() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-barber-black p-4">
-      <div className="w-full max-w-sm">
-        <div className="mb-8 flex flex-col items-center">
-          <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-barber-gold/10">
-            <Scissors className="h-8 w-8 text-barber-gold" />
+    <AuthShell
+      heroBadge="ÁREA DO BARBEIRO"
+      heroTitle="Sua agenda do dia, no celular."
+      heroSubtitle="Entre para conferir horários, clientes e o fluxo da cadeira."
+    >
+      <AuthCard>
+        <Stack gap="md">
+          <div>
+            <Title order={2} mb={6}>
+              Conferir agenda
+            </Title>
+            <Text size="sm" c="dimmed">
+              Entre com o e-mail e a senha que o admin cadastrou
+            </Text>
           </div>
-          <h1 className="font-serif text-2xl font-bold tracking-wider text-barber-gold">Acesso do Barbeiro</h1>
-          <p className="mt-1 text-sm text-barber-white/60">Entre para ver seus agendamentos</p>
-        </div>
 
-        <form
-          onSubmit={handleLogin}
-          className="rounded-2xl border border-barber-gold/20 bg-barber-gray/30 p-6"
-        >
           {error && (
-            <div className="mb-4 flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
-              <AlertCircle className="h-4 w-4 shrink-0" />
+            <Alert color="red" variant="light">
               {error}
-            </div>
+            </Alert>
           )}
 
-          <div className="space-y-4">
-            <div>
-              <label className="mb-1 block text-sm text-barber-white/70">E-mail</label>
-              <input
+          <form onSubmit={handleLogin}>
+            <Stack gap="md">
+              <TextInput
+                label="E-mail"
                 type="email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => setEmail(e.currentTarget.value)}
                 placeholder="seu@email.com"
-                className="w-full rounded-lg border border-barber-gold/30 bg-barber-black px-4 py-2.5 text-barber-white placeholder:text-barber-white/40 focus:border-barber-gold focus:outline-none"
               />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-sm text-barber-white/70">Senha</label>
-              <input
-                type="password"
+              <PasswordInput
+                label="Senha"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => setPassword(e.currentTarget.value)}
                 placeholder="Sua senha"
-                className="w-full rounded-lg border border-barber-gold/30 bg-barber-black px-4 py-2.5 text-barber-white placeholder:text-barber-white/40 focus:border-barber-gold focus:outline-none"
               />
-            </div>
+              <Button type="submit" fullWidth color="gold" size="md" loading={loading} c="dark.9" fw={700}>
+                {loading ? 'Entrando...' : 'Entrar'}
+              </Button>
+            </Stack>
+          </form>
 
-            <button
-              type="submit"
-              disabled={loading}
-              className="flex w-full items-center justify-center gap-2 rounded-lg bg-barber-gold px-4 py-2.5 font-semibold text-barber-black transition-opacity hover:opacity-90 disabled:opacity-50"
-            >
-              {loading && <Loader2 className="h-5 w-5 animate-spin" />}
-              {loading ? 'Entrando...' : 'Entrar'}
-            </button>
-          </div>
-        </form>
-
-        <p className="mt-4 text-center text-sm text-barber-white/50">
-          <Link to="/login" className="text-barber-gold hover:underline">
-            Entrar como administrador
-          </Link>
-        </p>
-      </div>
-    </div>
+          <Text ta="center" size="sm" c="dimmed">
+            <Anchor component={Link} to="/login" c="gold.4" fw={600}>
+              Entrar como administrador
+            </Anchor>
+          </Text>
+        </Stack>
+      </AuthCard>
+    </AuthShell>
   )
 }

@@ -1,3 +1,4 @@
+import { Button, Loader, Stack, Text, Title } from '@mantine/core'
 import { Link } from '@tanstack/react-router'
 import { Calendar } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -26,33 +27,35 @@ export default function BarberDashboard() {
   }, [])
 
   if (loading) {
-    return <p className="text-barber-white/60">Carregando...</p>
+    return (
+      <Stack align="center" py="xl">
+        <Loader color="gold" />
+        <Text c="dimmed">Carregando...</Text>
+      </Stack>
+    )
   }
 
   return (
-    <div className="mx-auto max-w-2xl">
-      <h1 className="font-serif text-3xl font-bold text-barber-gold">
+    <Stack maw={640} mx="auto" gap="md">
+      <Title order={1} c="gold" style={{ fontFamily: 'Syne, DM Sans, sans-serif' }}>
         Olá, {barbeiro?.nome ?? 'Barbeiro'}
-      </h1>
-      <p className="mt-2 text-barber-white/60">
-        Acompanhe seus agendamentos e atualize o status dos atendimentos.
-      </p>
+      </Title>
+      <Text c="dimmed">Acompanhe seus agendamentos e atualize o status dos atendimentos.</Text>
 
-      <Link
+      <Button
+        component={Link}
         to="/barber/agenda"
-        className="mt-6 inline-flex items-center gap-2 rounded-lg bg-barber-gold px-4 py-2.5 text-sm font-semibold text-barber-black hover:bg-barber-gold/90"
+        color="gold"
+        c="#0A0A0A"
+        leftSection={<Calendar size={16} />}
+        w="fit-content"
       >
-        <Calendar className="h-4 w-4" />
         Ver minha agenda
-      </Link>
+      </Button>
 
-      <button
-        type="button"
-        onClick={() => signOut()}
-        className="mt-8 rounded-lg border border-barber-gold/40 px-4 py-2 text-sm text-barber-gold hover:bg-barber-gold/10"
-      >
+      <Button variant="outline" color="gold" w="fit-content" mt="md" onClick={() => signOut()}>
         Sair
-      </button>
-    </div>
+      </Button>
+    </Stack>
   )
 }

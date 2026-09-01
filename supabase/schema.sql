@@ -101,3 +101,5 @@ CREATE POLICY "Leitura pública para produtos" ON produtos
 CREATE POLICY "Escrita autenticada para produtos" ON produtos
   FOR ALL USING (auth.role() = 'authenticated')
   WITH CHECK (auth.role() = 'authenticated');
+
+-- WhatsApp bot (UAZAPI): run supabase/whatsapp.sql for sessions, slots RPC and bot flags.

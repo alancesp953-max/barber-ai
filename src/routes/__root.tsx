@@ -1,7 +1,8 @@
+import { Alert, Button, Paper, Stack, Text, Title } from '@mantine/core'
 import { createRootRoute, Outlet, useRouter } from '@tanstack/react-router'
 import { TanStackRouterDevtools } from '@tanstack/router-devtools'
-import { useTranslation } from 'react-i18next'
 import { useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { supabase } from '../services/supabaseClient'
 
 function RootError({ error }: { error: Error }) {
@@ -25,12 +26,21 @@ function RootError({ error }: { error: Error }) {
   }, [error, router])
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-barber-black p-8">
-      <div className="max-w-md rounded-2xl border border-red-500/30 bg-barber-gray p-6">
-        <h1 className="font-serif text-xl font-bold text-red-400">{t('errors.unexpected')}</h1>
-        <pre className="mt-3 overflow-auto text-sm text-barber-white/70">{error.message}</pre>
-      </div>
-    </div>
+    <Stack mih="100vh" align="center" justify="center" p="xl" bg="#0A0A0A">
+      <Paper p="xl" radius="lg" maw={440} w="100%" withBorder style={{ borderColor: 'rgba(239,68,68,0.35)', background: '#1A1A1A' }}>
+        <Title order={3} c="red.4" mb="sm">
+          {t('errors.unexpected')}
+        </Title>
+        <Alert color="red" variant="light" mb="md">
+          <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
+            {error.message}
+          </Text>
+        </Alert>
+        <Button color="gold" c="#0A0A0A" onClick={() => router.navigate({ to: '/login' })}>
+          Ir para login
+        </Button>
+      </Paper>
+    </Stack>
   )
 }
 

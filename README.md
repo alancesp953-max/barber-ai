@@ -21,7 +21,7 @@ Painel administrativo para barbearias, com gestão de agendamentos, barbeiros, s
 - Comissões por barbeiro (serviços e vendas)
 - Relatórios com gráficos e exportação PDF
 - Configurações da barbearia
-- Funções de API para agente WhatsApp (agendamento, disponibilidade, estoque)
+- **Bot WhatsApp** (UAZAPI + Edge Functions): agendar, consultar e cancelar pelo chat
 
 ## Pré-requisitos
 
@@ -75,17 +75,87 @@ npm run lint     # ESLint
    - `VITE_SUPABASE_ANON_KEY`
 3. O `vercel.json` já inclui o fallback SPA para rotas client-side
 
+## WhatsApp bot (UAZAPI)
+
+Canal: [UAZAPI](https://docs.uazapi.com/). Backend: Supabase Edge Functions + service role.
+
+### 1. Banco
+
+No SQL Editor do Supabase, execute:
+
+1. `supabase/schema.sql` (base, se ainda não rodou)
+2. `supabase/whatsapp.sql` — sessões, flags do bot, índice de telefone, RPC `get_available_slots`
+
+### 2. Secrets das Edge Functions
+
+```bash
+supabase secrets set \
+  UAZAPI_BASE_URL=https://SEU_SUBDOMINIO.uazapi.com \
+  UAZAPI_INSTANCE_TOKEN=token_da_instancia \
+  WEBHOOK_SECRET=escolha_um_segredo_longo
+```
+
+`SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` já existem no ambiente das functions.
+
+### 3. Deploy das functions
+
+```bash
+supabase functions deploy whatsapp-webhook --no-verify-jwt
+supabase functions deploy whatsapp-send
+```
+
+- `whatsapp-webhook` — recebe mensagens da UAZAPI e roda o bot  
+- `whatsapp-send` — envia texto (painel admin usa com JWT do usuário logado)
+
+### 4. Webhook na UAZAPI
+
+URL (com secret):
+
+```
+https://PROJECT_REF.supabase.co/functions/v1/whatsapp-webhook?secret=SEU_WEBHOOK_SECRET
+```
+
+No painel UAZAPI (ou `POST /webhook/set` com header `token`):
+
+- Events: `messages`
+- Exclude: `wasSentByApi`, mensagens de grupo (`isGroupYes`) — evita loop
+- Method: POST
+
+### 5. Ativar no painel
+
+Em **Admin → Configurações → Bot WhatsApp**: ligue o bot. O token **não** é salvo no frontend.
+
+### Fluxo do bot
+
+Atendimento 100% conversacional: a IA (MiMo) lidera com memória do chat — sem “menu”, sem lista de opções. O cliente fala o que precisa e o bot continua de onde parou.
+
+| Intenção | Exemplos | Comportamento |
+|----------|----------|----------------|
+| Cumprimento | “oi”, “e aí” | Cumprimenta e espera |
+| Agendar | “quero corte amanhã 15h” | Entende contexto e confirma o que faltar |
+| Consultar | “quais meus horários?” | Lista em prosa |
+| Cancelar | “cancela o de sexta” | Resolve pelo papo |
+
+Horários livres via tools. Confirmação admin via `whatsapp-send` com digitação simulada.
+
 ## Estrutura principal
 
 ```
 src/
 ├── components/     # UI reutilizável (sidebar, modals, headers)
-├── lib/api.ts      # funções de acesso ao Supabase
+├── lib/api.ts      # funções de acesso ao Supabase (+ notify WhatsApp)
 ├── pages/          # páginas do admin
 ├── routes/         # rotas TanStack Router
 ├── services/       # cliente Supabase
 ├── types/          # tipos TypeScript
 └── utils/          # utilitários (PDF, formatação)
+supabase/
+├── schema.sql
+├── whatsapp.sql
+└── functions/
+    ├── whatsapp-webhook/
+    ├── whatsapp-send/
+    └── _shared/    # uazapi, db, cors
 ```
 
 ## Licença

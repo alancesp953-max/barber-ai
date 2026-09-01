@@ -11,10 +11,13 @@ export interface Barber {
   comissao_produto_tipo: string
   especialidades: string | null
   avaliacao: number
+  avaliacao_count?: number
   foto_url: string | null
   user_id?: string | null
   ativo?: boolean
   active?: boolean
+  ordem_rodizio?: number | null
+  senha_temporaria?: string | null
   created_at: string
 }
 
@@ -36,6 +39,7 @@ export interface Service {
   nome: string
   preco: number
   duracao_minutos: number
+  buffer_minutos?: number
   descricao?: string | null
   ativo?: boolean
   created_at?: string
@@ -46,6 +50,8 @@ export interface Client {
   nome: string
   telefone?: string | null
   email?: string | null
+  data_nascimento?: string | null
+  whatsapp_opt_in?: boolean
   created_at?: string
 }
 
