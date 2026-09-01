@@ -14,6 +14,7 @@ import {
   saveSession,
 } from './db.ts'
 import type { ToolDef } from './mimo.ts'
+import { logDiva, logDivaError, supabaseErrDump } from './debug-diva.ts'
 import {
 createAppointmentAtomic,
 fetchAvailableSlots,
@@ -128,6 +129,14 @@ args = argsJson ? JSON.parse(argsJson) : {}
 } catch {
 return JSON.stringify({ error: 'arguments JSON inválido' })
 }
+logDiva('IA chamou ferramenta (não é fallback)', {
+  phone: phone.slice(-4),
+  ferramenta: name,
+  args,
+  barbeiro: args.barbeiro_id ?? null,
+  data: args.data ?? null,
+  horario: args.horario ?? null,
+})
 try {
 switch (name) {
       case 'list_services': {
@@ -152,7 +161,9 @@ switch (name) {
       }
 case 'list_barbers': {
 const dataYmd = normalizeDate(String(args.data || '')) || todaySaoPaulo()
+logDiva('list_barbers — parâmetros', { barbeiro: null, data: dataYmd, horario: null })
 const barbeiros = await listBookableBarbers(db, dataYmd)
+logDiva('list_barbers — resultado', { data: dataYmd, total: barbeiros.length, barbeiros })
 try {
   const sess = await getSession(db, phone)
   await saveSession(db, phone, sess.step || 'chat', {
@@ -187,10 +198,13 @@ const data = normalizeDate(String(args.data || ''))
 const servico_id = String(args.servico_id || '')
 const barbeiro_id = args.barbeiro_id ? String(args.barbeiro_id) : null
 if (!data || !servico_id) {
+logDivaError('get_available_slots — parâmetros inválidos', { data, servico_id, barbeiro_id })
 return JSON.stringify({ error: 'data e servico_id são obrigatórios' })
 }
+logDiva('get_available_slots — parâmetros', { barbeiro: barbeiro_id, data, horario: null, servico_id })
         const { slots: horarios, error } = await fetchAvailableSlots(db, data, servico_id, barbeiro_id)
         if (error) {
+          logDivaError('get_available_slots — erro da consulta', { barbeiro: barbeiro_id, data, servico_id, error })
           return JSON.stringify({
             data,
             data_br: formatDateBR(data),
@@ -210,6 +224,15 @@ return JSON.stringify({ error: 'data e servico_id são obrigatórios' })
         }
 const primeiro = horarios[0] || null
 const ultimo = horarios.length ? horarios[horarios.length - 1] : null
+logDiva('get_available_slots — horários usados na resposta à IA', {
+  barbeiro: barbeiro_id,
+  data,
+  horario: null,
+  total: horarios.length,
+  horarios,
+  primeiro_horario: primeiro,
+  ultimo_horario: ultimo,
+})
 return JSON.stringify({
 data,
 data_br: formatDateBR(data),
@@ -229,14 +252,22 @@ const data = normalizeDate(String(args.data || ''))
 const horario = String(args.horario || '').slice(0, 5)
 const barbeiro_id = args.barbeiro_id ? String(args.barbeiro_id) : null
 if (!servico_id || !data || !horario) {
+logDivaError('create_appointment — parâmetros inválidos', { barbeiro: barbeiro_id, data, horario, servico_id })
 return JSON.stringify({ error: 'servico_id, data e horario são obrigatórios' })
 }
+logDiva('create_appointment — parâmetros', { barbeiro: barbeiro_id, data, horario, servico_id })
 try {
   const sess = await getSession(db, phone)
   const lastSlots = Array.isArray(sess.context.last_slots)
     ? (sess.context.last_slots as string[]).map((h) => String(h).slice(0, 5))
     : []
   if (lastSlots.length && !lastSlots.includes(horario)) {
+    logDiva('create_appointment — horário fora da última lista de vagas', {
+      barbeiro: barbeiro_id,
+      data,
+      horario,
+      last_slots: lastSlots,
+    })
     return JSON.stringify({
       error: 'Horário fora da última lista de vagas. Chame get_available_slots de novo.',
       horarios: lastSlots,
@@ -262,8 +293,16 @@ barbeiroId: barbeiro_id,
 useRotation: !barbeiro_id,
 })
 if (!booked.ok) {
+logDivaError('create_appointment — falha', { barbeiro: barbeiro_id, data, horario, error: booked.error })
 return JSON.stringify({ error: booked.error, ok: false })
 }
+logDiva('create_appointment — sucesso', {
+  barbeiro: booked.barbeiro_id,
+  barbeiro_nome: booked.barbeiro_nome,
+  data: booked.data,
+  horario: booked.horario,
+  id: booked.id,
+})
 return JSON.stringify({
 ok: true,
 agendamento: {
@@ -289,7 +328,22 @@ const { data, error } = await db
 .gte('data', today)
 .order('data', { ascending: true })
 .order('horario', { ascending: true })
-if (error) return JSON.stringify({ error: error.message })
+if (error) {
+logDivaError('list_my_appointments — erro Supabase', {
+  phone: phone.slice(-4),
+  cliente_id: client.id,
+  supabase_error: supabaseErrDump(error),
+  supabase_data: data ?? null,
+})
+return JSON.stringify({ error: error.message })
+}
+logDiva('list_my_appointments — resposta Supabase', {
+  phone: phone.slice(-4),
+  cliente_id: client.id,
+  supabase_error: null,
+  supabase_data: data ?? [],
+  total: (data || []).length,
+})
 const list = (data || []).map((a) => {
 const serv = Array.isArray(a.servicos) ? a.servicos[0] : a.servicos
 const barb = Array.isArray(a.barbeiros) ? a.barbeiros[0] : a.barbeiros
@@ -326,6 +380,7 @@ default:
 return JSON.stringify({ error: `tool desconhecida: ${name}` })
 }
 } catch (e) {
+logDivaError('runBarberTool — exceção', { ferramenta: name, error: e instanceof Error ? e.message : String(e) })
 return JSON.stringify({ error: e instanceof Error ? e.message : String(e) })
 }
 }

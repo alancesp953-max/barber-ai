@@ -42,6 +42,7 @@ import {
   wantsShopInfo,
 } from '../_shared/db.ts'
 import { BARBER_TOOLS, runBarberTool, systemPromptBarber } from '../_shared/barber-tools.ts'
+import { logDiva, logDivaError } from '../_shared/debug-diva.ts'
 import { loadMimoConfig, mimoChat, type ChatMessage } from '../_shared/mimo.ts'
 import { resolveUazConfig } from '../_shared/resolve-uaz.ts'
 import {
@@ -1099,6 +1100,11 @@ async function processWithMimo(
     })
 
     if (!res.ok || !res.message) {
+      logDivaError('MiMo error — sem resposta da IA (fallback possível)', {
+        phone: phone.slice(-4),
+        round,
+        error: res.error ?? null,
+      })
       console.error('MiMo error', res.error)
       return null
     }
@@ -1114,12 +1120,26 @@ async function processWithMimo(
     messages.push(assistantMsg)
 
     if (msg.tool_calls?.length) {
+      logDiva('IA chamou ferramenta de consulta (não usou fallback)', {
+        phone: phone.slice(-4),
+        round,
+        ferramentas: msg.tool_calls.map((tc) => ({
+          nome: tc.function?.name || '',
+          argumentos: tc.function?.arguments || '{}',
+        })),
+      })
       for (const tc of msg.tool_calls) {
         const fnName = tc.function?.name || ''
         usedTools.push(fnName)
         const fnArgs = tc.function?.arguments || '{}'
         // tools usam o nome salvo do lead, não o perfil WhatsApp
         const toolResult = await runBarberTool(db, phone, fnName, fnArgs, leadName || undefined)
+        logDiva('resultado da ferramenta devolvido à IA', {
+          phone: phone.slice(-4),
+          ferramenta: fnName,
+          argumentos: fnArgs,
+          resultado: toolResult.slice(0, 4000),
+        })
         messages.push({
           role: 'tool',
           tool_call_id: tc.id,
@@ -1131,7 +1151,33 @@ async function processWithMimo(
     }
 
     let answer = String(msg.content || '').trim()
+    const consultTools = [
+      'get_available_slots',
+      'list_barbers',
+      'create_appointment',
+      'list_my_appointments',
+      'cancel_appointment',
+    ]
+    const usedConsult = usedTools.some((t) => consultTools.includes(t))
+    if (!usedConsult) {
+      logDiva('IA NÃO chamou ferramenta de consulta — respondeu em texto (possível fallback interno da IA)', {
+        phone: phone.slice(-4),
+        round,
+        usedTools,
+        resposta_preview: answer.slice(0, 300),
+      })
+    } else {
+      logDiva('IA usou ferramenta de consulta e depois respondeu em texto', {
+        phone: phone.slice(-4),
+        usedTools,
+        resposta_preview: answer.slice(0, 300),
+      })
+    }
     if (!answer) {
+      logDiva('fallback: MiMo devolveu texto vazio — wizard pode assumir', {
+        phone: phone.slice(-4),
+        tools: usedTools,
+      })
       logBotEvent('bot_fallback', { reason: 'empty_mimo', phone: phone.slice(-4), tools: usedTools })
       return null
     }
@@ -1147,6 +1193,12 @@ async function processWithMimo(
         return !lastSlots.includes(hm)
       })
       if (invented) {
+        logDiva('fallback: IA inventou horário que não está na última consulta get_available_slots', {
+          phone: phone.slice(-4),
+          last_slots: lastSlots,
+          data: fresh.context.last_slots_data ?? null,
+          resposta_preview: answer.slice(0, 300),
+        })
         logBotEvent('bot_fallback', { reason: 'invented_slot', phone: phone.slice(-4) })
         answer = [
           `Em ${fresh.context.last_slots_data || 'essa data'} ainda rola:`,
@@ -1192,6 +1244,10 @@ async function processWithMimo(
     return answer
   }
 
+  logDiva('fallback: MiMo esgotou rodadas de ferramentas — wizard pode assumir', {
+    phone: phone.slice(-4),
+    usedTools,
+  })
   logBotEvent('bot_fallback', { reason: 'mimo_rounds_exhausted', phone: phone.slice(-4) })
   return null
 }
@@ -1243,6 +1299,13 @@ async function processMessage(
   }
 
   if (isBookingStep(session.step)) {
+    logDiva('fallback: sessão no wizard (não passou por ferramenta da IA nesta mensagem)', {
+      phone: phone.slice(-4),
+      step: session.step,
+      barbeiro: session.context.barbeiro_id ?? session.context.barbeiro_nome ?? null,
+      data: session.context.data ?? null,
+      horario: session.context.horario ?? null,
+    })
     return dispatchWizard(db, phone, trimmed, session, leadName)
   }
 
@@ -1436,13 +1499,25 @@ async function processMessage(
     try {
       const ai = await processWithMimo(db, phone, trimmed, leadName)
       if (ai) return ai
+      logDiva('fallback: IA não devolveu resposta — usando wizard', {
+        phone: phone.slice(-4),
+        step,
+        barbeiro: context.barbeiro_id ?? context.barbeiro_nome ?? null,
+        data: context.data ?? null,
+        horario: context.horario ?? null,
+      })
     } catch (e) {
+      logDivaError('fallback: processWithMimo falhou — usando wizard', {
+        phone: phone.slice(-4),
+        error: e instanceof Error ? e.message : String(e),
+      })
       console.error('processWithMimo failed', e)
     }
   }
 
   const fallback = await dispatchWizard(db, phone, trimmed, session, leadName)
   if (!fallback) {
+    logDiva('fallback: wizard também sem resposta', { phone: phone.slice(-4), step })
     logBotEvent('bot_fallback', { reason: 'fallback_intent', phone: phone.slice(-4), step })
   }
   return fallback || 'Me conta o que você precisa.'
@@ -1456,6 +1531,13 @@ async function dispatchWizard(
   leadName?: string | null,
 ): Promise<string> {
   const { step, context } = session
+  logDiva('wizard (fallback) — passo', {
+    phone: phone.slice(-4),
+    step,
+    barbeiro: context.barbeiro_id ?? context.barbeiro_nome ?? null,
+    data: context.data ?? null,
+    horario: context.horario ?? null,
+  })
   switch (step) {
     case 'choose_service':
       return handleChooseService(db, phone, trimmed, context)

@@ -3,6 +3,7 @@
  */
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1'
 import { formatDateBR } from './db.ts'
+import { logDiva, logDivaError, supabaseErrDump } from './debug-diva.ts'
 
 const TZ = 'America/Sao_Paulo'
 
@@ -54,16 +55,40 @@ export async function fetchAvailableSlots(
   servicoId: string,
   barbeiroId?: string | null,
 ): Promise<{ slots: string[]; error?: string }> {
+  const params = {
+    barbeiro: barbeiroId || null,
+    data,
+    horario: null as string | null,
+    servico_id: servicoId,
+    rpc: 'get_available_slots',
+  }
+  logDiva('consulta disponibilidade — parâmetros', params)
   const { data: rows, error } = await db.rpc('get_available_slots', {
     p_data: data,
     p_servico_id: servicoId,
     p_barbeiro_id: barbeiroId || null,
   })
-  if (error) return { slots: [], error: error.message }
+  if (error) {
+    logDivaError('consulta disponibilidade — erro Supabase', {
+      ...params,
+      supabase_error: supabaseErrDump(error),
+      supabase_data: rows ?? null,
+    })
+    return { slots: [], error: error.message }
+  }
+  const raw = (rows as { horario: string }[]) || []
   const slots = filterPastSlots(
     data,
-    ((rows as { horario: string }[]) || []).map((s) => String(s.horario)),
+    raw.map((s) => String(s.horario)),
   )
+  logDiva('consulta disponibilidade — resposta Supabase', {
+    ...params,
+    supabase_error: null,
+    supabase_data: rows ?? [],
+    slots_filtrados: slots,
+    total_raw: raw.length,
+    total_filtrados: slots.length,
+  })
   return { slots }
 }
 
@@ -135,8 +160,12 @@ export async function listBookableBarbers(
   dataYmd?: string | null,
 ): Promise<BookableBarber[]> {
   const ymd = dataYmd && /^\d{4}-\d{2}-\d{2}$/.test(dataYmd) ? dataYmd : todaySaoPaulo()
+  logDiva('consulta barbeiros na escala — parâmetros', { barbeiro: null, data: ymd, horario: null })
   const all = await listBarbersForRotation(db)
-  if (!all.length) return []
+  if (!all.length) {
+    logDiva('consulta barbeiros na escala — nenhum barbeiro ativo no banco', { data: ymd })
+    return []
+  }
 
   const dow = ymdDow(ymd)
   const dayStart = toBrtMs(ymd, '00:00')
@@ -205,6 +234,11 @@ export async function listBookableBarbers(
     if (fullDayOff) continue
     out.push({ id: b.id, nome: b.nome })
   }
+  logDiva('consulta barbeiros na escala — resultado', {
+    data: ymd,
+    total: out.length,
+    barbeiros: out,
+  })
   return out
 }
 
@@ -253,6 +287,16 @@ export async function createAppointmentAtomic(
   },
 ): Promise<AtomicBookingResult> {
   const horario = normalizeHorario(opts.horario)
+  const params = {
+    barbeiro: opts.barbeiroId || null,
+    data: opts.data,
+    horario,
+    servico_id: opts.servicoId,
+    cliente_id: opts.clienteId,
+    use_rotation: opts.useRotation !== false,
+    rpc: 'create_appointment_atomic',
+  }
+  logDiva('criar agendamento — parâmetros', params)
   const { data, error } = await db.rpc('create_appointment_atomic', {
     p_cliente_id: opts.clienteId,
     p_servico_id: opts.servicoId,
@@ -263,11 +307,28 @@ export async function createAppointmentAtomic(
     p_valor: opts.valor ?? null,
     p_use_rotation: opts.useRotation !== false,
   })
-  if (error) return { ok: false, error: error.message }
+  if (error) {
+    logDivaError('criar agendamento — erro Supabase', {
+      ...params,
+      supabase_error: supabaseErrDump(error),
+      supabase_data: data ?? null,
+    })
+    return { ok: false, error: error.message }
+  }
   const row = data as Record<string, unknown>
   if (!row?.ok) {
+    logDivaError('criar agendamento — RPC recusou', {
+      ...params,
+      supabase_error: null,
+      supabase_data: data ?? null,
+    })
     return { ok: false, error: String(row?.error || 'Falha ao reservar horário') }
   }
+  logDiva('criar agendamento — resposta Supabase', {
+    ...params,
+    supabase_error: null,
+    supabase_data: data,
+  })
   return {
     ok: true,
     id: String(row.id),
@@ -299,11 +360,20 @@ export async function checkSlotAvailability(
   const horario = normalizeHorario(opts.horario)
   const today = todaySaoPaulo()
   const nowT = nowTimeSaoPaulo()
+  logDiva('checkSlotAvailability — parâmetros', {
+    barbeiro: opts.barbeiroId || null,
+    barbeiro_nome: opts.barbeiroNome || null,
+    data,
+    horario,
+    servico_id: opts.servicoId,
+  })
 
   if (data < today) {
+    logDiva('checkSlotAvailability — data já passou', { data, horario })
     return { ok: false, message: 'Essa data já passou. Escolha outra data.' }
   }
   if (data === today && horario <= nowT) {
+    logDiva('checkSlotAvailability — horário já passou', { data, horario, agora: nowT })
     return {
       ok: false,
       message: `O horário *${horario}* já passou (agora são ~${nowT}). Escolha um horário futuro.`,
@@ -358,10 +428,17 @@ export async function checkSlotAvailability(
     const { slots, error } = await fetchAvailableSlots(db, data, opts.servicoId, b.id)
     if (error) continue
     if (slots.includes(horario)) {
+      logDiva('checkSlotAvailability — horário livre (rodízio)', {
+        barbeiro: b.id,
+        barbeiro_nome: b.nome,
+        data,
+        horario,
+      })
       return { ok: true, barbeiro_id: b.id, barbeiro_nome: b.nome, from_rotation: true }
     }
   }
 
+  logDiva('checkSlotAvailability — nenhum barbeiro com o horário', { data, horario })
   return {
     ok: false,
     message: `Nenhum barbeiro tem o horário *${horario}* livre em ${formatDateBR(data)}. Escolha outro horário.`,
