@@ -18,8 +18,10 @@ import {
 import { Plus, Trash2, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useEffect, useState, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
+import { AgendaDayBoard, handleAppointmentCheckout } from '../../components/AgendaDayBoard'
 import { CheckinModal } from '../../components/CheckinModal'
 import { PageHeader } from '../../components/PageHeader'
+import { todayFortalezaYmd } from '../../lib/dateBr'
 import {
   createAppointment,
   deleteAppointment,
@@ -86,8 +88,7 @@ function MonthCalendar({
 
   const daysInMonth = new Date(year, month + 1, 0).getDate()
   const firstDayOfWeek = new Date(year, month, 1).getDay()
-  const today = new Date()
-  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  const todayStr = todayFortalezaYmd()
 
   const days: (number | null)[] = []
   for (let i = 0; i < firstDayOfWeek; i++) days.push(null)
@@ -224,7 +225,7 @@ export default function Agendamentos() {
   const [error, setError] = useState<string | null>(null)
 
   const [currentMonth, setCurrentMonth] = useState(new Date())
-  const [selectedDate, setSelectedDate] = useState<string | null>(null)
+  const [selectedDate, setSelectedDate] = useState<string | null>(() => todayFortalezaYmd())
 
   const [clientName, setClientName] = useState('')
   const [clientEmail, setClientEmail] = useState('')
@@ -308,9 +309,14 @@ export default function Agendamentos() {
   }
 
   function goToToday() {
-    const hoje = new Date()
-    setCurrentMonth(new Date(hoje.getFullYear(), hoje.getMonth(), 1))
-    setSelectedDate(null)
+    const hoje = todayFortalezaYmd()
+    const [y, m] = hoje.split('-').map(Number)
+    setCurrentMonth(new Date(y, m - 1, 1))
+    setSelectedDate(hoje)
+  }
+
+  function handleCheckout(appointmentId: string) {
+    handleAppointmentCheckout(appointmentId)
   }
 
   const handleCreate = async (e: React.FormEvent) => {
@@ -618,91 +624,99 @@ export default function Agendamentos() {
             </Group>
           </Group>
 
-          <Card withBorder padding={0} radius="lg">
-            <Table.ScrollContainer minWidth={800}>
-              <Table highlightOnHover verticalSpacing="sm">
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>{t('appointments.client')}</Table.Th>
-                    <Table.Th>{t('common.service')}</Table.Th>
-                    <Table.Th>{t('appointments.barber')}</Table.Th>
-                    <Table.Th>{t('appointments.dateTime')}</Table.Th>
-                    <Table.Th>{t('common.status')}</Table.Th>
-                    <Table.Th>{t('common.price')}</Table.Th>
-                    <Table.Th>{t('common.actions')}</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {filteredAppointments.map((appt) => (
-                    <Table.Tr key={appt.id}>
-                      <Table.Td>
-                        <Text fw={500} size="sm">
-                          {appt.clientes?.nome ?? '—'}
-                        </Text>
-                        <Text size="xs" c="dimmed">
-                          {appt.clientes?.email}
-                        </Text>
-                      </Table.Td>
-                      <Table.Td>{appt.servicos?.nome ?? '—'}</Table.Td>
-                      <Table.Td>{appt.barbeiros?.nome ?? '—'}</Table.Td>
-                      <Table.Td>{formatDateTime(appt.data, appt.horario)}</Table.Td>
-                      <Table.Td>
-                        <NativeSelect
-                          size="xs"
-                          value={appt.status}
-                          onChange={(e) =>
-                            handleStatusChange(appt.id, e.currentTarget.value as AppointmentStatus)
-                          }
-                          data={appointmentStatuses.map((s) => ({
-                            value: s,
-                            label: t(`status.${s}`),
-                          }))}
-                          styles={{
-                            input: {
-                              background: 'transparent',
-                              border: 'none',
-                              color: `var(--mantine-color-${statusColors[appt.status]}-4)`,
-                              fontWeight: 600,
-                              textTransform: 'capitalize',
-                            },
-                          }}
-                        />
-                      </Table.Td>
-                      <Table.Td>{formatCurrency(Number(appt.servicos?.preco ?? 0))}</Table.Td>
-                      <Table.Td>
-                        <Group gap="xs">
-                          {(appt.status === 'pendente' || appt.status === 'confirmado') && (
-                            <Button
-                              size="compact-xs"
-                              variant="subtle"
-                              color="gold"
-                              onClick={() => setCheckinAppointment(appt)}
-                            >
-                              {t('dashboard.checkIn')}
-                            </Button>
-                          )}
-                          <ActionIcon
-                            variant="subtle"
-                            color="red"
-                            onClick={() => handleDelete(appt.id)}
-                          >
-                            <Trash2 size={16} />
-                          </ActionIcon>
-                        </Group>
-                      </Table.Td>
+          {selectedDate ? (
+            <AgendaDayBoard
+              barbers={barbers}
+              appointments={filteredAppointments}
+              onCheckin={setCheckinAppointment}
+              onCheckout={handleCheckout}
+              onDelete={handleDelete}
+            />
+          ) : (
+            <Card withBorder padding={0} radius="lg">
+              <Table.ScrollContainer minWidth={800}>
+                <Table highlightOnHover verticalSpacing="sm">
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>{t('appointments.client')}</Table.Th>
+                      <Table.Th>{t('common.service')}</Table.Th>
+                      <Table.Th>{t('appointments.barber')}</Table.Th>
+                      <Table.Th>{t('appointments.dateTime')}</Table.Th>
+                      <Table.Th>{t('common.status')}</Table.Th>
+                      <Table.Th>{t('common.price')}</Table.Th>
+                      <Table.Th>{t('common.actions')}</Table.Th>
                     </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-            </Table.ScrollContainer>
-            {filteredAppointments.length === 0 && (
-              <Text c="dimmed" ta="center" p="md">
-                {selectedDate
-                  ? 'Nenhum agendamento nesta data.'
-                  : t('appointments.noAppointments')}
-              </Text>
-            )}
-          </Card>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {filteredAppointments.map((appt) => (
+                      <Table.Tr key={appt.id}>
+                        <Table.Td>
+                          <Text fw={500} size="sm">
+                            {appt.clientes?.nome ?? '—'}
+                          </Text>
+                          <Text size="xs" c="dimmed">
+                            {appt.clientes?.email}
+                          </Text>
+                        </Table.Td>
+                        <Table.Td>{appt.servicos?.nome ?? '—'}</Table.Td>
+                        <Table.Td>{appt.barbeiros?.nome ?? '—'}</Table.Td>
+                        <Table.Td>{formatDateTime(appt.data, appt.horario)}</Table.Td>
+                        <Table.Td>
+                          <NativeSelect
+                            size="xs"
+                            value={appt.status}
+                            onChange={(e) =>
+                              handleStatusChange(appt.id, e.currentTarget.value as AppointmentStatus)
+                            }
+                            data={appointmentStatuses.map((s) => ({
+                              value: s,
+                              label: t(`status.${s}`),
+                            }))}
+                            styles={{
+                              input: {
+                                background: 'transparent',
+                                border: 'none',
+                                color: `var(--mantine-color-${statusColors[appt.status]}-4)`,
+                                fontWeight: 600,
+                                textTransform: 'capitalize',
+                              },
+                            }}
+                          />
+                        </Table.Td>
+                        <Table.Td>{formatCurrency(Number(appt.servicos?.preco ?? 0))}</Table.Td>
+                        <Table.Td>
+                          <Group gap="xs">
+                            {(appt.status === 'pendente' || appt.status === 'confirmado') && (
+                              <Button
+                                size="compact-xs"
+                                variant="subtle"
+                                color="gold"
+                                onClick={() => setCheckinAppointment(appt)}
+                              >
+                                {t('dashboard.checkIn')}
+                              </Button>
+                            )}
+                            <ActionIcon
+                              variant="subtle"
+                              color="red"
+                              onClick={() => handleDelete(appt.id)}
+                            >
+                              <Trash2 size={16} />
+                            </ActionIcon>
+                          </Group>
+                        </Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </Table.ScrollContainer>
+              {filteredAppointments.length === 0 && (
+                <Text c="dimmed" ta="center" p="md">
+                  {t('appointments.noAppointments')}
+                </Text>
+              )}
+            </Card>
+          )}
         </>
       )}
 
