@@ -25,8 +25,8 @@ import {
   isPlausiblePersonName,
   isBookingStep,
   logBotEvent,
-  isShopOpenNow,
-  closedShopNotice,
+  getShopHoursPhase,
+  shopHoursStatusNotice,
   formatServicePriceList,
   punctualityConfirmText,
   askNameAgainText,
@@ -1064,21 +1064,27 @@ async function processWithMimo(
     console.warn('fetchUpcomingAppointments failed', e)
   }
 
-  let shopOpen = true
+  let shopPhase: Awaited<ReturnType<typeof getShopHoursPhase>>['phase'] = 'open'
+  let shopOpenHm = '08:30'
   try {
-    shopOpen = await isShopOpenNow(db)
+    const hours = await getShopHoursPhase(db)
+    shopPhase = hours.phase
+    if (hours.open) shopOpenHm = hours.open
   } catch {
-    shopOpen = true
+    shopPhase = 'open'
   }
 
+  const offHoursNotice = shopHoursStatusNotice(shopPhase, shopOpenHm)
   const bookingLocked = isBookingStep(session.step)
   const system = systemPromptBarber() +
     (bookingLocked
       ? `\nPASSO TRAVADO: ${session.step}. Não peça o nome. Não mude de assunto. Continue este passo.`
       : '') +
-    (shopOpen
-      ? ''
-      : `\nLOJA FECHADA AGORA: ${closedShopNotice()} Avise isso e continue o agendamento para amanhã/outras datas.`) +
+    (offHoursNotice
+      ? shopPhase === 'before_open'
+        ? `\nFORA DO EXPEDIENTE (madrugada/antes de abrir): ${offHoursNotice} NÃO diga que o expediente já encerrou. Convide a agendar para hoje a partir das ${shopOpenHm.replace(':', 'h')}.`
+        : `\nFORA DO EXPEDIENTE: ${offHoursNotice} Avise isso e continue o agendamento para ${shopPhase === 'after_close' ? 'amanhã/outras datas' : 'outro dia disponível'}.`
+      : '') +
     (ctxLines.length
       ? `\nContexto parcial já conhecido desta conversa (não pergunte de novo se já souber):\n- ${ctxLines.join('\n- ')}`
       : '') +
@@ -1376,7 +1382,9 @@ async function processMessage(
       }
       let hi = afterNameGreeting(leadName, shop, appts)
       try {
-        if (!(await isShopOpenNow(db))) hi = `${hi}\n\n${closedShopNotice()}`
+        const hours = await getShopHoursPhase(db)
+        const notice = shopHoursStatusNotice(hours.phase, hours.open || '08:30')
+        if (notice) hi = `${hi}\n\n${notice}`
       } catch {
         /* ignore */
       }
@@ -1424,7 +1432,9 @@ async function processMessage(
         }
         let hi = afterNameGreeting(leadName, shop, appts)
         try {
-          if (!(await isShopOpenNow(db))) hi = `${hi}\n\n${closedShopNotice()}`
+          const hours = await getShopHoursPhase(db)
+          const notice = shopHoursStatusNotice(hours.phase, hours.open || '08:30')
+          if (notice) hi = `${hi}\n\n${notice}`
         } catch {
           /* ignore */
         }
@@ -1453,7 +1463,9 @@ async function processMessage(
     }
     let hi = greetingWithAppointments(leadName, shop, appts)
     try {
-      if (!(await isShopOpenNow(db))) hi = `${hi}\n\n${closedShopNotice()}`
+      const hours = await getShopHoursPhase(db)
+      const notice = shopHoursStatusNotice(hours.phase, hours.open || '08:30')
+      if (notice) hi = `${hi}\n\n${notice}`
     } catch {
       /* ignore */
     }
