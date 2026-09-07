@@ -13,7 +13,7 @@ import {
   TextInput,
   Title,
 } from '@mantine/core'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   getPagamentos,
   getAgendamentosPendentesPagamento,
@@ -21,18 +21,29 @@ import {
   createPagamento,
   deletePagamento,
   getResumoFinanceiro,
+  getPagamentosDoAgendamento,
 } from '../../lib/api'
 import { PageHeader } from '../../components/PageHeader'
 import { KPICard } from '../../components/KPICard'
 import { DollarSign, CreditCard } from 'lucide-react'
-
 
 const inputStyles = {
   input: { background: '#0d0d0d', borderColor: 'rgba(197,160,89,0.2)', color: '#f5f5f5' },
   label: { color: '#cfcfcf' },
 }
 
-export default function Financeiro() {
+type SplitLine = { forma: string; valor: string }
+
+function parseMoney(raw: string): number {
+  const valorLimpo = raw.replace(/\./g, '').replace(',', '.')
+  return Number(valorLimpo)
+}
+
+export default function Financeiro({
+  initialAgendamentoId,
+}: {
+  initialAgendamentoId?: string
+}) {
   const [pagamentos, setPagamentos] = useState<any[]>([])
   const [resumo, setResumo] = useState({ total: 0, porForma: {} as Record<string, number>, quantidade: 0 })
   const [agendamentos, setAgendamentos] = useState<any[]>([])
@@ -42,8 +53,8 @@ export default function Financeiro() {
   const [saving, setSaving] = useState(false)
 
   const [formAgendamento, setFormAgendamento] = useState('')
-  const [formValor, setFormValor] = useState('')
-  const [formForma, setFormForma] = useState('Dinheiro')
+  const [lines, setLines] = useState<SplitLine[]>([{ forma: 'Dinheiro', valor: '' }])
+  const [paidBefore, setPaidBefore] = useState(0)
 
   async function loadData() {
     try {
@@ -57,16 +68,25 @@ export default function Financeiro() {
       setResumo(r)
       setAgendamentos(a)
       setClientes(c)
+      return a
     } catch (err) {
       console.error(err)
+      return []
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    loadData()
-  }, [])
+    void (async () => {
+      const a = await loadData()
+      if (initialAgendamentoId) {
+        setShowModal(true)
+        await handleSelectAgendamento(initialAgendamentoId, a)
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialAgendamentoId])
 
   function getClienteNome(clienteId: string) {
     return clientes.find((c) => c.id === clienteId)?.nome || 'Cliente'
@@ -74,54 +94,82 @@ export default function Financeiro() {
 
   function getAgendamentoInfo(agendamentoId: string) {
     const ag = agendamentos.find((a) => a.id === agendamentoId)
-    if (!ag) return { servico: 'N/A', barbeiro: 'N/A' }
+    if (!ag) {
+      const fromHist = pagamentos.find((p) => p.agendamento_id === agendamentoId)?.agendamentos
+      return {
+        servico: fromHist?.servicos?.nome || 'N/A',
+        barbeiro: fromHist?.barbeiros?.nome || 'N/A',
+      }
+    }
     return {
       servico: ag.servico || ag.servico_nome || ag.servicos?.nome || 'Serviço',
       barbeiro: ag.barbeiro || ag.barbeiro_nome || ag.barbeiros?.nome || 'Barbeiro',
     }
   }
 
-  function handleSelectAgendamento(id: string) {
+  async function handleSelectAgendamento(id: string, list?: any[]) {
     setFormAgendamento(id)
-    const ag = agendamentos.find((a) => a.id === id)
-    if (ag) {
-      const preco = ag.preco || ag.valor || ag.servico_preco || ag.servicos?.preco || 0
-      setFormValor(preco.toString().replace('.', ','))
+    const source = list || agendamentos
+    const ag = source.find((a) => a.id === id)
+    const total = Number(ag?.restante ?? ag?.total_comanda ?? ag?.valor ?? ag?.servicos?.preco ?? 0)
+    const pago = Number(ag?.total_pago ?? 0)
+    setPaidBefore(pago)
+    try {
+      const prev = await getPagamentosDoAgendamento(id)
+      const sum = prev
+        .filter((p) => !p.status || p.status === 'Pago')
+        .reduce((s, p) => s + Number(p.valor || 0), 0)
+      setPaidBefore(sum)
+      const restante = Math.max(0, Number(ag?.total_comanda ?? total + sum) - sum)
+      setLines([{ forma: 'Dinheiro', valor: restante > 0 ? restante.toFixed(2).replace('.', ',') : '' }])
+    } catch {
+      setLines([{ forma: 'Dinheiro', valor: total > 0 ? total.toFixed(2).replace('.', ',') : '' }])
     }
   }
 
+  const selectedAg = useMemo(
+    () => agendamentos.find((a) => a.id === formAgendamento),
+    [agendamentos, formAgendamento],
+  )
+
+  const totalComanda = Number(
+    selectedAg?.total_comanda ?? selectedAg?.valor ?? selectedAg?.servicos?.preco ?? 0,
+  )
+  const linesSum = lines.reduce((s, l) => {
+    const n = parseMoney(l.valor || '0')
+    return s + (isNaN(n) ? 0 : n)
+  }, 0)
+  const restanteApos = Math.round((totalComanda - paidBefore - linesSum) * 100) / 100
+  const canClose = formAgendamento && lines.every((l) => parseMoney(l.valor) > 0) && Math.abs(restanteApos) < 0.01
+
   async function handleCriarPagamento() {
-    if (!formAgendamento || !formValor) {
-      alert('Preencha todos os campos!')
+    if (!formAgendamento) {
+      alert('Selecione o agendamento')
       return
     }
-
-    const valorLimpo = formValor.replace(/\./g, '').replace(',', '.')
-    const valorNumerico = Number(valorLimpo)
-
-    if (isNaN(valorNumerico) || valorNumerico <= 0) {
-      alert('Valor inválido!')
+    if (!canClose) {
+      alert('A soma das formas deve fechar exatamente o valor restante da comanda.')
       return
     }
 
     setSaving(true)
     try {
       const ag = agendamentos.find((a) => a.id === formAgendamento)
-
-      const dadosPagamento = {
-        agendamento_id: formAgendamento,
-        cliente_id: ag?.cliente_id || '',
-        valor: valorNumerico,
-        forma_pagamento: formForma,
-        status: 'Pago',
+      for (const line of lines) {
+        const valorNumerico = parseMoney(line.valor)
+        await createPagamento({
+          agendamento_id: formAgendamento,
+          cliente_id: ag?.cliente_id || '',
+          valor: valorNumerico,
+          forma_pagamento: line.forma,
+          status: 'Pago',
+        })
       }
-
-      await createPagamento(dadosPagamento)
 
       setShowModal(false)
       setFormAgendamento('')
-      setFormValor('')
-      setFormForma('Dinheiro')
+      setLines([{ forma: 'Dinheiro', valor: '' }])
+      setPaidBefore(0)
       await loadData()
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : JSON.stringify(err)
@@ -233,10 +281,11 @@ export default function Financeiro() {
         onClose={() => setShowModal(false)}
         title={
           <Title order={4} c="gold">
-            Novo Pagamento
+            Baixar comanda
           </Title>
         }
         centered
+        size="lg"
         styles={{
           content: { background: '#1a1a1a', border: '1px solid rgba(197,160,89,0.2)' },
           header: { background: '#1a1a1a' },
@@ -247,39 +296,99 @@ export default function Financeiro() {
           <NativeSelect
             label="Agendamento"
             value={formAgendamento}
-            onChange={(e) => handleSelectAgendamento(e.currentTarget.value)}
+            onChange={(e) => void handleSelectAgendamento(e.currentTarget.value)}
             data={[
-              { value: '', label: 'Selecione um agendamento pendente...' },
+              { value: '', label: 'Selecione…' },
               ...agendamentos.map((a) => ({
                 value: a.id,
-                label: `${getClienteNome(a.cliente_id) || a.clientes?.nome || 'Cliente'} - ${a.servico || a.servico_nome || a.servicos?.nome || 'Serviço'} (${new Date((a.data || a.created_at) + 'T12:00:00').toLocaleDateString('pt-BR')})`,
+                label: `${a.clientes?.nome || 'Cliente'} — ${a.servicos?.nome || 'Serviço'} — R$ ${Number(a.restante ?? a.total_comanda ?? a.servicos?.preco ?? 0).toFixed(2)}`,
               })),
             ]}
             styles={inputStyles}
           />
-          <TextInput
-            label="Valor (R$)"
-            inputMode="decimal"
-            value={formValor}
-            onChange={(e) => setFormValor(e.currentTarget.value)}
-            placeholder="59,90"
-            styles={inputStyles}
-          />
-          <NativeSelect
-            label="Forma de Pagamento"
-            value={formForma}
-            onChange={(e) => setFormForma(e.currentTarget.value)}
-            data={['Dinheiro', 'Cartão Débito', 'Cartão Crédito', 'PIX', 'Outro']}
-            styles={inputStyles}
-          />
-          <Group justify="flex-end">
-            <Button variant="outline" color="gray" onClick={() => setShowModal(false)}>
-              Cancelar
+
+          {selectedAg && (
+            <Card withBorder padding="sm" radius="md">
+              <Text size="sm">
+                Cliente: <strong>{selectedAg.clientes?.nome || '—'}</strong>
+              </Text>
+              <Text size="sm">
+                Total da comanda: <strong>R$ {totalComanda.toFixed(2)}</strong>
+              </Text>
+              {paidBefore > 0 && (
+                <Text size="sm" c="dimmed">
+                  Já pago: R$ {paidBefore.toFixed(2)}
+                </Text>
+              )}
+              <Text size="sm" c="gold">
+                Restante: R$ {(totalComanda - paidBefore).toFixed(2)}
+              </Text>
+            </Card>
+          )}
+
+          <Text size="sm" fw={600} c="gold">
+            Formas de pagamento
+          </Text>
+          {lines.map((line, idx) => (
+            <Group key={idx} align="flex-end" grow>
+              <NativeSelect
+                label={idx === 0 ? 'Forma' : undefined}
+                value={line.forma}
+                onChange={(e) => {
+                  const next = [...lines]
+                  next[idx] = { ...next[idx], forma: e.currentTarget.value }
+                  setLines(next)
+                }}
+                data={['Dinheiro', 'Pix', 'Cartão Débito', 'Cartão Crédito', 'Outro']}
+                styles={inputStyles}
+              />
+              <TextInput
+                label={idx === 0 ? 'Valor' : undefined}
+                value={line.valor}
+                onChange={(e) => {
+                  const next = [...lines]
+                  next[idx] = { ...next[idx], valor: e.currentTarget.value }
+                  setLines(next)
+                }}
+                placeholder="0,00"
+                styles={inputStyles}
+              />
+              <Button
+                variant="outline"
+                color="red"
+                disabled={lines.length <= 1}
+                onClick={() => setLines(lines.filter((_, i) => i !== idx))}
+              >
+                Remover
+              </Button>
+            </Group>
+          ))}
+
+          <Group>
+            <Button
+              variant="outline"
+              color="gold"
+              onClick={() => setLines([...lines, { forma: 'Pix', valor: '' }])}
+            >
+              + Outra forma
             </Button>
-            <Button color="gold" c="#0A0A0A" onClick={handleCriarPagamento} loading={saving}>
-              Registrar Pagamento
-            </Button>
+            <Text size="sm" c={Math.abs(restanteApos) < 0.01 ? 'teal' : 'orange'}>
+              Soma lançamentos: R$ {linesSum.toFixed(2)}
+              {formAgendamento
+                ? ` · Diferença: R$ ${restanteApos.toFixed(2)}`
+                : ''}
+            </Text>
           </Group>
+
+          <Button
+            color="gold"
+            c="#0A0A0A"
+            loading={saving}
+            disabled={!canClose}
+            onClick={() => void handleCriarPagamento()}
+          >
+            Baixar comanda
+          </Button>
         </Stack>
       </Modal>
     </Stack>

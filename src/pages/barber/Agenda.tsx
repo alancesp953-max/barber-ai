@@ -279,7 +279,23 @@ export default function BarberAgenda() {
   const saveDayHours = async (dia: number, patch: Partial<BarberDayHours>) => {
     if (!barbeiro) return
     const current = horarios[dia]
-    const next = { ...current, ...patch, barbeiro_id: barbeiro.id, dia_semana: dia }
+    let next = { ...current, ...patch, barbeiro_id: barbeiro.id, dia_semana: dia }
+
+    // Limpar horários ⇒ dia fechado; aberto exige abertura e fechamento
+    if (!next.fechado) {
+      const ab = next.abertura?.slice(0, 5) || ''
+      const fe = next.fechamento?.slice(0, 5) || ''
+      if (!ab || !fe) {
+        next = { ...next, fechado: true, abertura: null, fechamento: null }
+      } else if (ab >= fe) {
+        setAvailMsgTone('red')
+        setAvailMsg('Abertura deve ser antes do fechamento')
+        return
+      }
+    } else {
+      next = { ...next, abertura: null, fechamento: null }
+    }
+
     const nextMap = { ...horarios, [dia]: next }
     setHorarios(nextMap)
     try {

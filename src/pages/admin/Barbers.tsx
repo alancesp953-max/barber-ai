@@ -1,8 +1,10 @@
 import {
   ActionIcon,
   Alert,
+  Avatar,
   Badge,
   Button,
+  FileButton,
   Group,
   Loader,
   Modal,
@@ -22,6 +24,7 @@ import {
   updateBarber,
   deleteBarber,
   setBarberQueueOrder,
+  uploadBarberPhoto,
 } from '../../lib/api'
 import type { Barber } from '../../types/database'
 import { PageHeader } from '../../components/PageHeader'
@@ -59,6 +62,8 @@ export default function Barbeiros() {
   const [formServico, setFormServico] = useState<number | string>('')
   const [formProduto, setFormProduto] = useState<number | string>('')
   const [formAvaliacao, setFormAvaliacao] = useState(5)
+  const [formFotoUrl, setFormFotoUrl] = useState<string | null>(null)
+  const [uploadingFoto, setUploadingFoto] = useState(false)
 
   async function loadBarbeiros() {
     try {
@@ -87,6 +92,7 @@ export default function Barbeiros() {
       setFormServico(barbeiro.percentual_servico)
       setFormProduto(barbeiro.percentual_produto)
       setFormAvaliacao(barbeiro.avaliacao || 5)
+      setFormFotoUrl(barbeiro.foto_url || null)
     } else {
       setFormNome('')
       setFormEmail('')
@@ -94,6 +100,7 @@ export default function Barbeiros() {
       setFormServico('')
       setFormProduto('')
       setFormAvaliacao(5)
+      setFormFotoUrl(null)
     }
   }
 
@@ -118,6 +125,7 @@ export default function Barbeiros() {
           percentual_servico: Number(formServico) || 0,
           percentual_produto: Number(formProduto) || 0,
           avaliacao: formAvaliacao,
+          foto_url: formFotoUrl,
         })
       } else {
         await createBarber({
@@ -127,6 +135,7 @@ export default function Barbeiros() {
           percentual_servico: Number(formServico) || 0,
           percentual_produto: Number(formProduto) || 0,
           avaliacao: formAvaliacao,
+          foto_url: formFotoUrl,
         })
       }
       fecharModal()
@@ -299,7 +308,14 @@ export default function Barbeiros() {
                             #{index + 1}
                           </Badge>
                         </Table.Td>
-                        <Table.Td fw={500}>{b.nome}</Table.Td>
+                        <Table.Td>
+                          <Group gap="sm" wrap="nowrap">
+                            <Avatar src={b.foto_url || undefined} radius="xl" size={32} color="gold">
+                              {b.nome.slice(0, 1).toUpperCase()}
+                            </Avatar>
+                            <Text fw={500}>{b.nome}</Text>
+                          </Group>
+                        </Table.Td>
                         <Table.Td>
                           <Text size="sm" c="dimmed">
                             {b.email || b.telefone ? (
@@ -405,6 +421,46 @@ export default function Barbeiros() {
               {error}
             </Alert>
           )}
+
+          <Group align="center" gap="md">
+            <Avatar src={formFotoUrl || undefined} radius="xl" size={64} color="gold">
+              {(formNome || '?').slice(0, 1).toUpperCase()}
+            </Avatar>
+            <Stack gap={4}>
+              <Text size="sm" fw={600}>
+                Foto de perfil
+              </Text>
+              {barbeiroEditando ? (
+                <FileButton
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  onChange={(file) => {
+                    if (!file || !barbeiroEditando) return
+                    setUploadingFoto(true)
+                    setError(null)
+                    void uploadBarberPhoto(barbeiroEditando.id, file)
+                      .then((url) => {
+                        setFormFotoUrl(url)
+                        void loadBarbeiros()
+                      })
+                      .catch((err: unknown) => {
+                        setError(err instanceof Error ? err.message : 'Falha no upload')
+                      })
+                      .finally(() => setUploadingFoto(false))
+                  }}
+                >
+                  {(props) => (
+                    <Button {...props} size="xs" variant="outline" color="gold" loading={uploadingFoto}>
+                      Enviar foto
+                    </Button>
+                  )}
+                </FileButton>
+              ) : (
+                <Text size="xs" c="dimmed">
+                  Salve o barbeiro primeiro para enviar a foto.
+                </Text>
+              )}
+            </Stack>
+          </Group>
 
           <TextInput
             label="Nome *"

@@ -8,6 +8,7 @@ import {
   Group,
   Loader,
   NativeSelect,
+  SegmentedControl,
   SimpleGrid,
   Stack,
   Table,
@@ -18,7 +19,9 @@ import {
 import { Plus, Trash2, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useEffect, useState, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useNavigate } from '@tanstack/react-router'
 import { CheckinModal } from '../../components/CheckinModal'
+import { AgendaKanban } from '../../components/AgendaKanban'
 import { PageHeader } from '../../components/PageHeader'
 import {
   createAppointment,
@@ -41,7 +44,13 @@ const statusColors: Record<AppointmentStatus, string> = {
   cancelado: 'red',
 }
 
-const appointmentStatuses = ['pendente', 'confirmado', 'concluido', 'cancelado'] as const
+/** Status selecionáveis manualmente — concluído só via pagamento */
+const appointmentStatuses = ['pendente', 'confirmado', 'cancelado'] as const
+
+function todayYmd() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 
 const MONTHS = [
   'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
@@ -215,6 +224,7 @@ function MonthCalendar({
 
 export default function Agendamentos() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const [appointments, setAppointments] = useState<Appointment[]>([])
   const [barbers, setBarbers] = useState<Barber[]>([])
   const [services, setServices] = useState<Service[]>([])
@@ -222,6 +232,8 @@ export default function Agendamentos() {
   const [showForm, setShowForm] = useState(false)
   const [checkinAppointment, setCheckinAppointment] = useState<Appointment | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [viewMode, setViewMode] = useState<'grade' | 'calendario'>('grade')
+  const [kanbanDate, setKanbanDate] = useState(todayYmd())
 
   const [currentMonth, setCurrentMonth] = useState(new Date())
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
@@ -380,6 +392,13 @@ export default function Agendamentos() {
     } catch (err) {
       setError(err instanceof Error ? err.message : t('common.failedToUpdate'))
     }
+  }
+
+  const goCheckout = (appt: Appointment) => {
+    navigate({
+      to: '/admin/financeiro',
+      search: { agendamentoId: appt.id },
+    })
   }
 
   const handleDelete = async (id: string) => {
@@ -544,6 +563,28 @@ export default function Agendamentos() {
         </Group>
       ) : (
         <>
+          <SegmentedControl
+            value={viewMode}
+            onChange={(v) => setViewMode(v as 'grade' | 'calendario')}
+            data={[
+              { label: 'Grade por barbeiro', value: 'grade' },
+              { label: 'Calendário', value: 'calendario' },
+            ]}
+            color="gold"
+          />
+
+          {viewMode === 'grade' ? (
+            <Card withBorder padding="md" radius="lg">
+              <AgendaKanban
+                date={kanbanDate}
+                onDateChange={setKanbanDate}
+                appointments={appointments}
+                barbers={barbers}
+                onOpenAppointment={setCheckinAppointment}
+                onCheckout={goCheckout}
+              />
+            </Card>
+          ) : (
           <Stack gap="sm">
             <Group justify="space-between" wrap="wrap">
               <Group gap="sm">
@@ -590,7 +631,10 @@ export default function Agendamentos() {
               </Group>
             )}
           </Stack>
+          )}
 
+          {viewMode === 'calendario' && (
+          <>
           <Group gap="md">
             <Group gap={6}>
               <Box w={10} h={10} bg="blue.4" style={{ borderRadius: 2 }} />
@@ -647,39 +691,55 @@ export default function Agendamentos() {
                       <Table.Td>{appt.barbeiros?.nome ?? '—'}</Table.Td>
                       <Table.Td>{formatDateTime(appt.data, appt.horario)}</Table.Td>
                       <Table.Td>
-                        <NativeSelect
-                          size="xs"
-                          value={appt.status}
-                          onChange={(e) =>
-                            handleStatusChange(appt.id, e.currentTarget.value as AppointmentStatus)
-                          }
-                          data={appointmentStatuses.map((s) => ({
-                            value: s,
-                            label: t(`status.${s}`),
-                          }))}
-                          styles={{
-                            input: {
-                              background: 'transparent',
-                              border: 'none',
-                              color: `var(--mantine-color-${statusColors[appt.status]}-4)`,
-                              fontWeight: 600,
-                              textTransform: 'capitalize',
-                            },
-                          }}
-                        />
+                        {appt.status === 'concluido' ? (
+                          <Text size="sm" c="teal" fw={600}>
+                            {t('status.concluido')}
+                          </Text>
+                        ) : (
+                          <NativeSelect
+                            size="xs"
+                            value={appt.status}
+                            onChange={(e) =>
+                              handleStatusChange(appt.id, e.currentTarget.value as AppointmentStatus)
+                            }
+                            data={appointmentStatuses.map((s) => ({
+                              value: s,
+                              label: t(`status.${s}`),
+                            }))}
+                            styles={{
+                              input: {
+                                background: 'transparent',
+                                border: 'none',
+                                color: `var(--mantine-color-${statusColors[appt.status]}-4)`,
+                                fontWeight: 600,
+                                textTransform: 'capitalize',
+                              },
+                            }}
+                          />
+                        )}
                       </Table.Td>
                       <Table.Td>{formatCurrency(Number(appt.servicos?.preco ?? 0))}</Table.Td>
                       <Table.Td>
                         <Group gap="xs">
                           {(appt.status === 'pendente' || appt.status === 'confirmado') && (
-                            <Button
-                              size="compact-xs"
-                              variant="subtle"
-                              color="gold"
-                              onClick={() => setCheckinAppointment(appt)}
-                            >
-                              {t('dashboard.checkIn')}
-                            </Button>
+                            <>
+                              <Button
+                                size="compact-xs"
+                                variant="subtle"
+                                color="gold"
+                                onClick={() => setCheckinAppointment(appt)}
+                              >
+                                {t('dashboard.checkIn')}
+                              </Button>
+                              <Button
+                                size="compact-xs"
+                                variant="subtle"
+                                color="teal"
+                                onClick={() => goCheckout(appt)}
+                              >
+                                Check-out
+                              </Button>
+                            </>
                           )}
                           <ActionIcon
                             variant="subtle"
@@ -703,6 +763,8 @@ export default function Agendamentos() {
               </Text>
             )}
           </Card>
+          </>
+          )}
         </>
       )}
 

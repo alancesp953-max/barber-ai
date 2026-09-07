@@ -273,7 +273,7 @@ export async function deleteProduct(id: string) {
 export async function getAppointments() {
   const { data, error } = await supabase
     .from('agendamentos')
-    .select('*, barbeiros(nome), servicos(nome, duracao_minutos, preco), clientes(nome, email)')
+    .select('*, barbeiros(nome, foto_url), servicos(nome, duracao_minutos, preco), clientes(nome, email)')
     .order('created_at', { ascending: false })
   if (error) throw new Error(`Erro ao buscar agendamentos: ${error.message}`)
   return data ?? []
@@ -302,10 +302,22 @@ export async function createAppointment(appointment: any) {
 
   const { data, error: errGet } = await supabase
     .from('agendamentos')
-    .select('*, barbeiros(nome), servicos(nome), clientes(nome, telefone)')
+    .select('*, barbeiros(nome), servicos(nome, preco, duracao_minutos), clientes(nome, telefone)')
     .eq('id', rpc.id)
     .single()
   if (errGet) throw new Error(`Agendamento criado, mas falhou ao carregar: ${errGet.message}`)
+
+  // Seed da comanda (multi-serviço)
+  if (data?.servico_id) {
+    const preco = Number(data.valor ?? data.servicos?.preco ?? 0)
+    await supabase.from('agendamento_servicos').insert({
+      agendamento_id: data.id,
+      servico_id: data.servico_id,
+      preco,
+      duracao_minutos: data.servicos?.duracao_minutos ?? null,
+    }).then(() => null, () => null)
+  }
+
   return data
 }
 
@@ -457,6 +469,9 @@ export async function disconnectWhatsAppInstance(): Promise<WhatsAppInstanceResu
 }
 
 export async function updateAppointmentStatus(id: string, status: string): Promise<Appointment> {
+  if (status === 'concluido') {
+    throw new Error('Status "concluído" só é definido automaticamente após o pagamento total')
+  }
   const { data, error } = await supabase
     .from('agendamentos')
     .update({ status })
@@ -464,9 +479,6 @@ export async function updateAppointmentStatus(id: string, status: string): Promi
     .select('*, barbeiros(nome), servicos(nome, duracao_minutos, preco), clientes(nome, email)')
     .single()
   if (error) throw new Error(`Erro ao atualizar status do agendamento: ${error.message}`)
-  if (status === 'concluido') {
-    void notifyRatingAskWhatsApp(id)
-  }
   return data as Appointment
 }
 
@@ -772,6 +784,44 @@ export async function createPagamento(pagamento: {
   status?: string
   observacao?: string
 }) {
+  if (!pagamento.agendamento_id) throw new Error('agendamento_id é obrigatório')
+  if (!pagamento.cliente_id) throw new Error('cliente_id é obrigatório')
+  if (!(pagamento.valor > 0)) throw new Error('Valor do pagamento deve ser maior que zero')
+
+  const { data: appt, error: errApptLoad } = await supabase
+    .from('agendamentos')
+    .select('id, valor, status, servico_id, servicos(preco)')
+    .eq('id', pagamento.agendamento_id)
+    .single()
+  if (errApptLoad) throw new Error(`Agendamento não encontrado: ${errApptLoad.message}`)
+  if (appt.status === 'cancelado') throw new Error('Agendamento cancelado não pode ser pago')
+  if (appt.status === 'concluido') throw new Error('Agendamento já está concluído')
+
+  const { data: items } = await supabase
+    .from('agendamento_servicos')
+    .select('preco')
+    .eq('agendamento_id', pagamento.agendamento_id)
+  const itemsTotal = (items || []).reduce((s, i) => s + Number(i.preco || 0), 0)
+  const servicoPreco = Number(
+    (appt as { servicos?: { preco?: number } | null }).servicos?.preco ?? 0,
+  )
+  const totalComanda = itemsTotal > 0
+    ? itemsTotal
+    : Number(appt.valor ?? servicoPreco ?? 0)
+
+  const { data: pagosPrev } = await supabase
+    .from('pagamentos')
+    .select('valor')
+    .eq('agendamento_id', pagamento.agendamento_id)
+    .eq('status', 'Pago')
+  const jaPago = (pagosPrev || []).reduce((s, p) => s + Number(p.valor || 0), 0)
+  const restante = Math.round((totalComanda - jaPago) * 100) / 100
+  if (pagamento.valor > restante + 0.009) {
+    throw new Error(
+      `Valor excede o restante da comanda (R$ ${restante.toFixed(2).replace('.', ',')})`,
+    )
+  }
+
   const { data, error } = await supabase
     .from('pagamentos')
     .insert({ ...pagamento, status: pagamento.status || 'Pago' })
@@ -779,36 +829,91 @@ export async function createPagamento(pagamento: {
     .single()
   if (error) throw new Error(`Erro ao criar pagamento: ${error.message}`)
 
-  // Baixa automática: conclui o agendamento e grava o valor
-  const { error: errAppt } = await supabase
-    .from('agendamentos')
-    .update({ status: 'concluido', valor: pagamento.valor })
-    .eq('id', pagamento.agendamento_id)
-  if (errAppt) {
-    throw new Error(
-      `Pagamento registrado, mas falhou ao concluir o agendamento: ${errAppt.message}`,
+  const novoTotalPago = Math.round((jaPago + pagamento.valor) * 100) / 100
+  const quitado = novoTotalPago + 0.009 >= totalComanda
+
+  if (quitado) {
+    const { error: errAppt } = await supabase
+      .from('agendamentos')
+      .update({ status: 'concluido', valor: totalComanda })
+      .eq('id', pagamento.agendamento_id)
+    if (errAppt) {
+      throw new Error(
+        `Pagamento registrado, mas falhou ao concluir o agendamento: ${errAppt.message}`,
+      )
+    }
+    void notifyRatingAskWhatsApp(pagamento.agendamento_id)
+  } else {
+    // Mantém valor da comanda atualizado sem concluir
+    await supabase
+      .from('agendamentos')
+      .update({ valor: totalComanda })
+      .eq('id', pagamento.agendamento_id)
+  }
+
+  return { ...data, quitado, total_comanda: totalComanda, total_pago: novoTotalPago, restante: Math.round((totalComanda - novoTotalPago) * 100) / 100 }
+}
+
+/** Agendamentos ainda não quitados (aceita pagamento parcial). */
+export async function getAgendamentosPendentesPagamento() {
+  const [{ data: appts, error: errA }, { data: pagos, error: errP }, { data: itens, error: errI }] =
+    await Promise.all([
+      supabase
+        .from('agendamentos')
+        .select('*, barbeiros(nome, foto_url), servicos(nome, preco), clientes(nome)')
+        .not('status', 'in', '("cancelado","concluido")')
+        .order('data', { ascending: false }),
+      supabase.from('pagamentos').select('agendamento_id, valor, status'),
+      supabase.from('agendamento_servicos').select('agendamento_id, preco, servico_id, servicos(nome, preco)'),
+    ])
+  if (errA) throw new Error(`Erro ao buscar agendamentos: ${errA.message}`)
+  if (errP) throw new Error(`Erro ao buscar pagamentos: ${errP.message}`)
+  // itens pode falhar se a tabela ainda não existir — trata como vazio
+  const itemRows = errI ? [] : itens || []
+
+  const paidByAppt = new Map<string, number>()
+  for (const p of pagos || []) {
+    if (p.status && p.status !== 'Pago') continue
+    paidByAppt.set(
+      p.agendamento_id,
+      (paidByAppt.get(p.agendamento_id) || 0) + Number(p.valor || 0),
+    )
+  }
+  const itemsByAppt = new Map<string, number>()
+  for (const i of itemRows) {
+    itemsByAppt.set(
+      i.agendamento_id,
+      (itemsByAppt.get(i.agendamento_id) || 0) + Number(i.preco || 0),
     )
   }
 
-  void notifyRatingAskWhatsApp(pagamento.agendamento_id)
-
-  return data
+  return (appts || [])
+    .map((a) => {
+      const itemsTotal = itemsByAppt.get(a.id) || 0
+      const total =
+        itemsTotal > 0
+          ? itemsTotal
+          : Number(a.valor ?? a.servicos?.preco ?? 0)
+      const pago = paidByAppt.get(a.id) || 0
+      const restante = Math.round((total - pago) * 100) / 100
+      return {
+        ...a,
+        total_comanda: total,
+        total_pago: pago,
+        restante,
+      }
+    })
+    .filter((a) => a.restante > 0.009)
 }
 
-/** Agendamentos ainda não pagos (para o modal financeiro). */
-export async function getAgendamentosPendentesPagamento() {
-  const [{ data: appts, error: errA }, { data: pagos, error: errP }] = await Promise.all([
-    supabase
-      .from('agendamentos')
-      .select('*, barbeiros(nome), servicos(nome, preco), clientes(nome)')
-      .not('status', 'in', '("cancelado","concluido")')
-      .order('data', { ascending: false }),
-    supabase.from('pagamentos').select('agendamento_id'),
-  ])
-  if (errA) throw new Error(`Erro ao buscar agendamentos: ${errA.message}`)
-  if (errP) throw new Error(`Erro ao buscar pagamentos: ${errP.message}`)
-  const paidIds = new Set((pagos || []).map((p) => p.agendamento_id).filter(Boolean))
-  return (appts || []).filter((a) => !paidIds.has(a.id))
+export async function getPagamentosDoAgendamento(agendamentoId: string) {
+  const { data, error } = await supabase
+    .from('pagamentos')
+    .select('*')
+    .eq('agendamento_id', agendamentoId)
+    .order('created_at', { ascending: true })
+  if (error) throw new Error(`Erro ao buscar pagamentos: ${error.message}`)
+  return data ?? []
 }
 
 export async function updatePagamentoStatus(id: string, status: string) {
@@ -1264,6 +1369,26 @@ export async function getBarbeiroHorarios(barbeiroId: string): Promise<BarberDay
   return data ?? []
 }
 
+function normalizeDayHours(input: {
+  abertura?: string | null
+  fechamento?: string | null
+  fechado?: boolean
+}): { abertura: string | null; fechamento: string | null; fechado: boolean } {
+  const abertura = input.abertura ? String(input.abertura).slice(0, 5) : null
+  const fechamento = input.fechamento ? String(input.fechamento).slice(0, 5) : null
+  // Se limpou horários, força fechado
+  if (!abertura || !fechamento) {
+    return { abertura: null, fechamento: null, fechado: true }
+  }
+  if (input.fechado) {
+    return { abertura: null, fechamento: null, fechado: true }
+  }
+  if (abertura >= fechamento) {
+    throw new Error('Horário de abertura deve ser anterior ao de fechamento')
+  }
+  return { abertura, fechamento, fechado: false }
+}
+
 export async function upsertBarbeiroHorario(row: {
   barbeiro_id: string
   dia_semana: number
@@ -1271,9 +1396,17 @@ export async function upsertBarbeiroHorario(row: {
   fechamento: string | null
   fechado: boolean
 }) {
+  const normalized = normalizeDayHours(row)
   const { data, error } = await supabase
     .from('barbeiro_horarios')
-    .upsert(row, { onConflict: 'barbeiro_id,dia_semana' })
+    .upsert(
+      {
+        barbeiro_id: row.barbeiro_id,
+        dia_semana: row.dia_semana,
+        ...normalized,
+      },
+      { onConflict: 'barbeiro_id,dia_semana' },
+    )
     .select()
     .single()
   if (error) throw new Error(`Erro ao salvar horário: ${error.message}`)
@@ -1298,13 +1431,15 @@ export async function saveBarbeiroDiasAtendimento(
     const fechamento = aberto
       ? extra?.fechamento || prev?.fechamento || '19:30'
       : null
+    // Aberto sem horário → fecha o dia (evita violar CHECK)
+    const payload = aberto && abertura && fechamento
+      ? { abertura, fechamento, fechado: false as const }
+      : { abertura: null, fechamento: null, fechado: true as const }
     rows.push(
       upsertBarbeiroHorario({
         barbeiro_id: barbeiroId,
         dia_semana: dia,
-        abertura,
-        fechamento,
-        fechado: !aberto,
+        ...payload,
       }),
     )
   }
@@ -1347,4 +1482,132 @@ export async function createBarbeiroBloqueio(params: {
 export async function deleteBarbeiroBloqueio(id: string) {
   const { error } = await supabase.from('barbeiro_bloqueios').delete().eq('id', id)
   if (error) throw new Error(`Erro ao remover bloqueio: ${error.message}`)
+}
+
+// =====================
+// Foto do barbeiro
+// =====================
+export async function uploadBarberPhoto(barbeiroId: string, file: File): Promise<string> {
+  const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '')
+  const path = `${barbeiroId}/${Date.now()}.${ext || 'jpg'}`
+  const { error: upErr } = await supabase.storage
+    .from('barber-photos')
+    .upload(path, file, { upsert: true, contentType: file.type || 'image/jpeg' })
+  if (upErr) throw new Error(`Erro ao enviar foto: ${upErr.message}`)
+
+  const { data: pub } = supabase.storage.from('barber-photos').getPublicUrl(path)
+  const url = pub.publicUrl
+  await updateBarber(barbeiroId, { foto_url: url })
+  return url
+}
+
+// =====================
+// Serviços da comanda (agendamento)
+// =====================
+export type AgendamentoServicoItem = {
+  id: string
+  agendamento_id: string
+  servico_id: string
+  preco: number
+  duracao_minutos: number | null
+  servicos?: { nome: string; preco: number; duracao_minutos: number | null } | null
+}
+
+async function recalcAppointmentTotal(agendamentoId: string) {
+  const { data: items } = await supabase
+    .from('agendamento_servicos')
+    .select('preco, servico_id')
+    .eq('agendamento_id', agendamentoId)
+  const total = (items || []).reduce((s, i) => s + Number(i.preco || 0), 0)
+  const primary = items?.[0]?.servico_id || null
+  await supabase
+    .from('agendamentos')
+    .update({ valor: total, ...(primary ? { servico_id: primary } : {}) })
+    .eq('id', agendamentoId)
+  return total
+}
+
+export async function getAgendamentoServicos(agendamentoId: string): Promise<AgendamentoServicoItem[]> {
+  const { data, error } = await supabase
+    .from('agendamento_servicos')
+    .select('*, servicos(nome, preco, duracao_minutos)')
+    .eq('agendamento_id', agendamentoId)
+    .order('created_at', { ascending: true })
+  if (error) throw new Error(`Erro ao buscar serviços da comanda: ${error.message}`)
+  return (data as AgendamentoServicoItem[]) ?? []
+}
+
+export async function addServicoAoAgendamento(agendamentoId: string, servicoId: string) {
+  const { data: servico, error: errS } = await supabase
+    .from('servicos')
+    .select('id, preco, duracao_minutos')
+    .eq('id', servicoId)
+    .single()
+  if (errS) throw new Error(`Serviço não encontrado: ${errS.message}`)
+
+  // Garante item inicial se a comanda ainda não tem linhas (legado)
+  const existing = await getAgendamentoServicos(agendamentoId)
+  if (!existing.length) {
+    const { data: appt } = await supabase
+      .from('agendamentos')
+      .select('servico_id, valor, servicos(preco, duracao_minutos)')
+      .eq('id', agendamentoId)
+      .maybeSingle()
+    if (appt?.servico_id) {
+      const preco = Number(
+        appt.valor ??
+          (appt as { servicos?: { preco?: number } }).servicos?.preco ??
+          0,
+      )
+      const dur = (appt as { servicos?: { duracao_minutos?: number } }).servicos?.duracao_minutos ?? null
+      await supabase.from('agendamento_servicos').insert({
+        agendamento_id: agendamentoId,
+        servico_id: appt.servico_id,
+        preco,
+        duracao_minutos: dur,
+      })
+    }
+  }
+
+  const { data, error } = await supabase
+    .from('agendamento_servicos')
+    .insert({
+      agendamento_id: agendamentoId,
+      servico_id: servicoId,
+      preco: Number(servico.preco),
+      duracao_minutos: servico.duracao_minutos ?? null,
+    })
+    .select('*, servicos(nome, preco, duracao_minutos)')
+    .single()
+  if (error) throw new Error(`Erro ao adicionar serviço: ${error.message}`)
+  await recalcAppointmentTotal(agendamentoId)
+  return data as AgendamentoServicoItem
+}
+
+export async function removeServicoDoAgendamento(itemId: string, agendamentoId: string) {
+  const { error } = await supabase.from('agendamento_servicos').delete().eq('id', itemId)
+  if (error) throw new Error(`Erro ao remover serviço: ${error.message}`)
+  await recalcAppointmentTotal(agendamentoId)
+}
+
+export async function ensureAgendamentoServicos(agendamentoId: string) {
+  const existing = await getAgendamentoServicos(agendamentoId)
+  if (existing.length) return existing
+  const { data: appt } = await supabase
+    .from('agendamentos')
+    .select('servico_id, valor, servicos(preco, duracao_minutos)')
+    .eq('id', agendamentoId)
+    .maybeSingle()
+  if (!appt?.servico_id) return []
+  const preco = Number(
+    appt.valor ?? (appt as { servicos?: { preco?: number } }).servicos?.preco ?? 0,
+  )
+  const dur = (appt as { servicos?: { duracao_minutos?: number } }).servicos?.duracao_minutos ?? null
+  await supabase.from('agendamento_servicos').insert({
+    agendamento_id: agendamentoId,
+    servico_id: appt.servico_id,
+    preco,
+    duracao_minutos: dur,
+  })
+  return getAgendamentoServicos(agendamentoId)
 }
