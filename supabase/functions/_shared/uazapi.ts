@@ -111,6 +111,15 @@ async function uazRequest(
 
 export type PresenceType = 'composing' | 'paused' | 'recording'
 
+/** Digits, or a full JID when the webhook only has @lid. */
+export function uazNumber(number: string): string {
+  const s = String(number).trim()
+  if (s.includes('@lid') || s.includes('@s.whatsapp.net') || s.includes('@c.us')) {
+    return s.split(':')[0]
+  }
+  return normalizePhone(s)
+}
+
 /**
  * POST /message/presence
  * `delay` (ms) = quanto tempo o WhatsApp mostra "digitando…" / "gravando…".
@@ -122,7 +131,7 @@ export async function sendPresence(
   config?: UazapiConfig,
   delayMs?: number,
 ): Promise<{ ok: boolean; data?: unknown; error?: string }> {
-  const phone = normalizePhone(number)
+  const phone = uazNumber(number)
   const body: Record<string, unknown> = {
     number: phone,
     presence,
@@ -164,7 +173,7 @@ export async function humanReply(
   if (!config?.baseUrl || !config?.token) {
     return { ok: false, error: 'UAZAPI config obrigatória (use resolveUazConfig)' }
   }
-  const phone = normalizePhone(number)
+  const phone = uazNumber(number)
   const delay = typingDelayMs(text)
 
   // 1) Marca digitando pelo tempo calculado (UAZAPI usa o campo delay)
@@ -194,7 +203,7 @@ export async function sendText(
   config?: UazapiConfig,
   delayMs?: number,
 ): Promise<{ ok: boolean; data?: unknown; error?: string }> {
-  const phone = normalizePhone(number)
+  const phone = uazNumber(number)
   const body: Record<string, unknown> = {
     number: phone,
     text,

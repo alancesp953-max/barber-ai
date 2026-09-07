@@ -118,30 +118,54 @@ function jidToPhone(raw: unknown): string {
   return phone
 }
 
-/**
- * Destino da resposta = conversa (chatid), NUNCA owner da instância.
- * payload.phone / payload.owner costumam ser o número conectado (você) — não o cliente.
- */
-function extractPhone(msg: UazMessage, payload: Record<string, unknown>): string {
+function collectPhoneCandidates(msg: UazMessage, payload: Record<string, unknown>): unknown[] {
   const chat =
     payload.chat && typeof payload.chat === 'object'
       ? (payload.chat as Record<string, unknown>)
       : {}
-
-  // chatid = conversa com quem deve receber a resposta
-  const candidates: unknown[] = [
-    msg.chatid,
+  const data =
+    payload.data && typeof payload.data === 'object'
+      ? (payload.data as Record<string, unknown>)
+      : {}
+  const nested =
+    payload.message && typeof payload.message === 'object'
+      ? (payload.message as Record<string, unknown>)
+      : {}
+  return [
     msg.sender_pn,
-    msg.sender,
+    (msg as Record<string, unknown>).senderPn,
+    (msg as Record<string, unknown>).senderPN,
+    (msg as Record<string, unknown>).pn,
+    (msg as Record<string, unknown>).wid,
+    (msg as Record<string, unknown>).remoteJid,
+    payload.sender_pn,
+    payload.senderPn,
+    chat.sender_pn,
     chat.wa_chatid,
     chat.phone,
+    chat.pn,
     chat.id,
-    // NÃO usar payload.owner / payload.phone / instance phone
+    data.sender_pn,
+    data.senderPn,
+    nested.sender_pn,
+    msg.sender,
+    msg.chatid,
   ]
+}
 
-  for (const c of candidates) {
+/**
+ * Destino da resposta = conversa. Prefere sender_pn (número real) ao @lid.
+ */
+function extractPhone(msg: UazMessage, payload: Record<string, unknown>): string {
+  for (const c of collectPhoneCandidates(msg, payload)) {
     const phone = jidToPhone(c)
     if (phone) return phone
+  }
+  // WhatsApp LID: UAZ still delivers if we send to chatid@lid
+  for (const c of [msg.chatid, msg.sender, payload.chatid, payload.sender]) {
+    if (c == null) continue
+    const s = String(c).trim()
+    if (s.includes('@lid')) return s.split(':')[0]
   }
   return ''
 }
@@ -182,7 +206,7 @@ function collectMessages(payload: Record<string, unknown>): UazMessage[] {
     const n = nested as UazMessage
     // Objeto UAZ completo (tem chatid/sender/text/messageType)
     if (n.chatid || n.sender || n.messageid || n.messageType || typeof n.text === 'string') {
-      return [n]
+      return [{ ...(payload as UazMessage), ...n }]
     }
     // Baileys-style: payload com chatid no root + message.conversation
     if (n.conversation || n.extendedTextMessage) {
@@ -197,7 +221,7 @@ function collectMessages(payload: Record<string, unknown>): UazMessage[] {
       return collectMessages(d)
     }
     if ((d as UazMessage).chatid || (d as UazMessage).sender || (d as UazMessage).text) {
-      return [d as UazMessage]
+      return [{ ...(payload as UazMessage), ...(d as UazMessage) }]
     }
   }
 
@@ -1606,10 +1630,6 @@ Deno.serve(async (req) => {
     const ownerPhone = instanceOwnerPhone(payload)
 
     const db = getServiceClient()
-    const uazReady = await resolveUazConfig(db)
-    if (!uazReady.config) {
-      return jsonResponse({ ok: false, error: uazReady.error || 'UAZAPI inválida' }, 503)
-    }
     const active = await isBotActive(db)
     if (!active) {
       return jsonResponse({ ok: true, bot: 'disabled' })
@@ -1623,15 +1643,6 @@ Deno.serve(async (req) => {
         continue
       }
 
-      const mid = String(msg.messageid || msg.messageidHex || '').trim()
-      if (mid) {
-        const { error: dupErr } = await db.from('whatsapp_processed_messages').insert({ messageid: mid })
-        if (dupErr && (dupErr.code === '23505' || /duplicate|unique/i.test(dupErr.message || ''))) {
-          results.push({ phone: '', ok: true, note: 'duplicate' })
-          continue
-        }
-      }
-
       const phone = extractPhone(msg, payload)
       if (!phone) {
         console.warn('whatsapp-webhook: no customer phone', {
@@ -1639,12 +1650,25 @@ Deno.serve(async (req) => {
           sender: msg.sender,
           sender_pn: msg.sender_pn,
           owner: ownerPhone,
+          keys: Object.keys(msg || {}).slice(0, 30),
         })
         results.push({ phone: '', ok: false, note: 'no_phone' })
         continue
       }
 
-      await db.rpc('lock_whatsapp_phone', { p_phone: phone }).catch(() => null)
+      const mid = String(msg.messageid || msg.messageidHex || '').trim()
+      if (mid) {
+        const { data: seen } = await db
+          .from('whatsapp_processed_messages')
+          .select('messageid')
+          .eq('messageid', mid)
+          .maybeSingle()
+        if (seen) {
+          results.push({ phone, ok: true, note: 'duplicate' })
+          continue
+        }
+      }
+
       try {
         if (ownerPhone && phone === ownerPhone) {
           console.info('whatsapp-webhook: reply to instance owner (self-test or same number)', phone)
@@ -1667,6 +1691,9 @@ Deno.serve(async (req) => {
           const leadName = await getLeadDisplayName(db, phone)
           const answer = await processMessage(db, phone, 'oi')
           await reply(phone, answer, db, uazCfg, { senderName: leadName, userText: 'oi' })
+          if (mid) {
+            await db.from('whatsapp_processed_messages').insert({ messageid: mid }).then(() => null, () => null)
+          }
           results.push({ phone, ok: true })
           continue
         }
@@ -1674,9 +1701,13 @@ Deno.serve(async (req) => {
         const leadName = await getLeadDisplayName(db, phone)
         const answer = await processMessage(db, phone, text)
         await reply(phone, answer, db, uazCfg, { senderName: leadName, userText: text })
+        if (mid) {
+          await db.from('whatsapp_processed_messages').insert({ messageid: mid })
+        }
         results.push({ phone, ok: true })
-      } finally {
-        await db.rpc('unlock_whatsapp_phone', { p_phone: phone }).catch(() => null)
+      } catch (e) {
+        console.error('whatsapp-webhook message failed', phone, e)
+        results.push({ phone, ok: false, note: e instanceof Error ? e.message : String(e) })
       }
     }
 
