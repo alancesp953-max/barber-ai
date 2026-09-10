@@ -286,6 +286,8 @@ export async function createAppointment(appointment: any) {
   }
 
   const useRotation = !payload.barbeiro_id
+  const isManualOverride =
+    payload.is_manual_override === true || payload.origin === 'admin' || payload.origin === 'barber'
   const { data: rpc, error } = await supabase.rpc('create_appointment_atomic', {
     p_cliente_id: payload.cliente_id,
     p_servico_id: payload.servico_id,
@@ -295,7 +297,8 @@ export async function createAppointment(appointment: any) {
     p_status: payload.status || 'pendente',
     p_valor: payload.valor ?? null,
     p_use_rotation: useRotation,
-    p_allow_past: true,
+    // Override administrativo: grade + encaixe em qualquer horário (09:00–11:00, 19:20, 19:30+).
+    p_allow_past: isManualOverride || true,
   })
   if (error) throw new Error(`Erro ao criar agendamento: ${error.message}`)
   if (!rpc?.ok) throw new Error(String(rpc?.error || 'Falha ao reservar horário'))

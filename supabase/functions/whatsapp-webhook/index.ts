@@ -40,8 +40,10 @@ import {
   BARBER_TOOLS,
   bookingSuccessText,
   classifyMainServiceChoice,
+  fetchWhatsappAvailableSlots,
   isolateBookingSuccessMessage,
   isBookingSuccessMessage,
+  loadServiceForConfirm,
   looksLikeConfirmationAsk,
   mainServiceAskText,
   mainServiceDisplayName,
@@ -52,6 +54,7 @@ import {
   systemPromptBarber,
   wantsAnyBarber,
   wantsExtraServices,
+  whatsappCloseGate,
 } from '../_shared/barber-tools.ts'
 import { logDiva, logDivaError } from '../_shared/debug-diva.ts'
 import { loadMimoConfig, mimoChat, type ChatMessage } from '../_shared/mimo.ts'
@@ -59,7 +62,6 @@ import { resolveUazConfig } from '../_shared/resolve-uaz.ts'
 import {
   checkSlotAvailability,
   createAppointmentAtomic,
-  fetchAvailableSlots,
   filterPastSlots,
   listBookableBarbers,
   nowTimeSaoPaulo,
@@ -981,14 +983,16 @@ async function commitPendingAppointment(
 ): Promise<string | null> {
   if (!pendingReady(pending) || !pending.servico_id || !pending.data || !pending.horario) return null
   try {
-    const { slots, error } = await fetchAvailableSlots(
+    const hm = pending.horario.slice(0, 5)
+    const closeErr = await whatsappCloseGate(db, pending.servico_id, hm)
+    if (closeErr) return closeErr
+    const { slots, error } = await fetchWhatsappAvailableSlots(
       db,
       pending.data,
       pending.servico_id,
       pending.barbeiro_id,
     )
     if (error) console.error('[BOOK-DIRECT] slots', error)
-    const hm = pending.horario.slice(0, 5)
     if (!slots.includes(hm)) {
       if (slots.length) {
         return [
@@ -1028,6 +1032,7 @@ async function commitPendingAppointment(
       return parsed.mensagem_cliente
     }
     console.error('[BOOK-DIRECT] create_appointment recusou', parsed.error || raw.slice(0, 300))
+    if (parsed.mensagem_cliente) return parsed.mensagem_cliente
     if (parsed.error) return `Não consegui agendar: ${parsed.error}`
   } catch (e) {
     console.error('[BOOK-DIRECT] exceção', e instanceof Error ? e.message : String(e), e instanceof Error ? e.stack : null)
@@ -1161,11 +1166,12 @@ async function tryAutoCreateAppointment(
       }),
       leadName || undefined,
     )
-    const parsed = JSON.parse(raw) as { ok?: boolean; mensagem_cliente?: string }
+    const parsed = JSON.parse(raw) as { ok?: boolean; mensagem_cliente?: string; error?: string }
     if (parsed.ok && parsed.mensagem_cliente) {
       await resetSession(db, phone)
       return parsed.mensagem_cliente
     }
+    if (parsed.mensagem_cliente) return parsed.mensagem_cliente
   } catch (e) {
     console.warn('tryAutoCreateAppointment', e)
   }
@@ -1599,7 +1605,7 @@ async function handleChooseDate(
   const servico_id = context.servico_id as string
   const barbeiro_id = (context.barbeiro_id as string) || null
 
-  const { slots: list, error } = await fetchAvailableSlots(db, data, servico_id, barbeiro_id)
+  const { slots: list, error } = await fetchWhatsappAvailableSlots(db, data, servico_id, barbeiro_id)
 
   if (error) {
     return [
@@ -1619,6 +1625,10 @@ async function handleChooseDate(
   }
 
   const wanted = context.horario ? String(context.horario).slice(0, 5) : ''
+  if (wanted && servico_id) {
+    const closeErr = await whatsappCloseGate(db, servico_id, wanted)
+    if (closeErr) return closeErr
+  }
   if (wanted && list.map((h) => h.slice(0, 5)).includes(wanted) && servico_id) {
     return finalizeWizardBooking(db, phone, { ...context, data, slots: list }, senderName)
   }
@@ -1657,6 +1667,13 @@ async function finalizeWizardBooking(
   context: Record<string, unknown>,
   senderName?: string,
 ): Promise<string> {
+  const closeErr = await whatsappCloseGate(
+    db,
+    String(context.servico_id || ''),
+    String(context.horario || ''),
+  )
+  if (closeErr) return closeErr
+
   const check = await checkSlotAvailability(db, {
     data: String(context.data),
     servicoId: String(context.servico_id),
@@ -1666,7 +1683,7 @@ async function finalizeWizardBooking(
   })
 
   if (!check.ok) {
-    const { slots: refreshed } = await fetchAvailableSlots(
+    const { slots: refreshed } = await fetchWhatsappAvailableSlots(
       db,
       String(context.data),
       String(context.servico_id),
@@ -1708,11 +1725,14 @@ async function finalizeWizardBooking(
     return `Não deu pra agendar: ${booked.error}\n\n` + aftercareText()
   }
 
+  const servico = await loadServiceForConfirm(db, String(context.servico_id || ''))
   return bookingSuccessText({
-    servico: context.servico_nome ? String(context.servico_nome) : null,
+    servico: servico?.nome || (context.servico_nome ? String(context.servico_nome) : null),
     barbeiro: booked.barbeiro_nome || check.barbeiro_nome || (context.barbeiro_nome as string) || null,
     data: String(booked.data || context.data),
     horario: String(booked.horario),
+    preco: servico?.preco ?? null,
+    duracao_minutos: servico?.duracao_minutos ?? null,
   })
 }
 
@@ -1731,6 +1751,11 @@ async function handleChooseTime(
   const slots = (context.slots as string[]) || []
   const horario = matchSlot(text, slots)
   if (!horario) {
+    const hinted = extractHorarioHint(text)
+    if (hinted && context.servico_id) {
+      const closeErr = await whatsappCloseGate(db, String(context.servico_id), hinted)
+      if (closeErr) return closeErr
+    }
     return [
       'Não achei esse horário. Disponíveis:',
       '',
@@ -1739,6 +1764,9 @@ async function handleChooseTime(
       'Qual prefere?',
     ].join('\n')
   }
+
+  const overflow = await whatsappCloseGate(db, String(context.servico_id || ''), horario)
+  if (overflow) return overflow
 
   const check = await checkSlotAvailability(db, {
     data: String(context.data),
@@ -1749,7 +1777,7 @@ async function handleChooseTime(
   })
 
   if (!check.ok) {
-    const { slots: refreshed } = await fetchAvailableSlots(
+    const { slots: refreshed } = await fetchWhatsappAvailableSlots(
       db,
       String(context.data),
       String(context.servico_id),

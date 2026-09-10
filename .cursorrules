@@ -1,0 +1,7 @@
+# Divina Barbearia Varjota — Diva / agenda
+
+Horário limite de início via WhatsApp é 19:30 subtraído da duração do serviço. Painel administrativo tem permissão irrestrita para encaixes em qualquer horário manual.
+
+- WhatsApp (Diva): expediente presencial encerra às 19:30 (America/Fortaleza). Nunca sugerir ou marcar início às 19:30. Último início = 19:30 − duração (30 min → 19:00; 45 min → 18:45; 60 min → 18:30). Se a duração ultrapassar 19:30, recusar com: "Fechamos às 19h30, e esse serviço tem duração de [X] minutos. O último horário disponível para esse serviço é às [Horário Máximo]."
+- Painel admin/barbeiro: `is_manual_override: true` / origem administrativa — encaixe em qualquer horário (09:00–11:00, 19:20, 19:30 ou além), sem trava de fechamento.
+- Não regressar: debounce de mensagens, coleta de nome, agendamento ativo, bloqueio de datas/horários passados, avisos fora de expediente, prioridade do barbeiro citado (fuzzy), rodízio só sem profissional, 3 serviços principais, ficha de confirmação sem rodapé/avaliação.

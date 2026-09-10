@@ -350,6 +350,8 @@ export default function Agendamentos() {
         data: date,
         horario: time,
         status: 'pendente',
+        is_manual_override: true,
+        origin: 'admin',
       })
 
       if (phone) {
@@ -518,7 +520,7 @@ export default function Agendamentos() {
               step={60}
               value={time}
               onChange={(e) => setTime(e.currentTarget.value)}
-              description="Pode ser qualquer horário (ex.: 17:40), não precisa ser de 15 em 15."
+              description="Encaixe manual irrestrito: qualquer horário (ex.: 09:40, 17:40, 19:20, 19:30 ou além). Não há trava de fechamento no painel."
               styles={inputStyles}
             />
             <NativeSelect

@@ -5,6 +5,7 @@ import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1
 import {
   fetchShopPublicInfo,
   findOrCreateClientByPhone,
+  formatBrl,
   formatDateBR,
   formatServicePriceList,
   getSession,
@@ -60,7 +61,7 @@ type: 'function',
 function: {
 name: 'get_available_slots',
 description:
-'Horários livres em uma data para um serviço (e opcionalmente barbeiro). Se o cliente já pediu um horário que estiver nesta lista, chame create_appointment na mesma rodada — não peça confirmação.',
+'Horários livres em uma data para um serviço (e opcionalmente barbeiro). NUNCA sugira 19:30 (fechamento das portas). Último início = 19:30 menos a duração do serviço. Se o cliente já pediu um horário que estiver nesta lista, chame create_appointment na mesma rodada — não peça confirmação.',
 parameters: {
 type: 'object',
 properties: {
@@ -78,7 +79,7 @@ type: 'function',
 function: {
 name: 'create_appointment',
 description:
-'Cria o agendamento IMEDIATAMENTE para o cliente do WhatsApp atual. Chame assim que tiver servico_id, data e um horário livre. NUNCA peça confirmação ("você confirma?", "podemos fechar?", "confirma os dados?") antes de chamar.',
+'Cria o agendamento IMEDIATAMENTE para o cliente do WhatsApp atual. Chame assim que tiver servico_id, data e um horário livre. NUNCA peça confirmação ("você confirma?", "podemos fechar?", "confirma os dados?") antes de chamar. Recuse início às 19:30 ou qualquer horário cuja duração ultrapasse 19:30; use a mensagem_cliente do erro.',
 parameters: {
 type: 'object',
 properties: {
@@ -131,6 +132,82 @@ export function formatHourBR(horario: string): string {
   return `${String(parseInt(h, 10))}h${m}`
 }
 
+/** Fechamento presencial da loja (WhatsApp nunca inicia atendimento neste horário). */
+export const WHATSAPP_SHOP_CLOSE_HM = '19:30'
+
+export function hmToMinutes(hm: string): number {
+  const [h, m] = String(hm || '').slice(0, 5).split(':').map(Number)
+  return (Number(h) || 0) * 60 + (Number(m) || 0)
+}
+
+export function minutesToHm(total: number): string {
+  const safe = Math.max(0, Math.round(total))
+  const h = Math.floor(safe / 60)
+  const m = safe % 60
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
+export function lastWhatsappStartHm(durationMin: number): string {
+  const dur = Math.max(1, Math.round(Number(durationMin) || 0))
+  return minutesToHm(hmToMinutes(WHATSAPP_SHOP_CLOSE_HM) - dur)
+}
+
+export function startFitsWhatsappClose(horario: string, durationMin: number): boolean {
+  const start = hmToMinutes(horario)
+  const close = hmToMinutes(WHATSAPP_SHOP_CLOSE_HM)
+  if (start >= close) return false
+  const dur = Math.max(1, Math.round(Number(durationMin) || 0))
+  return start + dur <= close
+}
+
+export function filterWhatsappSlotsByClose(slots: string[], durationMin: number): string[] {
+  return (slots || [])
+    .map((h) => String(h).slice(0, 5))
+    .filter((h) => h && h !== WHATSAPP_SHOP_CLOSE_HM && startFitsWhatsappClose(h, durationMin))
+}
+
+export function whatsappCloseOverflowText(durationMin: number): string {
+  const dur = Math.max(1, Math.round(Number(durationMin) || 0))
+  const last = formatHourBR(lastWhatsappStartHm(dur))
+  return `Fechamos às 19h30, e esse serviço tem duração de ${dur} minutos. O último horário disponível para esse serviço é às ${last}.`
+}
+
+export async function fetchWhatsappAvailableSlots(
+  db: SupabaseClient,
+  data: string,
+  servicoId: string,
+  barbeiroId?: string | null,
+): Promise<{ slots: string[]; error?: string; durationMin: number; lastStart: string }> {
+  const { slots, error } = await fetchAvailableSlots(db, data, servicoId, barbeiroId)
+  const svc = await loadServiceForConfirm(db, servicoId)
+  const durationMin = svc?.duracao_minutos && svc.duracao_minutos > 0 ? svc.duracao_minutos : 30
+  const filtered = filterWhatsappSlotsByClose(slots, durationMin)
+  return {
+    slots: filtered,
+    error,
+    durationMin,
+    lastStart: lastWhatsappStartHm(durationMin),
+  }
+}
+
+export async function whatsappCloseGate(
+  db: SupabaseClient,
+  servicoId: string,
+  horario: string,
+): Promise<string | null> {
+  const hm = String(horario || '').slice(0, 5)
+  if (!hm) return null
+  const svc = await loadServiceForConfirm(db, servicoId)
+  const durationMin = svc?.duracao_minutos && svc.duracao_minutos > 0 ? svc.duracao_minutos : 30
+  if (hmToMinutes(hm) >= hmToMinutes(WHATSAPP_SHOP_CLOSE_HM)) {
+    return whatsappCloseOverflowText(durationMin)
+  }
+  if (!startFitsWhatsappClose(hm, durationMin)) {
+    return whatsappCloseOverflowText(durationMin)
+  }
+  return null
+}
+
 export function clientDateLabel(ymd: string): string {
   const today = todaySaoPaulo()
   if (ymd === today) return 'hoje'
@@ -141,19 +218,73 @@ export function clientDateLabel(ymd: string): string {
   return formatDateBR(ymd)
 }
 
-/** Mensagem curta e definitiva após criar o agendamento (máx. 3 frases). */
+function cleanConfirmLabel(value: unknown): string {
+  const s = String(value ?? '').trim()
+  if (!s || /^undefined$/i.test(s) || /^null$/i.test(s)) return ''
+  return s
+}
+
+function confirmPriceLabel(preco: unknown): string {
+  const n = Number(preco)
+  if (!Number.isFinite(n) || n <= 0) return ''
+  return formatBrl(n)
+}
+
+function confirmDurationLabel(minutos: unknown): string {
+  const n = Number(minutos)
+  if (!Number.isFinite(n) || n <= 0) return ''
+  return `${Math.round(n)} min`
+}
+
+export async function loadServiceForConfirm(
+  db: SupabaseClient,
+  servicoId?: string | null,
+): Promise<{ nome: string; preco: number | null; duracao_minutos: number | null } | null> {
+  const id = String(servicoId || '').trim()
+  if (!id) return null
+  try {
+    const { data } = await db
+      .from('servicos')
+      .select('nome, preco, duracao_minutos')
+      .eq('id', id)
+      .maybeSingle()
+    if (!data) return null
+    const preco = data.preco == null ? null : Number(data.preco)
+    const duracao = data.duracao_minutos == null ? null : Number(data.duracao_minutos)
+    return {
+      nome: cleanConfirmLabel(data.nome),
+      preco: preco != null && Number.isFinite(preco) && preco > 0 ? preco : null,
+      duracao_minutos: duracao != null && Number.isFinite(duracao) && duracao > 0 ? duracao : null,
+    }
+  } catch {
+    return null
+  }
+}
+
+/** Resumo estruturado após criar o agendamento. */
 export function bookingSuccessText(opts: {
   servico?: string | null
   barbeiro?: string | null
   data: string
   horario: string
+  preco?: number | null
+  duracao_minutos?: number | null
 }): string {
-  const servico = (String(opts.servico || 'horário').trim() || 'horário').toLowerCase()
-  const barbeiro = String(opts.barbeiro || '').trim()
-  const who = barbeiro ? ` com o ${barbeiro}` : ''
+  const servico = cleanConfirmLabel(opts.servico)
+  const barbeiro = cleanConfirmLabel(opts.barbeiro)
   const when = clientDateLabel(opts.data)
   const hora = formatHourBR(opts.horario)
-  return `Agendamento confirmado com sucesso! Seu ${servico}${who} está marcado para ${when} às ${hora}. Por favor, chegue com alguns minutos de antecedência para garantir o seu horário.`
+  const valor = confirmPriceLabel(opts.preco)
+  const duracao = confirmDurationLabel(opts.duracao_minutos)
+  const lines = ['Agendamento confirmado com sucesso! 💈', '']
+  if (servico) lines.push(`• Serviço: ${servico}`)
+  if (barbeiro) lines.push(`• Profissional: ${barbeiro}`)
+  if (when && hora) lines.push(`• Horário: ${when} às ${hora}`)
+  if (valor) lines.push(`• Valor: ${valor}`)
+  if (duracao) lines.push(`• Duração estimada: ${duracao}`)
+  lines.push('')
+  lines.push('Por favor, chegue com alguns minutos de antecedência para garantir o seu horário. Te esperamos!')
+  return lines.join('\n')
 }
 
 export function isBookingSuccessMessage(text: string): boolean {
@@ -164,16 +295,19 @@ export function isBookingSuccessMessage(text: string): boolean {
   return n.includes('agendamento confirmado com sucesso')
 }
 
-/** Se a IA ou o rodapé de expediente se misturaram, fica só a confirmação curta. */
+/** Se a IA ou o rodapé de expediente se misturaram, fica só a confirmação estruturada. */
 export function isolateBookingSuccessMessage(text: string): string | null {
   const raw = String(text || '').trim()
   if (!isBookingSuccessMessage(raw)) return null
   const m = raw.match(
+    /Agendamento confirmado com sucesso![\s\S]*?Te esperamos!/i,
+  )
+  if (m) return m[0].trim()
+  const legacy = raw.match(
     /Agendamento confirmado com sucesso![\s\S]*?anteced[eê]ncia para garantir o seu hor[aá]rio\.?/i,
   )
-  if (m) return m[0].replace(/[ \t]+/g, ' ').replace(/\s*\n+\s*/g, ' ').trim()
-  const first = raw.split(/\n\s*\n/)[0]?.trim()
-  return first || raw
+  if (legacy) return legacy[0].trim()
+  return raw.split(/\n\s*\n(?=O atendimento|O expediente|Vamos agendar)/i)[0]?.trim() || raw
 }
 
 export const MAIN_SERVICE_LABELS = [
@@ -515,7 +649,7 @@ return JSON.stringify({ error: 'data e servico_id são obrigatórios' })
             if (kept && kept !== 'null') barbeiro_id = kept
           }
 logDiva('get_available_slots — parâmetros', { barbeiro: barbeiro_id, data, horario: null, servico_id })
-        const { slots: horarios, error } = await fetchAvailableSlots(db, data, servico_id, barbeiro_id)
+        const { slots: horarios, error, durationMin, lastStart } = await fetchWhatsappAvailableSlots(db, data, servico_id, barbeiro_id)
         if (error) {
           logDivaError('get_available_slots — erro da consulta', { barbeiro: barbeiro_id, data, servico_id, error })
           return JSON.stringify({
@@ -523,6 +657,8 @@ logDiva('get_available_slots — parâmetros', { barbeiro: barbeiro_id, data, ho
             data_br: formatDateBR(data),
             horarios,
             aviso: `rpc: ${error}`,
+            ultimo_inicio: lastStart,
+            duracao_minutos: durationMin,
           })
         }
           await saveSession(db, phone, sess.step || 'chat', {
@@ -558,10 +694,13 @@ barbeiro_id,
 horarios,
 primeiro_horario: primeiro,
 ultimo_horario: ultimo,
+ultimo_inicio_permitido: lastStart,
+duracao_minutos: durationMin,
+fechamento: '19:30',
 dica:
 horarios.length === 0
-? 'Sem horários livres (ocupados, fora do funcionamento salvo em Configurações, ou já passaram no dia de hoje). Peça outra data ou outro horário deste barbeiro. NÃO troque o barbeiro escolhido por rodízio.'
-: `SÓ liste horários desta lista. O primeiro disponível é ${primeiro} (não diga que abre às 08:00 se a lista não começar assim). Se o cliente já escolheu um horário desta lista, chame create_appointment AGORA com o mesmo barbeiro_id — não pergunte confirmação e não use rodízio.`,
+? `Sem horários livres (ocupados, já passaram, ou não cabem antes das 19h30). Este serviço dura ${durationMin} min — o último início permitido é ${lastStart}. Nunca sugira 19:30. NÃO troque o barbeiro escolhido por rodízio.`
+: `SÓ liste horários desta lista. NUNCA sugira 19:30 (fechamento). Último início permitido para este serviço (${durationMin} min) é ${lastStart}. O primeiro disponível é ${primeiro}. Se o cliente já escolheu um horário desta lista, chame create_appointment AGORA com o mesmo barbeiro_id — não pergunte confirmação e não use rodízio.`,
 })
         } catch (e) {
           logDivaError('get_available_slots — exceção', { error: e instanceof Error ? e.message : String(e) })
@@ -576,6 +715,13 @@ let barbeiro_id = args.barbeiro_id ? String(args.barbeiro_id) : null
 if (!servico_id || !data || !horario) {
 logDivaError('create_appointment — parâmetros inválidos', { barbeiro: barbeiro_id, data, horario, servico_id })
 return JSON.stringify({ error: 'servico_id, data e horario são obrigatórios' })
+}
+{
+  const closeErr = await whatsappCloseGate(db, servico_id, horario)
+  if (closeErr) {
+    logDiva('create_appointment — recusado: não cabe antes das 19h30', { barbeiro: barbeiro_id, data, horario, servico_id })
+    return JSON.stringify({ ok: false, error: closeErr, mensagem_cliente: closeErr })
+  }
 }
 try {
   const sess = await getSession(db, phone)
@@ -633,18 +779,15 @@ logDiva('create_appointment — sucesso', {
   horario: booked.horario,
   id: booked.id,
 })
-let servico_nome: string | null = null
-try {
-  const { data: servRow } = await db.from('servicos').select('nome').eq('id', servico_id).maybeSingle()
-  servico_nome = servRow?.nome ? String(servRow.nome) : null
-} catch {
-  /* ignore */
-}
+const servico = await loadServiceForConfirm(db, servico_id)
+const servico_nome = servico?.nome || null
 const mensagem_cliente = bookingSuccessText({
   servico: servico_nome,
   barbeiro: booked.barbeiro_nome,
   data: String(booked.data),
   horario: String(booked.horario),
+  preco: servico?.preco ?? null,
+  duracao_minutos: servico?.duracao_minutos ?? null,
 })
 return JSON.stringify({
 ok: true,
@@ -658,10 +801,12 @@ barbeiro_id: booked.barbeiro_id,
 barbeiro_nome: booked.barbeiro_nome,
 servico_id,
 servico_nome,
+preco: servico?.preco ?? null,
+duracao_minutos: servico?.duracao_minutos ?? null,
 },
         mensagem: mensagem_cliente,
         mensagem_cliente,
-        dica: 'Envie ao cliente APENAS o campo mensagem_cliente, sem alterar. Sem aviso de expediente, sem "vamos agendar?", sem avaliação, sem pergunta extra.',
+        dica: 'Envie ao cliente APENAS o campo mensagem_cliente, sem alterar uma linha. É o resumo com Serviço, Profissional, Horário, Valor e Duração. Sem aviso de expediente, sem "vamos agendar?", sem avaliação, sem pergunta extra.',
 })
 }
 case 'list_my_appointments': {
@@ -783,6 +928,7 @@ Seu objetivo é prestar um atendimento ágil, educado, objetivo e humanizado pel
 ## 3. HORÁRIOS DE EXPEDIENTE E MENSAGENS DINÂMICAS
 - **Horário Padrão de Funcionamento:** Segunda a Sábado, das **08:30 às 19:30**.
 - **BLOQUEIO DE DOMINGOS (REGRA CRÍTICA):** A Divina Barbearia Varjota **NÃO FUNCIONA AOS DOMINGOS**. **NUNCA** ofereça, sugira ou agende horários em domingos. Se o cliente pedir domingo, informe com gentileza que estamos fechados aos domingos e ofereça opções de segunda a sábado.
+- **Fechamento dinâmico no WhatsApp (INEGOCIÁVEL):** O expediente presencial encerra rigorosamente às **19:30**. **NUNCA** sugira ou marque início às 19:30 (é o fechamento das portas). O último horário de início = **19:30 menos a duração do serviço** (Barba 30 min → 19:00; Corte 45 min → 18:45; Combo 60 min → 18:30). Se o cliente pedir um início que terminaria depois das 19:30 (ex.: Corte às 19:00), NÃO agende. Explique exatamente: *"Fechamos às 19h30, e esse serviço tem duração de [X] minutos. O último horário disponível para esse serviço é às [Horário Máximo]."* Use o \`ultimo_inicio_permitido\` e \`duracao_minutos\` de get_available_slots / o erro de create_appointment.
 - **Tratamento Fora de Expediente:**
   - **Entre 19h30 e 23h59:** Avise que o expediente de hoje encerrou às 19h30 e convide o cliente a agendar para os próximos dias (ou amanhã a partir das 08h30). Nunca diga que o dia “ainda está começando” nesse intervalo.
   - **Entre 00h00 e 08h29:** Avise que o atendimento inicia às 08h30 e sugira já deixar horário para hoje a partir das 08h30. Nunca diga que o expediente “já encerrado” nesse intervalo.
@@ -833,15 +979,15 @@ Seu objetivo é prestar um atendimento ágil, educado, objetivo e humanizado pel
 - Assim que tiver serviço, profissional (ou rodízio), data e um horário LIVRE, chame \`create_appointment\` IMEDIATAMENTE.
 - **PROIBIDO** perguntar: "Você confirma?", "Podemos fechar?", "Confirma os dados abaixo?", "Posso fechar assim?", "Se tiver certo, me confirma" ou qualquer frase parecida.
 - Não faça etapa extra de revisão se o horário já está disponível.
-- Depois que \`create_appointment\` retornar ok, envie SOMENTE o campo \`mensagem_cliente\`, sem uma vírgula a mais. PROIBIDO concatenar aviso de expediente ("O atendimento presencial começa às 08h30", "Vamos agendar?") na confirmação.
-- Exemplo (use o texto de \`mensagem_cliente\`): *"Agendamento confirmado com sucesso! Seu corte com o Jeová está marcado para amanhã às 14h. Por favor, chegue com alguns minutos de antecedência para garantir o seu horário."*
+- Depois que \`create_appointment\` retornar ok, envie SOMENTE o campo \`mensagem_cliente\` (resumo com Serviço, Profissional, Horário, Valor e Duração). PROIBIDO concatenar aviso de expediente ("O atendimento presencial começa às 08h30", "Vamos agendar?") na confirmação.
+- O valor e a duração vêm do cadastro do serviço no banco. Nunca invente R$ 0,00, undefined ou minutos vazios.
 - **FIM DO LOOP:** Encerrar após a confirmação. Se o cliente fizer outras perguntas depois (ex: localização, formas de pagamento), responda apenas à dúvida. **NUNCA mais pergunte se ele deseja confirmar o agendamento já realizado. NUNCA peça avaliação.**
 - **AVALIAÇÃO PROIBIDA:** Nunca peça nota de 1 a 5, estrelas, feedback, link ou comentário sobre a experiência.
 
 ---
 
 ## 8. CANCELAMENTOS, REAGENDAMENTOS E NOTIFICAÇÕES AUTOMÁTICAS
-- **Reagendamento:** Verifique nova disponibilidade (bloqueando domingos, horários fora das 08:30–19:30, folgas/travas e datas passadas) e chame create_appointment direto, sem pedir confirmação.
+- **Reagendamento:** Verifique nova disponibilidade (bloqueando domingos, início às 19:30, horários cuja duração ultrapasse 19:30, folgas/travas e datas passadas) e chame create_appointment direto, sem pedir confirmação.
 - **Notificação Automática de Cancelamento:** Sempre que um agendamento for cancelado (pelo cliente no WhatsApp ou manualmente no painel), envie uma mensagem curta de confirmação:
   - *"Olá, [Nome]. Seu agendamento para [Data às HH:MM] com [Profissional] foi cancelado com sucesso. Quando quiser remarcar, é só chamar!"*
 - **Lembrete Automático Pré-Atendimento (1 hora antes):** Disparar mensagem de lembrete com antecedência de 1h:
