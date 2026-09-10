@@ -2,6 +2,9 @@
 
 Horário limite de início via WhatsApp é 19:30 subtraído da duração do serviço. Painel administrativo tem permissão irrestrita para encaixes em qualquer horário manual.
 
-- WhatsApp (Diva): expediente presencial encerra às 19:30 (America/Fortaleza). Nunca sugerir ou marcar início às 19:30. Último início = 19:30 − duração (30 min → 19:00; 45 min → 18:45; 60 min → 18:30). Se a duração ultrapassar 19:30, recusar com: "Fechamos às 19h30, e esse serviço tem duração de [X] minutos. O último horário disponível para esse serviço é às [Horário Máximo]."
+Horários próximos às 19:30 devem ser condicionados à duração do serviço antes de confirmar. Se o serviço exceder 19:30, sugerir horários anteriores (18:30/18:45) ou o próximo dia útil.
+
+- WhatsApp (Diva): expediente presencial encerra às 19:30 (America/Fortaleza). Nunca sugerir ou marcar início às 19:30. Último início = 19:30 − duração (30 min → 19:00; 45 min → 18:45; 60 min → 18:30). Se a duração ultrapassar 19:30, recusar e propor vagas anteriores do mesmo dia ou amanhã a partir das 08h30.
+- Pedido às 18:45–19:15 (ou 19h) sem serviço: avisar o fechamento às 19h30, dizer que às 19h só cabe até 30 min (Barba Tradicional) e, para Corte/Combo, sugerir 18h45/18h30 ou o próximo dia útil; depois listar as 3 opções.
 - Painel admin/barbeiro: `is_manual_override: true` / origem administrativa — encaixe em qualquer horário (09:00–11:00, 19:20, 19:30 ou além), sem trava de fechamento.
 - Não regressar: debounce de mensagens, coleta de nome, agendamento ativo, bloqueio de datas/horários passados, avisos fora de expediente, prioridade do barbeiro citado (fuzzy), rodízio só sem profissional, 3 serviços principais, ficha de confirmação sem rodapé/avaliação.
