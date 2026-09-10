@@ -13,7 +13,7 @@ import {
   TextInput,
   Title,
 } from '@mantine/core'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   getPagamentos,
   getAgendamentosPendentesPagamento,
@@ -22,9 +22,27 @@ import {
   deletePagamento,
   getResumoFinanceiro,
 } from '../../lib/api'
+import {
+  CHECKOUT_APPOINTMENT_KEY,
+  type CheckoutAppointmentPayload,
+} from '../../components/AgendaDayBoard'
 import { PageHeader } from '../../components/PageHeader'
 import { KPICard } from '../../components/KPICard'
 import { DollarSign, CreditCard } from 'lucide-react'
+
+function readCheckoutPayload(): CheckoutAppointmentPayload | null {
+  try {
+    const raw = sessionStorage.getItem(CHECKOUT_APPOINTMENT_KEY)
+    if (!raw) return null
+    return JSON.parse(raw) as CheckoutAppointmentPayload
+  } catch {
+    return null
+  }
+}
+
+function formatValorInput(valor: number) {
+  return valor.toFixed(2).replace('.', ',')
+}
 
 
 const inputStyles = {
@@ -44,6 +62,7 @@ export default function Financeiro() {
   const [formAgendamento, setFormAgendamento] = useState('')
   const [formValor, setFormValor] = useState('')
   const [formForma, setFormForma] = useState('Dinheiro')
+  const checkoutApplied = useRef(false)
 
   async function loadData() {
     try {
@@ -67,6 +86,46 @@ export default function Financeiro() {
   useEffect(() => {
     loadData()
   }, [])
+
+  useEffect(() => {
+    if (loading || checkoutApplied.current) return
+    const snapshot = readCheckoutPayload()
+    const urlId = new URLSearchParams(window.location.search).get('agendamento')
+    if (!snapshot && !urlId) return
+
+    checkoutApplied.current = true
+    const id = snapshot?.id || urlId || ''
+
+    if (snapshot && !agendamentos.some((a) => a.id === snapshot.id)) {
+      setAgendamentos((prev) => [
+        {
+          id: snapshot.id,
+          cliente_id: snapshot.cliente_id,
+          barbeiro_id: snapshot.barbeiro_id,
+          servico_id: snapshot.servico_id,
+          data: snapshot.data,
+          horario: snapshot.horario,
+          clientes: { nome: snapshot.clienteNome },
+          barbeiros: { nome: snapshot.barbeiroNome },
+          servicos: {
+            nome: snapshot.servicos[0]?.nome,
+            preco: snapshot.valorTotal,
+          },
+          valor: snapshot.valorTotal,
+        },
+        ...prev,
+      ])
+    }
+
+    setShowModal(true)
+    if (snapshot) {
+      setFormAgendamento(snapshot.id)
+      setFormValor(formatValorInput(Number(snapshot.valorTotal) || 0))
+    } else if (id) {
+      handleSelectAgendamento(id)
+    }
+    sessionStorage.removeItem(CHECKOUT_APPOINTMENT_KEY)
+  }, [loading, agendamentos])
 
   function getClienteNome(clienteId: string) {
     return clientes.find((c) => c.id === clienteId)?.nome || 'Cliente'

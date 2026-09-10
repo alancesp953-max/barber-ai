@@ -10,18 +10,16 @@ import {
   NativeSelect,
   SimpleGrid,
   Stack,
-  Table,
   Text,
   TextInput,
   Title,
 } from '@mantine/core'
-import { Plus, Trash2, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Plus, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useEffect, useState, useMemo } from 'react'
+import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
-import { AgendaDayBoard, handleAppointmentCheckout } from '../../components/AgendaDayBoard'
-import { CheckinModal } from '../../components/CheckinModal'
+import { AgendaDayBoard, persistCheckoutAppointment } from '../../components/AgendaDayBoard'
 import { PageHeader } from '../../components/PageHeader'
-import { todayFortalezaYmd } from '../../lib/dateBr'
 import {
   createAppointment,
   deleteAppointment,
@@ -33,17 +31,8 @@ import {
   notifyAppointmentWhatsApp,
   updateAppointmentStatus,
 } from '../../lib/api'
-import { formatCurrency, formatDateTime } from '../../lib/format'
+import { formatCurrency } from '../../lib/format'
 import type { Appointment, AppointmentStatus, Barber, Service } from '../../types/database'
-
-const statusColors: Record<AppointmentStatus, string> = {
-  pendente: 'blue',
-  confirmado: 'gold',
-  concluido: 'teal',
-  cancelado: 'red',
-}
-
-const appointmentStatuses = ['pendente', 'confirmado', 'concluido', 'cancelado'] as const
 
 const MONTHS = [
   'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
@@ -51,6 +40,17 @@ const MONTHS = [
 ]
 
 const WEEKDAYS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
+
+function todayYmd() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Fortaleza',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date())
+  const get = (type: string) => parts.find((part) => part.type === type)?.value || '01'
+  return `${get('year')}-${get('month')}-${get('day')}`
+}
 
 
 const inputStyles = {
@@ -80,7 +80,7 @@ function MonthCalendar({
 }: {
   currentMonth: Date
   appointmentsByDate: Record<string, Appointment[]>
-  selectedDate: string | null
+  selectedDate: string
   onDayClick: (dateStr: string) => void
 }) {
   const year = currentMonth.getFullYear()
@@ -88,7 +88,7 @@ function MonthCalendar({
 
   const daysInMonth = new Date(year, month + 1, 0).getDate()
   const firstDayOfWeek = new Date(year, month, 1).getDay()
-  const todayStr = todayFortalezaYmd()
+  const todayStr = todayYmd()
 
   const days: (number | null)[] = []
   for (let i = 0; i < firstDayOfWeek; i++) days.push(null)
@@ -214,18 +214,26 @@ function MonthCalendar({
   )
 }
 
+function ymdInMonth(monthDate: Date, day: number) {
+  const year = monthDate.getFullYear()
+  const month = monthDate.getMonth()
+  const daysInMonth = new Date(year, month + 1, 0).getDate()
+  const safeDay = Math.min(Math.max(day, 1), daysInMonth)
+  return `${year}-${String(month + 1).padStart(2, '0')}-${String(safeDay).padStart(2, '0')}`
+}
+
 export default function Agendamentos() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const [appointments, setAppointments] = useState<Appointment[]>([])
   const [barbers, setBarbers] = useState<Barber[]>([])
   const [services, setServices] = useState<Service[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
-  const [checkinAppointment, setCheckinAppointment] = useState<Appointment | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const [currentMonth, setCurrentMonth] = useState(new Date())
-  const [selectedDate, setSelectedDate] = useState<string | null>(() => todayFortalezaYmd())
+  const [selectedDate, setSelectedDate] = useState(() => todayYmd())
 
   const [clientName, setClientName] = useState('')
   const [clientEmail, setClientEmail] = useState('')
@@ -285,38 +293,40 @@ export default function Agendamentos() {
     return grouped
   }, [appointments])
 
-  const filteredAppointments = useMemo(() => {
-    if (!selectedDate) return appointments
-    return appointments.filter((appt) => appt.data === selectedDate)
-  }, [appointments, selectedDate])
+  const filteredAppointments = useMemo(
+    () => appointments.filter((appt) => appt.data === selectedDate),
+    [appointments, selectedDate],
+  )
 
   function handleDayClick(dateStr: string) {
-    if (selectedDate === dateStr) {
-      setSelectedDate(null)
-    } else {
-      setSelectedDate(dateStr)
-    }
+    setSelectedDate(dateStr)
+  }
+
+  function shiftMonth(delta: number) {
+    const next = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + delta, 1)
+    const day = Number(selectedDate.split('-')[2]) || 1
+    setCurrentMonth(next)
+    setSelectedDate(ymdInMonth(next, day))
   }
 
   function prevMonth() {
-    setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))
-    setSelectedDate(null)
+    shiftMonth(-1)
   }
 
   function nextMonth() {
-    setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))
-    setSelectedDate(null)
+    shiftMonth(1)
   }
 
   function goToToday() {
-    const hoje = todayFortalezaYmd()
+    const hoje = todayYmd()
     const [y, m] = hoje.split('-').map(Number)
     setCurrentMonth(new Date(y, m - 1, 1))
     setSelectedDate(hoje)
   }
 
-  function handleCheckout(appointmentId: string) {
-    handleAppointmentCheckout(appointmentId)
+  function handleCheckout(appointment: Appointment) {
+    persistCheckoutAppointment(appointment)
+    void navigate({ to: '/admin/financeiro' })
   }
 
   const handleCreate = async (e: React.FormEvent) => {
@@ -380,6 +390,7 @@ export default function Agendamentos() {
   }
 
   const handleStatusChange = async (id: string, status: AppointmentStatus) => {
+    if (status === 'concluido') return
     try {
       await updateAppointmentStatus(id, status)
       await load()
@@ -580,21 +591,16 @@ export default function Agendamentos() {
               onDayClick={handleDayClick}
             />
 
-            {selectedDate && (
-              <Group gap="sm">
-                <Text size="sm" c="dimmed">
-                  Agendamentos de{' '}
-                  <Text span fw={700} c="gold">
-                    {formatDateDisplay(selectedDate)}
-                  </Text>{' '}
-                  ({filteredAppointments.length} encontrado
-                  {filteredAppointments.length !== 1 ? 's' : ''})
-                </Text>
-                <Button size="compact-xs" variant="subtle" color="gold" onClick={() => setSelectedDate(null)}>
-                  Mostrar todos
-                </Button>
-              </Group>
-            )}
+            <Group gap="sm">
+              <Text size="sm" c="dimmed">
+                Agendamentos de{' '}
+                <Text span fw={700} c="gold">
+                  {formatDateDisplay(selectedDate)}
+                </Text>{' '}
+                ({filteredAppointments.length} encontrado
+                {filteredAppointments.length !== 1 ? 's' : ''})
+              </Text>
+            </Group>
           </Stack>
 
           <Group gap="md">
@@ -624,108 +630,15 @@ export default function Agendamentos() {
             </Group>
           </Group>
 
-          {selectedDate ? (
-            <AgendaDayBoard
-              barbers={barbers}
-              appointments={filteredAppointments}
-              onCheckin={setCheckinAppointment}
-              onCheckout={handleCheckout}
-              onDelete={handleDelete}
-            />
-          ) : (
-            <Card withBorder padding={0} radius="lg">
-              <Table.ScrollContainer minWidth={800}>
-                <Table highlightOnHover verticalSpacing="sm">
-                  <Table.Thead>
-                    <Table.Tr>
-                      <Table.Th>{t('appointments.client')}</Table.Th>
-                      <Table.Th>{t('common.service')}</Table.Th>
-                      <Table.Th>{t('appointments.barber')}</Table.Th>
-                      <Table.Th>{t('appointments.dateTime')}</Table.Th>
-                      <Table.Th>{t('common.status')}</Table.Th>
-                      <Table.Th>{t('common.price')}</Table.Th>
-                      <Table.Th>{t('common.actions')}</Table.Th>
-                    </Table.Tr>
-                  </Table.Thead>
-                  <Table.Tbody>
-                    {filteredAppointments.map((appt) => (
-                      <Table.Tr key={appt.id}>
-                        <Table.Td>
-                          <Text fw={500} size="sm">
-                            {appt.clientes?.nome ?? '—'}
-                          </Text>
-                          <Text size="xs" c="dimmed">
-                            {appt.clientes?.email}
-                          </Text>
-                        </Table.Td>
-                        <Table.Td>{appt.servicos?.nome ?? '—'}</Table.Td>
-                        <Table.Td>{appt.barbeiros?.nome ?? '—'}</Table.Td>
-                        <Table.Td>{formatDateTime(appt.data, appt.horario)}</Table.Td>
-                        <Table.Td>
-                          <NativeSelect
-                            size="xs"
-                            value={appt.status}
-                            onChange={(e) =>
-                              handleStatusChange(appt.id, e.currentTarget.value as AppointmentStatus)
-                            }
-                            data={appointmentStatuses.map((s) => ({
-                              value: s,
-                              label: t(`status.${s}`),
-                            }))}
-                            styles={{
-                              input: {
-                                background: 'transparent',
-                                border: 'none',
-                                color: `var(--mantine-color-${statusColors[appt.status]}-4)`,
-                                fontWeight: 600,
-                                textTransform: 'capitalize',
-                              },
-                            }}
-                          />
-                        </Table.Td>
-                        <Table.Td>{formatCurrency(Number(appt.servicos?.preco ?? 0))}</Table.Td>
-                        <Table.Td>
-                          <Group gap="xs">
-                            {(appt.status === 'pendente' || appt.status === 'confirmado') && (
-                              <Button
-                                size="compact-xs"
-                                variant="subtle"
-                                color="gold"
-                                onClick={() => setCheckinAppointment(appt)}
-                              >
-                                {t('dashboard.checkIn')}
-                              </Button>
-                            )}
-                            <ActionIcon
-                              variant="subtle"
-                              color="red"
-                              onClick={() => handleDelete(appt.id)}
-                            >
-                              <Trash2 size={16} />
-                            </ActionIcon>
-                          </Group>
-                        </Table.Td>
-                      </Table.Tr>
-                    ))}
-                  </Table.Tbody>
-                </Table>
-              </Table.ScrollContainer>
-              {filteredAppointments.length === 0 && (
-                <Text c="dimmed" ta="center" p="md">
-                  {t('appointments.noAppointments')}
-                </Text>
-              )}
-            </Card>
-          )}
+          <AgendaDayBoard
+            barbers={barbers}
+            appointments={filteredAppointments}
+            onCheckout={handleCheckout}
+            onStatusChange={handleStatusChange}
+            onDelete={handleDelete}
+          />
         </>
       )}
-
-      <CheckinModal
-        appointment={checkinAppointment}
-        open={!!checkinAppointment}
-        onClose={() => setCheckinAppointment(null)}
-        onUpdated={() => load()}
-      />
     </Stack>
   )
 }

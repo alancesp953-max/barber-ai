@@ -3,7 +3,6 @@ import {
   aftercareText,
   afterNameGreeting,
   appointmentsContextLines,
-  applyBarberRating,
   askNameText,
   fetchShopName,
   fetchShopPublicInfo,
@@ -17,31 +16,33 @@ import {
   greetingText,
   greetingWithAppointments,
   humanizeOutbound,
-  isAffirmative,
   isBotActive,
   isGreetingOnly,
   isKnownLeadName,
-  isNegative,
   isPlausiblePersonName,
   isBookingStep,
   logBotEvent,
   isShopOpenNow,
   closedShopNotice,
   formatServicePriceList,
-  punctualityConfirmText,
   askNameAgainText,
   looksLikeBookingUtterance,
   matchByName,
   matchSlot,
   normalizeMatch,
   parseDateBR,
-  parseRatingScore,
   resetSession,
   saveLeadName,
   saveSession,
   wantsShopInfo,
 } from '../_shared/db.ts'
-import { BARBER_TOOLS, runBarberTool, systemPromptBarber } from '../_shared/barber-tools.ts'
+import {
+  BARBER_TOOLS,
+  bookingSuccessText,
+  looksLikeConfirmationAsk,
+  runBarberTool,
+  systemPromptBarber,
+} from '../_shared/barber-tools.ts'
 import { logDiva, logDivaError } from '../_shared/debug-diva.ts'
 import { loadMimoConfig, mimoChat, type ChatMessage } from '../_shared/mimo.ts'
 import { resolveUazConfig } from '../_shared/resolve-uaz.ts'
@@ -53,7 +54,7 @@ import {
   listBookableBarbers,
   todaySaoPaulo,
 } from '../_shared/slots.ts'
-import { humanReply, normalizePhone, sendPresence } from '../_shared/uazapi.ts'
+import { humanReply, normalizePhone, sendPresence, sendText } from '../_shared/uazapi.ts'
 
 type UazMessage = {
   messageid?: string
@@ -82,6 +83,97 @@ function asBool(v: unknown): boolean {
   if (v === true || v === 1) return true
   if (typeof v === 'string') return ['true', '1', 'yes'].includes(v.toLowerCase())
   return false
+}
+
+/** Saudações puras — bypass de tools / horários antigos (só neste webhook). */
+const PURE_GREETING_RE = /^(oi|ol[aá]|bom dia|boa tarde|boa noite)[!.]*$/i
+
+function isPureGreeting(text: string): boolean {
+  return PURE_GREETING_RE.test(String(text || '').trim())
+}
+
+type DebounceFragment = { text: string; at?: number }
+
+/** Buffer em memória do isolate (complementa o que está na sessão). */
+const debounceMemory = new Map<string, string[]>()
+
+function normalizeInboundFragments(raw: unknown): string[] {
+  if (!Array.isArray(raw)) {
+    if (typeof raw === 'string' && raw.trim()) return [raw.trim()]
+    return []
+  }
+  const out: string[] = []
+  for (const item of raw) {
+    if (typeof item === 'string' && item.trim()) {
+      out.push(item.trim())
+      continue
+    }
+    if (item && typeof item === 'object') {
+      const t = String((item as DebounceFragment).text || '').trim()
+      if (t) out.push(t)
+    }
+  }
+  return out
+}
+
+function pendingFromSession(context: Record<string, unknown>, phone: string): string[] {
+  const fromDb = normalizeInboundFragments(context.pending_inbound)
+  const fromMem = debounceMemory.get(phone) || []
+  return fromDb.length ? fromDb : fromMem
+}
+
+/** Junta o buffer com a mensagem atual, sem anexar texto antigo a uma saudação pura. */
+function composeInboundFromBuffer(pending: string[], fresh: string): string {
+  const latest = fresh.trim()
+  if (!latest) return pending.filter((p) => !isPureGreeting(p)).join('\n').trim()
+  if (isPureGreeting(latest)) return latest
+  const kept = pending.map((p) => p.trim()).filter((p) => p && !isPureGreeting(p))
+  return [...kept, latest].join('\n').trim() || latest
+}
+
+async function consumeInboundForProcess(
+  db: ReturnType<typeof getServiceClient>,
+  phone: string,
+  fresh: string,
+): Promise<string> {
+  try {
+    const sess = await getSession(db, phone)
+    const pending = pendingFromSession(sess.context, phone)
+    const composed = composeInboundFromBuffer(pending, fresh)
+    const mem = debounceMemory.get(phone) || []
+    if (fresh.trim()) mem.push(fresh.trim())
+    debounceMemory.set(phone, mem)
+    await saveSession(db, phone, sess.step || 'chat', {
+      pending_inbound: [
+        ...pending.map((text) => ({ text, at: Date.now() })),
+        ...(fresh.trim() ? [{ text: fresh.trim(), at: Date.now() }] : []),
+      ],
+    })
+    return composed || fresh.trim() || 'oi'
+  } catch (e) {
+    console.error('[DEBOUNCE] sessão falhou — processando texto fresco', e)
+    return fresh.trim() || 'oi'
+  }
+}
+
+/** Apaga o buffer de debounce daquele telefone (memória + sessão). */
+async function clearDebounceBuffer(
+  db: ReturnType<typeof getServiceClient>,
+  phone: string,
+): Promise<void> {
+  debounceMemory.delete(phone)
+  try {
+    const sess = await getSession(db, phone)
+    await saveSession(db, phone, sess.step || 'chat', {
+      pending_inbound: [],
+      debounce_token: null,
+      processing_at: null,
+      processing_token: null,
+    })
+  } catch (e) {
+    console.warn('clearDebounceBuffer failed', e)
+    debounceMemory.delete(phone)
+  }
 }
 
 function extractText(msg: UazMessage): string {
@@ -128,11 +220,28 @@ function extractPhone(msg: UazMessage, payload: Record<string, unknown>): string
       ? (payload.chat as Record<string, unknown>)
       : {}
 
+  const key =
+    msg.key && typeof msg.key === 'object'
+      ? (msg.key as Record<string, unknown>)
+      : {}
+  const data =
+    payload.data && typeof payload.data === 'object'
+      ? (payload.data as Record<string, unknown>)
+      : {}
+  const dataKey =
+    data.key && typeof data.key === 'object'
+      ? (data.key as Record<string, unknown>)
+      : {}
+
   // chatid = conversa com quem deve receber a resposta
   const candidates: unknown[] = [
     msg.chatid,
     msg.sender_pn,
     msg.sender,
+    key.remoteJid,
+    dataKey.remoteJid,
+    msg.from,
+    data.from,
     chat.wa_chatid,
     chat.phone,
     chat.id,
@@ -224,6 +333,156 @@ async function beginTyping(
   return resolved.config
 }
 
+const FALLBACK_OUTBOUND = 'Olá! Tudo bem? Como posso te ajudar hoje?'
+
+function fortalezaClock(): { weekday: string; hm: string } {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Fortaleza',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date())
+  const map: Record<string, string> = {}
+  for (const p of parts) {
+    if (p.type !== 'literal') map[p.type] = p.value
+  }
+  const hour = map.hour === '24' ? '00' : String(map.hour || '00').padStart(2, '0')
+  const minute = String(map.minute || '00').padStart(2, '0')
+  return { weekday: (map.weekday || '').slice(0, 3).toLowerCase(), hm: `${hour}:${minute}` }
+}
+
+/** Relógio local — nunca consulta o banco e nunca silencia. */
+function hoursNoticeIfClosed(): string | null {
+  const { weekday, hm } = fortalezaClock()
+  const isSun = weekday.startsWith('sun') || weekday === 'dom'
+  console.log('[SHOP-HOURS] relógio local', { weekday, hm, tz: 'America/Fortaleza' })
+  if (isSun) {
+    return 'Aos domingos a barbearia não abre. Posso agendar de segunda a sábado, das 08:30 às 19:30.'
+  }
+  if (hm < '08:30') {
+    return 'O expediente começa às 08:30. Posso já deixar seu horário para hoje ou outro dia, se quiser.'
+  }
+  if (hm >= '19:30') {
+    return closedShopNotice()
+  }
+  return null
+}
+
+function withLocalHoursNotice(text: string): string {
+  const base = String(text || '').trim() || FALLBACK_OUTBOUND
+  const notice = hoursNoticeIfClosed()
+  if (!notice) return base
+  const n = normalizeMatch(base)
+  if (n.includes('expediente') || n.includes('08:30') || n.includes('08h30')) return base
+  console.log('[SHOP-HOURS] fora do expediente — anexando aviso (não silenciar)')
+  return `${base}\n\n${notice}`
+}
+
+/** Fora do expediente: avisa e segue o papo — nunca silencia (sem depender do banco). */
+async function withClosedShopNotice(
+  _db: ReturnType<typeof getServiceClient>,
+  text: string,
+): Promise<string> {
+  return withLocalHoursNotice(text)
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const t = setTimeout(() => {
+      console.warn('[TIMEOUT]', { ms })
+      resolve(fallback)
+    }, ms)
+    promise
+      .then((v) => {
+        clearTimeout(t)
+        resolve(v)
+      })
+      .catch((e) => {
+        clearTimeout(t)
+        console.warn('[TIMEOUT] promise rejeitada', e)
+        resolve(fallback)
+      })
+  })
+}
+
+/** Envio imediato via UAZAPI: POST /send/text, header token, body { number, text }. */
+async function sendWhatsappMessage(
+  phone: string,
+  text: string,
+  uaz: { baseUrl: string; token: string },
+): Promise<boolean> {
+  const number = normalizePhone(phone)
+  const bodyText = String(text || '').trim() || FALLBACK_OUTBOUND
+  const baseUrl = String(uaz.baseUrl || '').replace(/\/$/, '')
+  const token = String(uaz.token || '').trim()
+  const url = `${baseUrl}/send/text`
+  const jsonBody = {
+    number,
+    text: bodyText,
+    readchat: true,
+    readmessages: true,
+    delay: 0,
+  }
+  console.log('[UAZ-SEND] antes', {
+    url,
+    number,
+    numberLen: number.length,
+    instance: baseUrl,
+    hasToken: Boolean(token),
+    tokenLen: token.length,
+    textLen: bodyText.length,
+    textPreview: bodyText.slice(0, 160),
+    body: { number, textLen: bodyText.length, readchat: true, readmessages: true, delay: 0 },
+  })
+  if (!baseUrl || !token) {
+    console.error('[UAZ-SEND] instância incompleta', { hasBase: Boolean(baseUrl), hasToken: Boolean(token) })
+    return false
+  }
+  if (number.length < 10) {
+    console.error('[UAZ-SEND] número inválido', { number })
+    return false
+  }
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        token,
+      },
+      body: JSON.stringify(jsonBody),
+    })
+    const raw = await res.text()
+    console.log('[UAZ-SEND] depois', {
+      number,
+      status: res.status,
+      ok: res.ok,
+      raw: raw.slice(0, 400),
+    })
+    if (res.ok) return true
+    console.warn('[UAZ-SEND] HTTP não-OK — tentando sendText', { status: res.status })
+    const retry = await sendText(phone, bodyText, uaz, 0)
+    console.log('[UAZ-SEND] retry sendText', { ok: retry.ok, error: retry.error ?? null })
+    return retry.ok
+  } catch (e) {
+    console.error('[UAZ-SEND] erro fetch', {
+      number,
+      instance: baseUrl,
+      error: e instanceof Error ? e.message : String(e),
+      stack: e instanceof Error ? e.stack : null,
+    })
+    try {
+      const retry = await sendText(phone, bodyText, uaz, 0)
+      console.log('[UAZ-SEND] retry após exceção', { ok: retry.ok, error: retry.error ?? null })
+      return retry.ok
+    } catch (e2) {
+      console.error('[UAZ-SEND] retry também falhou', e2)
+      return false
+    }
+  }
+}
+
 async function reply(
   phone: string,
   text: string,
@@ -248,6 +507,102 @@ async function reply(
   }
 }
 
+/**
+ * Saudação pura: monta o texto, dispara na UAZAPI, depois grava o histórico.
+ * Nunca retorna antes do envio.
+ */
+async function deliverPureGreeting(
+  db: ReturnType<typeof getServiceClient>,
+  phone: string,
+  inbound: string,
+  uaz: { baseUrl: string; token: string },
+): Promise<string> {
+  console.log('[GREETING-REGEX] match', {
+    phone: phone.slice(-4),
+    inbound,
+    normalized: inbound.trim(),
+  })
+
+  let out = withLocalHoursNotice(FALLBACK_OUTBOUND)
+  let leadName: string | null = null
+  let session: { step: string; context: Record<string, unknown> } = { step: 'chat', context: {} }
+
+  const loaded = await withTimeout(
+    (async () => {
+      await findOrCreateClientByPhone(db, phone).catch((e) => {
+        console.warn('[GREETING] findOrCreateClientByPhone falhou — segue envio', e)
+      })
+      let name: string | null = null
+      let shop: string | null = null
+      let sess: { step: string; context: Record<string, unknown> } = { step: 'chat', context: {} }
+      try {
+        name = await getLeadDisplayName(db, phone)
+      } catch (e) {
+        console.warn('[GREETING] lead não encontrado — segue envio', e)
+      }
+      try {
+        shop = await fetchShopName(db)
+      } catch (e) {
+        console.warn('[GREETING] shop name falhou — segue envio', e)
+      }
+      try {
+        sess = await getSession(db, phone)
+      } catch (e) {
+        console.warn('[GREETING] sessão falhou — segue envio sem histórico', e)
+      }
+      const needsName =
+        !isKnownLeadName(name) &&
+        !sessionHasBookingContext(sess) &&
+        !looksLikeBookingUtterance(inbound)
+      const text = needsName ? askNameText(shop) : greetingText(name, shop)
+      return { name, sess, text: withLocalHoursNotice(text), needsName }
+    })(),
+    2500,
+    { name: null as string | null, sess: session, text: out, needsName: false },
+  )
+
+  leadName = loaded.name
+  session = loaded.sess
+  out = loaded.text || out
+  console.log('[GREETING] texto montado', {
+    phone: phone.slice(-4),
+    hasLead: Boolean(leadName),
+    preview: out.slice(0, 180),
+  })
+
+  const sent = await sendWhatsappMessage(phone, out, uaz)
+  if (!sent) {
+    console.error('[GREETING] envio falhou — tentando fallback curto')
+    await sendWhatsappMessage(phone, withLocalHoursNotice(FALLBACK_OUTBOUND), uaz)
+  }
+
+  try {
+    const prev = Array.isArray(session.context.history)
+      ? (session.context.history as ChatMessage[])
+      : []
+    const history = [
+      ...prev.filter((m) => m?.name !== 'get_available_slots'),
+      { role: 'user' as const, content: inbound || 'oi' },
+      { role: 'assistant' as const, content: out },
+    ].slice(-28)
+    await saveSession(db, phone, loaded.needsName ? 'ask_name' : 'chat', {
+      history,
+      mode: 'mimo',
+      lead_name: leadName,
+      awaiting_name: loaded.needsName || undefined,
+      last_slots: [],
+      last_slots_data: null,
+      last_slots_servico_id: null,
+      last_slots_barbeiro_id: null,
+      slots: [],
+    })
+  } catch (e) {
+    console.warn('[GREETING] saveSession falhou após envio (ok)', e)
+  }
+
+  return out
+}
+
 function wantsRestart(text: string): boolean {
   const t = normalizeMatch(text)
   return [
@@ -261,145 +616,82 @@ function wantsRestart(text: string): boolean {
   ].includes(t)
 }
 
-async function handleRateAsk(
-  db: ReturnType<typeof getServiceClient>,
-  phone: string,
-  text: string,
-  context: Record<string, unknown>,
-  leadName?: string | null,
-): Promise<string> {
-  const barberName = String(context.barbeiro_nome || 'seu barbeiro')
-
-  if (isNegative(text)) {
-    await resetSession(db, phone)
-    const name =
-      leadName && isKnownLeadName(leadName) ? leadName.trim().split(/\s+/)[0] : null
-    return name
-      ? `Tranquilo, ${name}. Obrigado pela visita — qualquer coisa, me chama por aqui.`
-      : 'Tranquilo. Obrigado pela visita — qualquer coisa, me chama por aqui.'
-  }
-
-  if (isAffirmative(text)) {
-    await saveSession(db, phone, 'rate_score', {
-      ...context,
-      mode: 'rating',
-    })
-    return [
-      `Fechou! Então me conta: de *1 a 5*, como foi o atendimento com o *${barberName}*?`,
-      '',
-      'Pode mandar só o número, tipo *5* se foi top.',
-    ].join('\n')
-  }
-
-  return [
-    `Sem problema nenhum se preferir não avaliar — é só falar *não*.`,
-    `Se quiser deixar uma notinha do *${barberName}*, responde *sim*.`,
-  ].join('\n')
+function isRatingSessionStep(step?: string | null): boolean {
+  return step === 'rate_ask' || step === 'rate_score' || step === 'rate_comment'
 }
 
-async function handleRateScore(
-  db: ReturnType<typeof getServiceClient>,
-  phone: string,
-  text: string,
-  context: Record<string, unknown>,
-  leadName?: string | null,
-): Promise<string> {
-  if (isNegative(text)) {
-    await resetSession(db, phone)
-    return 'Beleza, sem avaliação mesmo. Valeu pela visita!'
-  }
-
-  const nota = parseRatingScore(text)
-  if (nota == null) {
-    return 'Me manda uma nota de *1* a *5*? Pode ser só o número.'
-  }
-
-  const agendamentoId = String(context.agendamento_id || '')
-  const barbeiroId = String(context.barbeiro_id || '')
-  if (!agendamentoId || !barbeiroId) {
-    await resetSession(db, phone)
-    return 'Deu um probleminha pra registrar a nota. Valeu mesmo assim!'
-  }
-
-  const result = await applyBarberRating(db, {
-    agendamentoId,
-    barbeiroId,
-    clienteId: (context.cliente_id as string) || null,
-    nota,
-    origem: 'whatsapp',
-  })
-
-  const name =
-    leadName && isKnownLeadName(leadName) ? leadName.trim().split(/\s+/)[0] : null
-  const barberName = String(context.barbeiro_nome || 'barbeiro')
-
-  if (!result.ok) {
-    await resetSession(db, phone)
-    if (result.error === 'Já avaliado') {
-      return name
-        ? `Essa visita já tinha nota, ${name}. Valeu demais!`
-        : 'Essa visita já tinha nota. Valeu demais!'
+function lastJsonToolResult(messages: ChatMessage[], name: string): Record<string, unknown> | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.role === 'tool' && m.name === name && typeof m.content === 'string') {
+      try {
+        return JSON.parse(m.content) as Record<string, unknown>
+      } catch {
+        return null
+      }
     }
-    console.error('applyBarberRating', result.error)
-    return 'Não consegui salvar agora, mas obrigado pelo feedback!'
   }
-
-  if (nota <= 2) {
-    await saveSession(db, phone, 'rate_comment', {
-      ...context,
-      nota,
-      mode: 'rating',
-    })
-    return name
-      ? `Poxa, ${name}, sinto muito por isso. O que você não gostou especificamente pra gente melhorar?`
-      : 'Poxa, sinto muito por isso. O que você não gostou especificamente pra gente melhorar?'
-  }
-
-  if (nota === 3) {
-    await saveSession(db, phone, 'rate_comment', {
-      ...context,
-      nota,
-      mode: 'rating',
-    })
-    return 'Obrigada pela nota. Tem alguma sugestão pra gente melhorar o atendimento?'
-  }
-
-  await resetSession(db, phone)
-  const thanks = name
-    ? `Que maravilha que você gostou, ${name}!`
-    : 'Que maravilha que você gostou!'
-  return [
-    thanks,
-    `Na próxima vez, se quiser, já agendamos direto com o *${barberName}* pra manter o padrão do seu corte.`,
-    '',
-    'Qualquer coisa, tô por aqui.',
-  ].join('\n')
+  return null
 }
 
-async function handleRateComment(
+function extractHorarioHint(text: string, slots?: string[]): string | null {
+  const list = (slots || []).map((h) => String(h).slice(0, 5))
+  if (list.length) {
+    const matched = matchSlot(text, list)
+    if (matched) return matched.slice(0, 5)
+  }
+  const withMin = String(text || '').match(/\b(\d{1,2})[:hH](\d{2})\b/)
+  if (withMin) return `${withMin[1].padStart(2, '0')}:${withMin[2]}`
+  const onlyHour = String(text || '').match(/\b(\d{1,2})h\b/i)
+  if (onlyHour) return `${onlyHour[1].padStart(2, '0')}:00`
+  return null
+}
+
+async function tryAutoCreateAppointment(
   db: ReturnType<typeof getServiceClient>,
   phone: string,
   text: string,
-  context: Record<string, unknown>,
+  extraHint?: string,
   leadName?: string | null,
-): Promise<string> {
-  const comentario = text.trim().slice(0, 800)
-  const agendamentoId = String(context.agendamento_id || '')
-  if (agendamentoId && comentario) {
-    await db.from('avaliacoes').update({ comentario }).eq('agendamento_id', agendamentoId)
+): Promise<string | null> {
+  try {
+    const sess = await getSession(db, phone)
+    const c = sess.context
+    const servico_id = String(c.last_slots_servico_id || c.servico_id || '').trim()
+    const data = String(c.last_slots_data || c.data || '').trim()
+    const slots = Array.isArray(c.last_slots)
+      ? (c.last_slots as string[])
+      : Array.isArray(c.slots)
+        ? (c.slots as string[])
+        : []
+    const horario =
+      extractHorarioHint(text, slots) ||
+      extractHorarioHint(extraHint || '', slots) ||
+      (c.horario ? String(c.horario).slice(0, 5) : '')
+    if (!servico_id || !data || !horario) return null
+    const barbeiro_id = c.last_slots_barbeiro_id || c.barbeiro_id || null
+    const raw = await runBarberTool(
+      db,
+      phone,
+      'create_appointment',
+      JSON.stringify({
+        servico_id,
+        data,
+        horario,
+        barbeiro_id: barbeiro_id ? String(barbeiro_id) : undefined,
+        cliente_nome: leadName || undefined,
+      }),
+      leadName || undefined,
+    )
+    const parsed = JSON.parse(raw) as { ok?: boolean; mensagem_cliente?: string }
+    if (parsed.ok && parsed.mensagem_cliente) {
+      await resetSession(db, phone)
+      return parsed.mensagem_cliente
+    }
+  } catch (e) {
+    console.warn('tryAutoCreateAppointment', e)
   }
-  await resetSession(db, phone)
-  const name =
-    leadName && isKnownLeadName(leadName) ? leadName.trim().split(/\s+/)[0] : null
-  const nota = Number(context.nota || 0)
-  if (nota <= 2) {
-    return name
-      ? `Obrigada por contar, ${name}. Vou levar isso pra equipe. Qualquer coisa, me chama.`
-      : 'Obrigada por contar. Vou levar isso pra equipe. Qualquer coisa, me chama.'
-  }
-  return name
-    ? `Anotei, ${name}. Valeu demais pelo retorno!`
-    : 'Anotei. Valeu demais pelo retorno!'
+  return null
 }
 
 // ─── Flow handlers (só se a IA estiver indisponível) ─────────────────────────
@@ -816,11 +1108,77 @@ function formatSlotList(data: string, slots: string[], barbeiroNome?: string): s
   ].join('\n')
 }
 
+async function finalizeWizardBooking(
+  db: ReturnType<typeof getServiceClient>,
+  phone: string,
+  context: Record<string, unknown>,
+  senderName?: string,
+): Promise<string> {
+  const check = await checkSlotAvailability(db, {
+    data: String(context.data),
+    servicoId: String(context.servico_id),
+    horario: String(context.horario),
+    barbeiroId: (context.barbeiro_id as string) || null,
+    barbeiroNome: (context.barbeiro_nome as string) || null,
+  })
+
+  if (!check.ok) {
+    const { slots: refreshed } = await fetchAvailableSlots(
+      db,
+      String(context.data),
+      String(context.servico_id),
+      (context.barbeiro_id as string) || null,
+    )
+    if (refreshed.length) {
+      await saveSession(db, phone, 'choose_time', {
+        ...context,
+        slots: refreshed,
+        horario: undefined,
+      })
+      return [
+        check.message,
+        '',
+        formatSlotList(String(context.data), refreshed, context.barbeiro_nome as string | undefined),
+      ].join('\n')
+    }
+    await saveSession(db, phone, 'choose_date', {
+      ...context,
+      horario: undefined,
+      slots: undefined,
+    })
+    return check.message + '\n\nQuer tentar *outra data*?'
+  }
+
+  const client = await findOrCreateClientByPhone(db, phone, senderName)
+  const booked = await createAppointmentAtomic(db, {
+    clienteId: client.id,
+    servicoId: String(context.servico_id),
+    data: String(context.data),
+    horario: String(context.horario),
+    barbeiroId: check.barbeiro_id,
+    useRotation: Boolean(check.from_rotation || context.from_rotation),
+  })
+
+  await resetSession(db, phone)
+
+  if (!booked.ok) {
+    return `Não deu pra agendar: ${booked.error}\n\n` + aftercareText()
+  }
+
+  return bookingSuccessText({
+    servico: context.servico_nome ? String(context.servico_nome) : null,
+    barbeiro: booked.barbeiro_nome || check.barbeiro_nome || (context.barbeiro_nome as string) || null,
+    data: String(booked.data || context.data),
+    horario: String(booked.horario),
+  })
+}
+
 async function handleChooseTime(
   db: ReturnType<typeof getServiceClient>,
   phone: string,
   text: string,
   context: Record<string, unknown>,
+  senderName?: string,
 ): Promise<string> {
   if (wantsRestart(text)) {
     await resetSession(db, phone)
@@ -866,24 +1224,13 @@ async function handleChooseTime(
     return check.message + '\n\nQuer tentar *outra data*?'
   }
 
-  await saveSession(db, phone, 'confirm', {
+  return finalizeWizardBooking(db, phone, {
     ...context,
     horario,
     barbeiro_id: check.barbeiro_id,
     barbeiro_nome: check.barbeiro_nome || context.barbeiro_nome,
     from_rotation: check.from_rotation || Boolean(context.from_rotation),
-  })
-
-  return [
-    'Posso fechar assim?',
-    '',
-    `Serviço: ${context.servico_nome}`,
-    `Barbeiro: ${check.barbeiro_nome || context.barbeiro_nome || 'A definir'}`,
-    `Data: ${formatDateBR(String(context.data))}`,
-    `Horário: ${horario}`,
-    '',
-    'Se tiver certo, me confirma com um *sim*.',
-  ].join('\n')
+  }, senderName)
 }
 
 async function handleConfirm(
@@ -908,86 +1255,54 @@ async function handleConfirm(
     return 'Beleza, não marquei nada.\n\n' + aftercareText()
   }
 
-  const yes =
-    t === '1' ||
-    t === 's' ||
-    t === 'sim' ||
-    t === 'yes' ||
-    t === 'ok' ||
-    t === 'pode' ||
-    t === 'fechado' ||
-    t === 'confirmo' ||
-    t.includes('confirm') ||
-    t.includes('pode sim') ||
-    t.includes('pode marcar')
+  return finalizeWizardBooking(db, phone, context, senderName)
+}
 
-  if (!yes) {
-    return 'Posso confirmar? Responde *sim* ou *não*.'
+async function handlePureGreeting(
+  db: ReturnType<typeof getServiceClient>,
+  phone: string,
+  trimmed: string,
+  session: { step: string; context: Record<string, unknown> },
+  leadName: string | null | undefined,
+  shop: string | null,
+): Promise<string> {
+  let appts: Awaited<ReturnType<typeof fetchUpcomingAppointments>> = []
+  try {
+    appts = await fetchUpcomingAppointments(db, phone)
+  } catch (e) {
+    console.warn('greeting appointments', e)
   }
-
-  // Revalida no momento do commit (evita corrida / horário que encheu)
-  const check = await checkSlotAvailability(db, {
-    data: String(context.data),
-    servicoId: String(context.servico_id),
-    horario: String(context.horario),
-    barbeiroId: (context.barbeiro_id as string) || null,
-    barbeiroNome: (context.barbeiro_nome as string) || null,
-  })
-
-  if (!check.ok) {
-    const { slots: refreshed } = await fetchAvailableSlots(
-      db,
-      String(context.data),
-      String(context.servico_id),
-      (context.barbeiro_id as string) || null,
-    )
-    if (refreshed.length) {
-      await saveSession(db, phone, 'choose_time', {
-        ...context,
-        slots: refreshed,
-        horario: undefined,
-      })
-      return [
-        check.message,
-        '',
-        'Que tal outro horário?',
-        '',
-        formatSlotList(String(context.data), refreshed, context.barbeiro_nome as string | undefined),
-      ].join('\n')
-    }
-    await saveSession(db, phone, 'choose_date', {
-      ...context,
-      horario: undefined,
-      slots: undefined,
+  let hi = greetingWithAppointments(leadName, shop, appts)
+  try {
+    if (!(await isShopOpenNow(db))) hi = `${hi}\n\n${closedShopNotice()}`
+  } catch {
+    /* ignore */
+  }
+  try {
+    const prev = Array.isArray(session.context.history)
+      ? (session.context.history as ChatMessage[])
+      : []
+    const history = [
+      ...prev.filter((m) => m?.name !== 'get_available_slots'),
+      { role: 'user' as const, content: trimmed || 'oi' },
+      { role: 'assistant' as const, content: hi },
+    ].slice(-28)
+    await saveSession(db, phone, 'chat', {
+      history,
+      mode: 'mimo',
+      lead_name: leadName,
+      has_appointments: appts.length > 0,
+      upcoming_count: appts.length,
+      last_slots: [],
+      last_slots_data: null,
+      last_slots_servico_id: null,
+      last_slots_barbeiro_id: null,
+      slots: [],
     })
-    return check.message + '\n\nQuer tentar *outra data*?'
+  } catch {
+    /* ignore */
   }
-
-  const client = await findOrCreateClientByPhone(db, phone, senderName)
-
-  const booked = await createAppointmentAtomic(db, {
-    clienteId: client.id,
-    servicoId: String(context.servico_id),
-    data: String(context.data),
-    horario: String(context.horario),
-    barbeiroId: check.barbeiro_id,
-    useRotation: Boolean(check.from_rotation || context.from_rotation),
-  })
-
-  await resetSession(db, phone)
-
-  if (!booked.ok) {
-    return `Não deu pra agendar: ${booked.error}\n\n` + aftercareText()
-  }
-
-  return [
-    `Serviço: ${context.servico_nome}`,
-    `Barbeiro: ${booked.barbeiro_nome || check.barbeiro_nome || context.barbeiro_nome || 'A definir'}`,
-    `Data: ${formatDateBR(String(context.data))}`,
-    `Horário: ${booked.horario}`,
-    '',
-    punctualityConfirmText(),
-  ].join('\n')
+  return hi
 }
 
 async function processWithMimo(
@@ -1005,39 +1320,47 @@ async function processWithMimo(
     : []
 
   // Compact prior turns — keep more history so o contexto da conversa se mantém
-  const prior = prevHistory
-    .filter((m) => m && m.role)
-    .map((m) => {
-      const out: ChatMessage = { role: m.role }
-      if (m.content != null) out.content = m.content
-      if (m.tool_calls) out.tool_calls = m.tool_calls
-      if (m.tool_call_id) out.tool_call_id = m.tool_call_id
-      if (m.name) out.name = m.name
-      return out
-    })
-    .slice(-24)
+  const greetingTurn = isPureGreeting(text)
+
+  const prior = greetingTurn
+    ? []
+    : prevHistory
+      .filter((m) => m && m.role && m.name !== 'get_available_slots')
+      .map((m) => {
+        const out: ChatMessage = { role: m.role }
+        if (m.content != null) out.content = m.content
+        if (m.tool_calls) out.tool_calls = m.tool_calls
+        if (m.tool_call_id) out.tool_call_id = m.tool_call_id
+        if (m.name) out.name = m.name
+        return out
+      })
+      .slice(-24)
 
   // Resumo do que já foi falado no fallback wizard (se existir), para a IA não “zerar”
   const ctxLines: string[] = []
   const c = session.context
-  if (c.servico_nome) ctxLines.push(`serviço em papo: ${c.servico_nome}`)
-  if (c.barbeiro_nome) ctxLines.push(`barbeiro: ${c.barbeiro_nome}`)
-  if (c.data) ctxLines.push(`data: ${c.data}`)
-  if (c.horario) ctxLines.push(`horário: ${c.horario}`)
-  if (session.step && session.step !== 'menu' && session.step !== 'chat' && session.step !== 'ask_name') {
-    ctxLines.push(`estava no passo interno: ${session.step}`)
+  if (!greetingTurn) {
+    if (c.servico_nome) ctxLines.push(`serviço em papo: ${c.servico_nome}`)
+    if (c.barbeiro_nome) ctxLines.push(`barbeiro: ${c.barbeiro_nome}`)
+    if (c.data) ctxLines.push(`data: ${c.data}`)
+    if (c.horario) ctxLines.push(`horário: ${c.horario}`)
+    if (session.step && session.step !== 'menu' && session.step !== 'chat' && session.step !== 'ask_name') {
+      ctxLines.push(`estava no passo interno: ${session.step}`)
+    }
   }
   if (leadName && isKnownLeadName(leadName)) {
     ctxLines.push(`nome do lead (salvo): ${leadName}`)
   }
 
-  // Agenda do lead (agendamentos já marcados)
+  // Agenda do lead (agendamentos já marcados) — saudação pura não puxa horários
   let apptCtx = ''
-  try {
-    const upcoming = await fetchUpcomingAppointments(db, phone)
-    apptCtx = '\nAgenda do lead:\n' + appointmentsContextLines(upcoming).join('\n')
-  } catch (e) {
-    console.warn('fetchUpcomingAppointments failed', e)
+  if (!greetingTurn) {
+    try {
+      const upcoming = await fetchUpcomingAppointments(db, phone)
+      apptCtx = '\nAgenda do lead:\n' + appointmentsContextLines(upcoming).join('\n')
+    } catch (e) {
+      console.warn('fetchUpcomingAppointments failed', e)
+    }
   }
 
   let shopOpen = true
@@ -1047,8 +1370,9 @@ async function processWithMimo(
     shopOpen = true
   }
 
-  const bookingLocked = isBookingStep(session.step)
+  const bookingLocked = !greetingTurn && isBookingStep(session.step)
   const system = systemPromptBarber() +
+    `\nREGRAS ABSOLUTAS DESTA CONVERSA: se já tiver serviço + data + horário livre, chame create_appointment nesta rodada. PROIBIDO pedir confirmação. PROIBIDO pedir avaliação, nota de 1 a 5, feedback ou comentário sobre a experiência. Depois de agendar, envie só mensagem_cliente (2 a 3 frases).` +
     (bookingLocked
       ? `\nPASSO TRAVADO: ${session.step}. Não peça o nome. Não mude de assunto. Continue este passo.`
       : '') +
@@ -1074,8 +1398,10 @@ async function processWithMimo(
   ]
 
   const tChoice = normalizeMatch(text)
-  let toolChoice: 'auto' | { type: 'function'; function: { name: string } } = 'auto'
-  if (!isGreetingOnly(text)) {
+  let toolChoice: 'auto' | 'none' | { type: 'function'; function: { name: string } } = 'auto'
+  if (greetingTurn) {
+    toolChoice = 'none'
+  } else if (!isGreetingOnly(text)) {
     if (
       tChoice.includes('endereco') ||
       tChoice.includes('funcionamento') ||
@@ -1093,8 +1419,8 @@ async function processWithMimo(
     const res = await mimoChat({
       config,
       messages,
-      tools: BARBER_TOOLS,
-      tool_choice: round === 0 ? toolChoice : 'auto',
+      tools: greetingTurn ? undefined : BARBER_TOOLS,
+      tool_choice: greetingTurn ? 'none' : (round === 0 ? toolChoice : 'auto'),
       temperature: 0.4,
       max_completion_tokens: 500,
     })
@@ -1132,6 +1458,23 @@ async function processWithMimo(
         const fnName = tc.function?.name || ''
         usedTools.push(fnName)
         const fnArgs = tc.function?.arguments || '{}'
+        if (greetingTurn) {
+          logDiva('saudação pura — tool de horário bloqueada no webhook', {
+            phone: phone.slice(-4),
+            ferramenta: fnName,
+          })
+          messages.push({
+            role: 'tool',
+            tool_call_id: tc.id,
+            name: fnName,
+            content: JSON.stringify({
+              skipped: true,
+              reason: 'pure_greeting',
+              dica: 'Não busque horários. Só cumprimente o cliente.',
+            }),
+          })
+          continue
+        }
         // tools usam o nome salvo do lead, não o perfil WhatsApp
         const toolResult = await runBarberTool(db, phone, fnName, fnArgs, leadName || undefined)
         logDiva('resultado da ferramenta devolvido à IA', {
@@ -1183,9 +1526,11 @@ async function processWithMimo(
     }
 
     const fresh = await getSession(db, phone)
-    const lastSlots = Array.isArray(fresh.context.last_slots)
-      ? (fresh.context.last_slots as string[]).map((h) => String(h).slice(0, 5))
-      : []
+    const lastSlots = greetingTurn
+      ? []
+      : Array.isArray(fresh.context.last_slots)
+        ? (fresh.context.last_slots as string[]).map((h) => String(h).slice(0, 5))
+        : []
     if (lastSlots.length) {
       const mentioned = [...answer.matchAll(/\b(\d{1,2})[:hH](\d{2})\b/g)]
       const invented = mentioned.some((m) => {
@@ -1219,6 +1564,17 @@ async function processWithMimo(
       }
     }
 
+    if (usedTools.includes('create_appointment')) {
+      const created = lastJsonToolResult(messages, 'create_appointment')
+      const forced = created && created.ok && typeof created.mensagem_cliente === 'string'
+        ? String(created.mensagem_cliente).trim()
+        : ''
+      if (forced) answer = forced
+    } else if (looksLikeConfirmationAsk(answer)) {
+      const booked = await tryAutoCreateAppointment(db, phone, text, answer, leadName)
+      if (booked) answer = booked
+    }
+
     const toStore = messages
       .filter((m) => m.role !== 'system')
       .map((m) => {
@@ -1235,11 +1591,23 @@ async function processWithMimo(
       })
       .slice(-28)
 
-    const keepStep = isBookingStep(session.step) ? session.step : 'chat'
+    const bookedNow = usedTools.includes('create_appointment') &&
+      Boolean(lastJsonToolResult(messages, 'create_appointment')?.ok)
+    const keepStep = bookedNow ? 'chat' : (isBookingStep(session.step) ? session.step : 'chat')
     await saveSession(db, phone, keepStep, {
       history: toStore,
       mode: 'mimo',
       lead_name: leadName || undefined,
+      ...(bookedNow
+        ? {
+            last_slots: [],
+            last_slots_data: null,
+            last_slots_servico_id: null,
+            last_slots_barbeiro_id: null,
+            slots: [],
+            horario: null,
+          }
+        : {}),
     })
     return answer
   }
@@ -1278,24 +1646,61 @@ async function processMessage(
   _whatsappProfileName?: string,
 ): Promise<string> {
   const trimmed = text.trim()
-  // Nome do perfil WhatsApp NÃO é usado — só o que o lead informou e está em clientes.nome
-  let leadName = await getLeadDisplayName(db, phone)
-  const session = await getSession(db, phone)
-  const shop = await fetchShopName(db)
+  let leadName: string | null = null
+  let session: { step: string; context: Record<string, unknown> } = { step: 'chat', context: {} }
+  let shop: string | null = null
 
-  // ── Captura de contato + nome (não bloqueia a conversa) ────────────────────
-  await findOrCreateClientByPhone(db, phone).catch(() => null)
-  leadName = await getLeadDisplayName(db, phone)
+  try {
+    await findOrCreateClientByPhone(db, phone).catch(() => null)
+  } catch {
+    /* segue mesmo sem cadastro */
+  }
+  try {
+    leadName = await getLeadDisplayName(db, phone)
+  } catch (e) {
+    console.warn('[PROCESS] lead não encontrado — segue sem nome', e)
+  }
+  try {
+    session = await getSession(db, phone)
+  } catch (e) {
+    console.warn('[PROCESS] sessão falhou — segue sem histórico', e)
+    session = { step: 'chat', context: {} }
+  }
+  try {
+    shop = await fetchShopName(db)
+  } catch (e) {
+    console.warn('[PROCESS] shop name falhou', e)
+  }
 
-  // ── Avaliação pós-corte (antes da captura de nome / IA) ────────────────────
-  if (session.step === 'rate_ask') {
-    return handleRateAsk(db, phone, trimmed, session.context, leadName)
+  // Avaliação desativada: não continua pedido de nota/feedback
+  if (isRatingSessionStep(session.step)) {
+    await resetSession(db, phone)
+    session = { step: 'chat', context: {} }
   }
-  if (session.step === 'rate_score') {
-    return handleRateScore(db, phone, trimmed, session.context, leadName)
-  }
-  if (session.step === 'rate_comment') {
-    return handleRateComment(db, phone, trimmed, session.context, leadName)
+
+  // ── Saudação pura: nunca wizard, nunca get_available_slots, nunca last_slots ─
+  if (isPureGreeting(trimmed)) {
+    logDiva('saudação pura — bypass de tools de horário', {
+      phone: phone.slice(-4),
+      texto: trimmed,
+    })
+    if (
+      !isKnownLeadName(leadName) &&
+      !sessionHasBookingContext(session) &&
+      !looksLikeBookingUtterance(trimmed)
+    ) {
+      await saveSession(db, phone, 'ask_name', {
+        ...session.context,
+        awaiting_name: true,
+        last_slots: [],
+        last_slots_data: null,
+        last_slots_servico_id: null,
+        last_slots_barbeiro_id: null,
+        slots: [],
+      })
+      return askNameText(shop)
+    }
+    return handlePureGreeting(db, phone, trimmed, session, leadName, shop)
   }
 
   if (isBookingStep(session.step)) {
@@ -1421,38 +1826,7 @@ async function processMessage(
 
   // ── Cumprimento puro ───────────────────────────────────────────────────────
   if (!trimmed || isGreetingOnly(trimmed)) {
-    let appts: Awaited<ReturnType<typeof fetchUpcomingAppointments>> = []
-    try {
-      appts = await fetchUpcomingAppointments(db, phone)
-    } catch (e) {
-      console.warn('greeting appointments', e)
-    }
-    let hi = greetingWithAppointments(leadName, shop, appts)
-    try {
-      if (!(await isShopOpenNow(db))) hi = `${hi}\n\n${closedShopNotice()}`
-    } catch {
-      /* ignore */
-    }
-    try {
-      const prev = Array.isArray(session.context.history)
-        ? (session.context.history as ChatMessage[])
-        : []
-      const history = [
-        ...prev,
-        { role: 'user' as const, content: trimmed || 'oi' },
-        { role: 'assistant' as const, content: hi },
-      ].slice(-28)
-      await saveSession(db, phone, 'chat', {
-        history,
-        mode: 'mimo',
-        lead_name: leadName,
-        has_appointments: appts.length > 0,
-        upcoming_count: appts.length,
-      })
-    } catch {
-      /* ignore */
-    }
-    return hi
+    return handlePureGreeting(db, phone, trimmed || 'oi', session, leadName, shop)
   }
 
   // Endereço / funcionamento
@@ -1520,7 +1894,7 @@ async function processMessage(
     logDiva('fallback: wizard também sem resposta', { phone: phone.slice(-4), step })
     logBotEvent('bot_fallback', { reason: 'fallback_intent', phone: phone.slice(-4), step })
   }
-  return fallback || 'Me conta o que você precisa.'
+  return fallback?.trim() || FALLBACK_OUTBOUND
 }
 
 async function dispatchWizard(
@@ -1546,7 +1920,7 @@ async function dispatchWizard(
     case 'choose_date':
       return handleChooseDate(db, phone, trimmed, context)
     case 'choose_time':
-      return handleChooseTime(db, phone, trimmed, context)
+      return handleChooseTime(db, phone, trimmed, context, leadName || undefined)
     case 'confirm':
       return handleConfirm(db, phone, trimmed, context, leadName || undefined)
     case 'cancel_pick':
@@ -1599,6 +1973,7 @@ Deno.serve(async (req) => {
       !Array.isArray(payload.messages)
     ) {
       // Ignore non-message events quietly
+      console.log('[UAZAPI-INBOUND] evento ignorado', { event })
       return jsonResponse({ ok: true, ignored: event })
     }
 
@@ -1608,17 +1983,36 @@ Deno.serve(async (req) => {
     const db = getServiceClient()
     const uazReady = await resolveUazConfig(db)
     if (!uazReady.config) {
+      console.error('[WEBHOOK] UAZAPI inválida', uazReady.error)
       return jsonResponse({ ok: false, error: uazReady.error || 'UAZAPI inválida' }, 503)
     }
-    const active = await isBotActive(db)
+    let active = true
+    try {
+      active = await isBotActive(db)
+    } catch (e) {
+      console.error('[BOT] falha ao ler whatsapp_bot_ativo — seguindo ativo', e)
+      active = true
+    }
     if (!active) {
-      return jsonResponse({ ok: true, bot: 'disabled' })
+      console.warn('[BOT] whatsapp_bot_ativo=false — NÃO silenciar; seguindo atendimento (expediente noturno incluso)')
     }
 
+    console.log('[UAZAPI-INBOUND] payload', {
+      event,
+      messageCount: messages.length,
+      hasData: payload.data != null,
+      hasMessage: payload.message != null,
+    })
+
     const results: { phone: string; ok: boolean; note?: string }[] = []
+    const grouped = new Map<string, string[]>()
 
     for (const msg of messages) {
       if (shouldIgnore(msg)) {
+        console.log('[UAZAPI-INBOUND] ignorada fromMe/grupo', {
+          fromMe: msg.fromMe,
+          isGroup: msg.isGroup,
+        })
         results.push({ phone: '', ok: true, note: 'ignored_fromMe_or_group' })
         continue
       }
@@ -1638,44 +2032,138 @@ Deno.serve(async (req) => {
           chatid: msg.chatid,
           sender: msg.sender,
           sender_pn: msg.sender_pn,
+          keyRemoteJid: (msg.key as { remoteJid?: string } | undefined)?.remoteJid ?? null,
           owner: ownerPhone,
         })
         results.push({ phone: '', ok: false, note: 'no_phone' })
         continue
       }
 
+      const text = extractText(msg)
+      console.log('[UAZAPI-INBOUND] mensagem', {
+        phone: phone.slice(-4),
+        text,
+        normalized: text.trim(),
+        isGreeting: isPureGreeting(text),
+        messageid: mid || null,
+      })
+      const prev = grouped.get(phone) || []
+      prev.push(text)
+      grouped.set(phone, prev)
+    }
+
+    for (const [phone, texts] of grouped) {
+      const uazCfg = uazReady.config
+      const payloadText = texts.map((t) => t.trim()).filter(Boolean).join('\n')
+      const inboundRaw = payloadText || 'oi'
+      console.log('[WEBHOOK] texto normalizado', {
+        phone: phone.slice(-4),
+        inboundRaw,
+        isGreeting: isPureGreeting(inboundRaw),
+      })
+
+      // Saudação: envia ANTES do lock de banco (trava noturna / lock preso = silêncio).
+      if (uazCfg && isPureGreeting(inboundRaw)) {
+        console.log('[GREETING-REGEX] match HTTP', { phone: phone.slice(-4), inboundRaw })
+        try {
+          await deliverPureGreeting(db, phone, inboundRaw, uazCfg)
+          await clearDebounceBuffer(db, phone)
+          results.push({ phone, ok: true, note: 'greeting_sent' })
+        } catch (err) {
+          console.error('[GREETING] erro', {
+            phone: phone.slice(-4),
+            error: err instanceof Error ? err.message : String(err),
+            stack: err instanceof Error ? err.stack : null,
+          })
+          const rescue = withLocalHoursNotice(FALLBACK_OUTBOUND)
+          const sent = await sendWhatsappMessage(phone, rescue, uazCfg)
+          results.push({ phone, ok: sent, note: sent ? 'greeting_rescue' : 'greeting_failed' })
+        }
+        continue
+      }
+
       await db.rpc('lock_whatsapp_phone', { p_phone: phone }).catch(() => null)
+      let shouldFlushBuffer = false
       try {
         if (ownerPhone && phone === ownerPhone) {
           console.info('whatsapp-webhook: reply to instance owner (self-test or same number)', phone)
         }
 
-        const text = extractText(msg)
-        const uazCfg = await beginTyping(phone, db, 15000)
         if (!uazCfg) {
           results.push({ phone, ok: false, note: 'uaz_unavailable' })
           continue
         }
 
-        if (!text) {
-          const sess = await getSession(db, phone)
-          const hist = Array.isArray(sess.context.history) ? sess.context.history : []
+        if (!payloadText) {
+          let hist: unknown[] = []
+          try {
+            const sess = await getSession(db, phone)
+            hist = Array.isArray(sess.context.history) ? sess.context.history : []
+          } catch (e) {
+            console.warn('[WEBHOOK] empty payload, sessão falhou — não silenciar lead novo', e)
+          }
           if (hist.length) {
+            console.log('[WEBHOOK] empty_ignored', { phone: phone.slice(-4) })
             results.push({ phone, ok: true, note: 'empty_ignored' })
             continue
           }
-          const leadName = await getLeadDisplayName(db, phone)
-          const answer = await processMessage(db, phone, 'oi')
-          await reply(phone, answer, db, uazCfg, { senderName: leadName, userText: 'oi' })
-          results.push({ phone, ok: true })
+        }
+
+        await beginTyping(phone, db, 15000)
+        const inbound = await consumeInboundForProcess(db, phone, inboundRaw)
+        console.log('[WEBHOOK] após debounce', {
+          phone: phone.slice(-4),
+          inbound,
+          isGreeting: isPureGreeting(inbound),
+        })
+        if (isPureGreeting(inbound)) {
+          console.log('[GREETING-REGEX] match pós-buffer', { phone: phone.slice(-4), inbound })
+          shouldFlushBuffer = true
+          await deliverPureGreeting(db, phone, inbound, uazCfg)
+          results.push({ phone, ok: true, note: 'greeting_sent' })
           continue
         }
 
-        const leadName = await getLeadDisplayName(db, phone)
-        const answer = await processMessage(db, phone, text)
-        await reply(phone, answer, db, uazCfg, { senderName: leadName, userText: text })
-        results.push({ phone, ok: true })
+        shouldFlushBuffer = true
+        let leadName: string | null = null
+        try {
+          leadName = await getLeadDisplayName(db, phone)
+        } catch (e) {
+          console.warn('[WEBHOOK] lead não encontrado — segue envio', e)
+        }
+        let answer = FALLBACK_OUTBOUND
+        try {
+          answer = String(await processMessage(db, phone, inbound) || '').trim() || FALLBACK_OUTBOUND
+        } catch (e) {
+          console.error('[WEBHOOK] processMessage falhou — enviando fallback', e)
+          answer = FALLBACK_OUTBOUND
+        }
+        answer = await withClosedShopNotice(db, answer)
+        await reply(phone, answer, db, uazCfg, { senderName: leadName, userText: inbound })
+        results.push({ phone, ok: true, note: 'replied' })
+      } catch (err) {
+        console.error('[WEBHOOK] deliver error', {
+          phone: phone.slice(-4),
+          error: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : null,
+        })
+        if (uazCfg) {
+          const rescue = withLocalHoursNotice(FALLBACK_OUTBOUND)
+          const sent = await sendWhatsappMessage(phone, rescue, uazCfg)
+          results.push({
+            phone,
+            ok: sent,
+            note: sent ? 'fallback_sent' : (err instanceof Error ? err.message : String(err)),
+          })
+        } else {
+          results.push({
+            phone,
+            ok: false,
+            note: err instanceof Error ? err.message : String(err),
+          })
+        }
       } finally {
+        if (shouldFlushBuffer) await clearDebounceBuffer(db, phone)
         await db.rpc('unlock_whatsapp_phone', { p_phone: phone }).catch(() => null)
       }
     }

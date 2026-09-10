@@ -10,7 +10,6 @@ import {
   getSession,
   isKnownLeadName,
   parseDateBR,
-  punctualityConfirmText,
   saveSession,
 } from './db.ts'
 import type { ToolDef } from './mimo.ts'
@@ -58,7 +57,8 @@ parameters: { type: 'object', properties: {}, additionalProperties: false },
 type: 'function',
 function: {
 name: 'get_available_slots',
-description: 'Horários livres em uma data para um serviço (e opcionalmente barbeiro)',
+description:
+'Horários livres em uma data para um serviço (e opcionalmente barbeiro). Se o cliente já pediu um horário que estiver nesta lista, chame create_appointment na mesma rodada — não peça confirmação.',
 parameters: {
 type: 'object',
 properties: {
@@ -74,7 +74,8 @@ required: ['data', 'servico_id'],
 type: 'function',
 function: {
 name: 'create_appointment',
-description: 'Cria agendamento para o cliente do WhatsApp atual',
+description:
+'Cria o agendamento IMEDIATAMENTE para o cliente do WhatsApp atual. Chame assim que tiver servico_id, data e um horário livre. NUNCA peça confirmação ("você confirma?", "podemos fechar?", "confirma os dados?") antes de chamar.',
 parameters: {
 type: 'object',
 properties: {
@@ -115,6 +116,62 @@ function normalizeDate(input: string): string | null {
 if (!input) return null
 if (/^\d{4}-\d{2}-\d{2}$/.test(input)) return input
 return parseDateBR(input)
+}
+
+export function formatHourBR(horario: string): string {
+  const hm = String(horario || '').slice(0, 5)
+  const [h, m] = hm.split(':')
+  if (!h) return hm
+  if (!m || m === '00') return `${String(parseInt(h, 10))}h`
+  return `${String(parseInt(h, 10))}h${m}`
+}
+
+export function clientDateLabel(ymd: string): string {
+  const today = todaySaoPaulo()
+  if (ymd === today) return 'hoje'
+  const [y, m, d] = today.split('-').map(Number)
+  const dt = new Date(Date.UTC(y, (m || 1) - 1, (d || 1) + 1))
+  const tom = `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`
+  if (ymd === tom) return 'amanhã'
+  return formatDateBR(ymd)
+}
+
+/** Mensagem curta e definitiva após criar o agendamento (máx. 3 frases). */
+export function bookingSuccessText(opts: {
+  servico?: string | null
+  barbeiro?: string | null
+  data: string
+  horario: string
+}): string {
+  const servico = (String(opts.servico || 'horário').trim() || 'horário').toLowerCase()
+  const barbeiro = String(opts.barbeiro || '').trim()
+  const who = barbeiro ? ` com o ${barbeiro}` : ''
+  const when = clientDateLabel(opts.data)
+  const hora = formatHourBR(opts.horario)
+  return `Agendamento confirmado com sucesso! Seu ${servico}${who} está marcado para ${when} às ${hora}. Por favor, chegue com alguns minutos de antecedência para garantir o seu horário.`
+}
+
+export function looksLikeConfirmationAsk(text: string): boolean {
+  const n = String(text || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+  return (
+    /voce confirma/.test(n) ||
+    /podemos fechar/.test(n) ||
+    /posso fechar/.test(n) ||
+    /confirma os dados/.test(n) ||
+    /posso confirmar/.test(n) ||
+    /quer confirmar/.test(n) ||
+    /confirma com um/.test(n) ||
+    /me confirma/.test(n) ||
+    /fechamos (assim|entao|então)/.test(n) ||
+    /posso marcar/.test(n) ||
+    /quer que eu (marque|agende|feche)/.test(n) ||
+    /se tiver certo/.test(n) ||
+    /responde \*?sim\*?/.test(n) ||
+    /\bconfirma\?/.test(n)
+  )
 }
 export async function runBarberTool(
 db: SupabaseClient,
@@ -243,7 +300,7 @@ ultimo_horario: ultimo,
 dica:
 horarios.length === 0
 ? 'Sem horários livres (ocupados, fora do funcionamento salvo em Configurações, ou já passaram no dia de hoje). Peça outra data ou barbeiro.'
-: `SÓ liste horários desta lista. O primeiro disponível é ${primeiro} (não diga que abre às 08:00 se a lista não começar assim).`,
+: `SÓ liste horários desta lista. O primeiro disponível é ${primeiro} (não diga que abre às 08:00 se a lista não começar assim). Se o cliente já escolheu um horário desta lista, chame create_appointment AGORA — não pergunte confirmação.`,
 })
 }
 case 'create_appointment': {
@@ -303,6 +360,19 @@ logDiva('create_appointment — sucesso', {
   horario: booked.horario,
   id: booked.id,
 })
+let servico_nome: string | null = null
+try {
+  const { data: servRow } = await db.from('servicos').select('nome').eq('id', servico_id).maybeSingle()
+  servico_nome = servRow?.nome ? String(servRow.nome) : null
+} catch {
+  /* ignore */
+}
+const mensagem_cliente = bookingSuccessText({
+  servico: servico_nome,
+  barbeiro: booked.barbeiro_nome,
+  data: String(booked.data),
+  horario: String(booked.horario),
+})
 return JSON.stringify({
 ok: true,
 agendamento: {
@@ -313,8 +383,12 @@ horario: booked.horario,
 status: 'pendente',
 barbeiro_id: booked.barbeiro_id,
 barbeiro_nome: booked.barbeiro_nome,
+servico_id,
+servico_nome,
 },
-        mensagem: punctualityConfirmText(),
+        mensagem: mensagem_cliente,
+        mensagem_cliente,
+        dica: 'Envie ao cliente APENAS o campo mensagem_cliente. Máximo 3 frases. Sem perguntas, sem avaliação, sem pedir confirmação, sem texto extra.',
 })
 }
 case 'list_my_appointments': {
@@ -399,6 +473,8 @@ Seu objetivo é prestar um atendimento ágil, educado, objetivo e humanizado pel
 - **Apresentação:** A Diva sempre se apresenta como a Diva da **Divina Barbearia Varjota**.
 - **Estilo:** Linguagem natural brasileira, sem enrolação e sem excesso de gírias.
 - **Objetividade Máxima:** Mensagens curtas e claras. Evite textos longos ou redundantes.
+- **Sem avaliação:** NUNCA peça nota, feedback, link de avaliação ou comentário sobre a experiência — nem após o corte, nem após o agendamento.
+- **Sem confirmação extra:** NUNCA pergunte se o cliente confirma o agendamento. Se os dados estão completos e o horário está livre, chame create_appointment na hora.
 
 ---
 
@@ -459,28 +535,25 @@ Seu objetivo é prestar um atendimento ágil, educado, objetivo e humanizado pel
   - \`Profissional\` (se especificado ou via fila de rodízio)
   - \`Serviço\` (com duração e valor consultados no sistema)
   - \`Data\` / \`Horário\` (sempre dentro do intervalo das 08:30 às 19:30)
-- **Validação Direta:** Consulte a disponibilidade em tempo real considerando agenda, tempo total de duração dos serviços, folgas e bloqueios. Se o horário estiver liberado, vá direto para a confirmação. Se houver indisponibilidade ou trava, apresente as alternativas imediatas.
+- **Validação Direta:** Consulte a disponibilidade em tempo real considerando agenda, tempo total de duração dos serviços, folgas e bloqueios. Se o horário estiver liberado, chame create_appointment IMEDIATAMENTE — sem etapa intermediária de checagem com o cliente. Se houver indisponibilidade ou trava, apresente as alternativas imediatas.
 - **Interpretação de Datas Relativas:** Converta termos como *"amanhã"*, *"sábado"*, *"próxima terça"* para a data futura real mais próxima do calendário e mencione o dia exato (ex.: *"Para este sábado, dia 05/09, às 14h..."*).
 - **Bloqueio de Datas Passadas (Retroativas):** Nunca permita agendar em datas ou horários que já passaram. Avise que o horário é inválido e solicite uma data/hora a partir do momento atual.
 
 ---
 
-## 7. CONFIRMAÇÃO ÚNICA E FIM DE LOOPS (REGRA CRÍTICA)
-- Apresente os dados para confirmação **apenas uma vez**:
-  - 👤 **Cliente:** [Nome]
-  - ✂️ **Serviço:** [Serviço]
-  - 💈 **Profissional:** [Nome do Barbeiro validado no sistema]
-  - 📅 **Data/Horário:** [Dia da semana, DD/MM às HH:MM]
-  - 💰 **Valor:** [Valor consultado no sistema, se aplicável]
-- **Após o cliente responder "sim", "ok", "confirmo", "pode ser":**
-  - Salve e confirme a reserva imediatamente no sistema.
-  - Envie a mensagem de sucesso: *"Perfeito, [Nome]! Seu agendamento está confirmado na Divina Barbearia Varjota. Te esperamos!"*
-  - **FIM DO LOOP:** Se o cliente fizer outras perguntas depois (ex: localização, formas de pagamento), responda apenas à dúvida. **NUNCA mais pergunte se ele deseja confirmar o agendamento já realizado.**
+## 7. AGENDAMENTO DIRETO E MENSAGEM FINAL (REGRA CRÍTICA)
+- Assim que tiver serviço, profissional (ou rodízio), data e um horário LIVRE, chame \`create_appointment\` IMEDIATAMENTE.
+- **PROIBIDO** perguntar: "Você confirma?", "Podemos fechar?", "Confirma os dados abaixo?", "Posso fechar assim?", "Se tiver certo, me confirma" ou qualquer frase parecida.
+- Não faça etapa extra de revisão se o horário já está disponível.
+- Depois que \`create_appointment\` retornar ok, envie SOMENTE o campo \`mensagem_cliente\` (2 a 3 frases): confirme serviço, profissional, dia e hora, e peça pontualidade no local. Sem questionário, sem repetir, sem texto longo.
+- Exemplo de tom: *"Agendamento confirmado com sucesso! Seu corte com o Jeová está marcado para amanhã às 14h. Por favor, chegue com alguns minutos de antecedência para garantir o seu horário."*
+- **FIM DO LOOP:** Se o cliente fizer outras perguntas depois (ex: localização, formas de pagamento), responda apenas à dúvida. **NUNCA mais pergunte se ele deseja confirmar o agendamento já realizado.**
+- **AVALIAÇÃO PROIBIDA:** Nunca peça nota de 1 a 5, feedback, link ou comentário sobre a experiência.
 
 ---
 
 ## 8. CANCELAMENTOS, REAGENDAMENTOS E NOTIFICAÇÕES AUTOMÁTICAS
-- **Reagendamento:** Verifique nova disponibilidade (bloqueando domingos, horários fora das 08:30–19:30, folgas/travas e datas passadas) e confirme uma única vez.
+- **Reagendamento:** Verifique nova disponibilidade (bloqueando domingos, horários fora das 08:30–19:30, folgas/travas e datas passadas) e chame create_appointment direto, sem pedir confirmação.
 - **Notificação Automática de Cancelamento:** Sempre que um agendamento for cancelado (pelo cliente no WhatsApp ou manualmente no painel), envie uma mensagem curta de confirmação:
   - *"Olá, [Nome]. Seu agendamento para [Data às HH:MM] com [Profissional] foi cancelado com sucesso. Quando quiser remarcar, é só chamar!"*
 - **Lembrete Automático Pré-Atendimento (1 hora antes):** Disparar mensagem de lembrete com antecedência de 1h:

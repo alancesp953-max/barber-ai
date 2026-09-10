@@ -1,4 +1,4 @@
-import { ActionIcon, Avatar, Badge, Box, Button, Card, Group, Stack, Text } from '@mantine/core'
+import { ActionIcon, Avatar, Badge, Box, Button, Card, Group, NativeSelect, Stack, Text } from '@mantine/core'
 import { Clock, Trash2, User as UserIcon } from 'lucide-react'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -132,24 +132,73 @@ function buildColumns(barbers: Barber[], appointments: Appointment[]): BoardColu
   return columns
 }
 
-/** Placeholder da futura rota financeira de check-out. Recebe o ID sem navegar. */
-export function handleAppointmentCheckout(_appointmentId: string) {
-  return
+export const CHECKOUT_APPOINTMENT_KEY = 'barber-ai:checkoutAppointment'
+
+export type CheckoutAppointmentPayload = {
+  id: string
+  cliente_id: string | null
+  clienteNome: string | null
+  barbeiro_id: string | null
+  barbeiroNome: string | null
+  servico_id: string | null
+  servicos: { nome: string; preco: number }[]
+  valorTotal: number
+  data: string
+  horario: string
+}
+
+const MANUAL_STATUSES: AppointmentStatus[] = ['pendente', 'confirmado', 'cancelado']
+
+export function buildCheckoutPayload(appt: Appointment): CheckoutAppointmentPayload {
+  const preco = Number(appt.servicos?.preco ?? appt.valor ?? 0)
+  const nomeServico = appt.servicos?.nome
+  return {
+    id: appt.id,
+    cliente_id: appt.cliente_id,
+    clienteNome: appt.clientes?.nome ?? null,
+    barbeiro_id: appt.barbeiro_id,
+    barbeiroNome: appt.barbeiros?.nome ?? null,
+    servico_id: appt.servico_id,
+    servicos: nomeServico ? [{ nome: nomeServico, preco }] : [],
+    valorTotal: preco,
+    data: appt.data,
+    horario: appt.horario,
+  }
+}
+
+export function persistCheckoutAppointment(appt: Appointment) {
+  const payload = buildCheckoutPayload(appt)
+  sessionStorage.setItem(CHECKOUT_APPOINTMENT_KEY, JSON.stringify(payload))
+  return payload
+}
+
+/** Persiste o snapshot do agendamento para a tela de financeiro. */
+export function handleAppointmentCheckout(appointment: Appointment) {
+  persistCheckoutAppointment(appointment)
+}
+
+function statusOptions(current: AppointmentStatus, label: (status: AppointmentStatus) => string) {
+  const values = current === 'concluido' ? (['concluido', ...MANUAL_STATUSES] as AppointmentStatus[]) : MANUAL_STATUSES
+  return values.map((status) => ({
+    value: status,
+    label: label(status),
+    disabled: status === 'concluido',
+  }))
 }
 
 interface AgendaDayBoardProps {
   barbers: Barber[]
   appointments: Appointment[]
-  onCheckin?: (appointment: Appointment) => void
-  onCheckout?: (appointmentId: string) => void
+  onCheckout?: (appointment: Appointment) => void
+  onStatusChange?: (appointmentId: string, status: AppointmentStatus) => void
   onDelete?: (appointmentId: string) => void
 }
 
 export function AgendaDayBoard({
   barbers,
   appointments,
-  onCheckin,
   onCheckout = handleAppointmentCheckout,
+  onStatusChange,
   onDelete,
 }: AgendaDayBoardProps) {
   const { t } = useTranslation()
@@ -159,7 +208,7 @@ export function AgendaDayBoard({
     return (
       <Card withBorder padding="xl" radius="lg">
         <Text c="dimmed" ta="center">
-          {t('appointments.noBarbersForBoard')}
+          {t('appointments.noBarbersForBoard', { defaultValue: 'Nenhum barbeiro para exibir na agenda.' })}
         </Text>
       </Card>
     )
@@ -223,8 +272,8 @@ export function AgendaDayBoard({
               <Text size="xs" c="dimmed">
                 {column.appointments.length}{' '}
                 {column.appointments.length === 1
-                  ? t('appointments.oneAppointment')
-                  : t('appointments.manyAppointments')}
+                  ? t('appointments.oneAppointment', { defaultValue: 'agendamento' })
+                  : t('appointments.manyAppointments', { defaultValue: 'agendamentos' })}
               </Text>
             </Box>
           </Group>
@@ -232,12 +281,12 @@ export function AgendaDayBoard({
           <Stack gap="sm" p="sm" style={{ flex: 1 }}>
             {column.appointments.length === 0 ? (
               <Text size="sm" c="dimmed" ta="center" py="xl">
-                {t('appointments.emptyColumn')}
+                {t('appointments.emptyColumn', { defaultValue: 'Sem horários neste dia' })}
               </Text>
             ) : (
               column.appointments.map((appt) => {
-                const canCheckin = appt.status === 'pendente' || appt.status === 'confirmado'
-                const canCheckout = appt.status !== 'cancelado'
+                const canCheckout = appt.status !== 'cancelado' && appt.status !== 'concluido'
+                const isCompleted = appt.status === 'concluido'
 
                 return (
                   <Card
@@ -272,29 +321,42 @@ export function AgendaDayBoard({
                         </Text>
                       </Box>
 
+                      {onStatusChange && (
+                        <NativeSelect
+                          size="xs"
+                          value={appt.status}
+                          disabled={isCompleted}
+                          aria-label={t('appointments.status')}
+                          onChange={(e) => {
+                            const next = e.currentTarget.value as AppointmentStatus
+                            if (next === 'concluido') return
+                            onStatusChange(appt.id, next)
+                          }}
+                          data={statusOptions(appt.status, (status) => t(`status.${status}`))}
+                          styles={{
+                            input: {
+                              background: 'transparent',
+                              borderColor: 'rgba(197,160,89,0.2)',
+                              color: `var(--mantine-color-${statusColors[appt.status]}-4)`,
+                              fontWeight: 600,
+                            },
+                          }}
+                        />
+                      )}
+
                       <Group gap={6} justify="space-between" wrap="nowrap">
-                        <Group gap={6}>
-                          {canCheckout && (
-                            <Button
-                              size="compact-xs"
-                              variant="light"
-                              color="gold"
-                              onClick={() => onCheckout(appt.id)}
-                            >
-                              {t('appointments.checkout')}
-                            </Button>
-                          )}
-                          {canCheckin && onCheckin && (
-                            <Button
-                              size="compact-xs"
-                              variant="subtle"
-                              color="gold"
-                              onClick={() => onCheckin(appt)}
-                            >
-                              {t('dashboard.checkIn')}
-                            </Button>
-                          )}
-                        </Group>
+                        {canCheckout ? (
+                          <Button
+                            size="compact-xs"
+                            variant="light"
+                            color="gold"
+                            onClick={() => onCheckout(appt)}
+                          >
+                            {t('appointments.checkout', { defaultValue: 'Check-out' })}
+                          </Button>
+                        ) : (
+                          <span />
+                        )}
                         {onDelete && (
                           <ActionIcon
                             variant="subtle"
