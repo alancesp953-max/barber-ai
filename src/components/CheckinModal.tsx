@@ -1,10 +1,30 @@
-import { Alert, Badge, Button, Group, Modal, Stack, Text, Title } from '@mantine/core'
-import { useEffect, useState } from 'react'
+import {
+  Alert,
+  Badge,
+  Button,
+  Group,
+  Modal,
+  NativeSelect,
+  Stack,
+  Text,
+  Title,
+  ActionIcon,
+} from '@mantine/core'
+import { Trash2 } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useNavigate } from '@tanstack/react-router'
 
-import { updateAppointmentStatus } from '../lib/api'
+import {
+  addServicoAoAgendamento,
+  ensureAgendamentoServicos,
+  getServices,
+  removeServicoDoAgendamento,
+  updateAppointmentStatus,
+  type AgendamentoServicoItem,
+} from '../lib/api'
 import { formatCurrency, formatDateTime } from '../lib/format'
-import type { Appointment, AppointmentStatus } from '../types/database'
+import type { Appointment, AppointmentStatus, Service } from '../types/database'
 
 interface CheckinModalProps {
   appointment: Appointment | null
@@ -22,19 +42,43 @@ const statusColor: Record<AppointmentStatus, string> = {
 
 export function CheckinModal({ appointment, open, onClose, onUpdated }: CheckinModalProps) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [items, setItems] = useState<AgendamentoServicoItem[]>([])
+  const [services, setServices] = useState<Service[]>([])
+  const [addServiceId, setAddServiceId] = useState('')
 
   useEffect(() => {
     if (!open) {
       setError(null)
       setLoading(false)
+      setItems([])
+      setAddServiceId('')
+      return
     }
-  }, [open])
+    if (!appointment) return
+    void (async () => {
+      try {
+        const [list, svcs] = await Promise.all([
+          ensureAgendamentoServicos(appointment.id),
+          getServices(),
+        ])
+        setItems(list)
+        setServices(svcs)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : t('checkin.error'))
+      }
+    })()
+  }, [open, appointment, t])
+
+  const total = useMemo(
+    () => items.reduce((s, i) => s + Number(i.preco || 0), 0),
+    [items],
+  )
 
   async function handleStatusChange(status: AppointmentStatus) {
     if (!appointment) return
-
     setLoading(true)
     setError(null)
     try {
@@ -48,10 +92,55 @@ export function CheckinModal({ appointment, open, onClose, onUpdated }: CheckinM
     }
   }
 
+  async function handleCheckout() {
+    if (!appointment) return
+    onClose()
+    navigate({
+      to: '/admin/financeiro',
+      search: { agendamentoId: appointment.id },
+    })
+  }
+
+  async function handleAddService() {
+    if (!appointment || !addServiceId) return
+    setLoading(true)
+    setError(null)
+    try {
+      await addServicoAoAgendamento(appointment.id, addServiceId)
+      setItems(await ensureAgendamentoServicos(appointment.id))
+      setAddServiceId('')
+      onUpdated?.(appointment)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erro ao adicionar serviço')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleRemoveItem(itemId: string) {
+    if (!appointment) return
+    if (items.length <= 1) {
+      setError('A comanda precisa ter pelo menos um serviço')
+      return
+    }
+    setLoading(true)
+    setError(null)
+    try {
+      await removeServicoDoAgendamento(itemId, appointment.id)
+      setItems(await ensureAgendamentoServicos(appointment.id))
+      onUpdated?.(appointment)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erro ao remover serviço')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   if (!appointment) return null
 
   const canConfirm = appointment.status === 'pendente'
-  const canComplete = appointment.status === 'confirmado'
+  const canCheckout =
+    appointment.status === 'pendente' || appointment.status === 'confirmado'
   const canCancel = appointment.status === 'pendente' || appointment.status === 'confirmado'
 
   return (
@@ -89,12 +178,6 @@ export function CheckinModal({ appointment, open, onClose, onUpdated }: CheckinM
         <Stack gap="xs">
           <Group justify="space-between">
             <Text size="sm" c="dimmed">
-              {t('checkin.service')}
-            </Text>
-            <Text size="sm">{appointment.servicos?.nome ?? '—'}</Text>
-          </Group>
-          <Group justify="space-between">
-            <Text size="sm" c="dimmed">
               {t('checkin.barber')}
             </Text>
             <Text size="sm">{appointment.barbeiros?.nome ?? '—'}</Text>
@@ -107,19 +190,65 @@ export function CheckinModal({ appointment, open, onClose, onUpdated }: CheckinM
           </Group>
           <Group justify="space-between">
             <Text size="sm" c="dimmed">
-              {t('checkin.price')}
-            </Text>
-            <Text size="sm" fw={700} c="gold">
-              {formatCurrency(Number(appointment.servicos?.preco ?? 0))}
-            </Text>
-          </Group>
-          <Group justify="space-between">
-            <Text size="sm" c="dimmed">
               {t('checkin.status')}
             </Text>
             <Badge color={statusColor[appointment.status]} variant="light">
               {t(`status.${appointment.status}`)}
             </Badge>
+          </Group>
+        </Stack>
+
+        <Stack gap="xs">
+          <Text size="sm" fw={600} c="gold">
+            Serviços da comanda
+          </Text>
+          {items.map((item) => (
+            <Group key={item.id} justify="space-between" wrap="nowrap">
+              <Text size="sm" style={{ flex: 1 }}>
+                {item.servicos?.nome || 'Serviço'}
+              </Text>
+              <Text size="sm" c="gold">
+                {formatCurrency(Number(item.preco))}
+              </Text>
+              <ActionIcon
+                variant="subtle"
+                color="red"
+                disabled={loading || items.length <= 1}
+                onClick={() => void handleRemoveItem(item.id)}
+              >
+                <Trash2 size={14} />
+              </ActionIcon>
+            </Group>
+          ))}
+          <Group align="flex-end" grow>
+            <NativeSelect
+              label="Adicionar serviço"
+              value={addServiceId}
+              onChange={(e) => setAddServiceId(e.currentTarget.value)}
+              data={[
+                { value: '', label: 'Selecione…' },
+                ...services.map((s) => ({
+                  value: s.id,
+                  label: `${s.nome} — ${formatCurrency(Number(s.preco))}`,
+                })),
+              ]}
+            />
+            <Button
+              color="gold"
+              c="#0A0A0A"
+              disabled={!addServiceId || loading}
+              onClick={() => void handleAddService()}
+            >
+              Incluir
+            </Button>
+          </Group>
+          <Group justify="space-between">
+            <Text size="sm" c="dimmed">
+              Total
+            </Text>
+            <Text size="sm" fw={700} c="gold">
+              {formatCurrency(total || Number(appointment.servicos?.preco ?? 0))}
+            </Text>
           </Group>
         </Stack>
 
@@ -141,9 +270,9 @@ export function CheckinModal({ appointment, open, onClose, onUpdated }: CheckinM
               {t('checkin.confirmPresence')}
             </Button>
           )}
-          {canComplete && (
-            <Button flex={1} color="teal" loading={loading} onClick={() => handleStatusChange('concluido')}>
-              {t('checkin.completeService')}
+          {canCheckout && (
+            <Button flex={1} color="teal" loading={loading} onClick={handleCheckout}>
+              Check-out
             </Button>
           )}
           {canCancel && (

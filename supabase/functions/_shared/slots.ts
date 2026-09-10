@@ -127,6 +127,17 @@ function parseHoursRange(raw: string | null | undefined): { open: string; close:
   return { open, close }
 }
 
+/** Consistência de horário do barbeiro: fechado ou com abertura+fechamento. */
+export function isValidBarberSchedule(schedule: {
+  fechado?: boolean | null
+  abertura?: string | null
+  fechamento?: string | null
+} | null | undefined): boolean {
+  if (!schedule || schedule.fechado) return false
+  if (!schedule.abertura || !schedule.fechamento) return false
+  return true
+}
+
 function toBrtMs(ymd: string, hm: string): number {
   return new Date(`${ymd}T${hm.length === 5 ? `${hm}:00` : hm}-03:00`).getTime()
 }
@@ -216,10 +227,10 @@ export async function listBookableBarbers(
     const bh = hoursByBarber.get(b.id)
     let work: { open: string; close: string } | null = shopRange
     if (hasCustomHours.has(b.id)) {
-      if (!bh || bh.fechado || !bh.abertura || !bh.fechamento) continue
-      work = { open: String(bh.abertura).slice(0, 5), close: String(bh.fechamento).slice(0, 5) }
+      if (!isValidBarberSchedule(bh || null)) continue
+      work = { open: String(bh!.abertura).slice(0, 5), close: String(bh!.fechamento).slice(0, 5) }
     } else if (bh) {
-      if (bh.fechado || !bh.abertura || !bh.fechamento) continue
+      if (!isValidBarberSchedule(bh)) continue
       work = { open: String(bh.abertura).slice(0, 5), close: String(bh.fechamento).slice(0, 5) }
     }
     if (!work) continue

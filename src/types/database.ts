@@ -65,7 +65,7 @@ export interface Appointment {
   status: AppointmentStatus
   valor?: number | null
   created_at: string
-  barbeiros?: Pick<Barber, 'nome'> | null
+  barbeiros?: Pick<Barber, 'nome' | 'foto_url'> | null
   servicos?: Pick<Service, 'nome' | 'duracao_minutos' | 'preco'> | null
   clientes?: Pick<Client, 'nome' | 'email'> | null
 }

@@ -22,7 +22,8 @@ import {
   isPlausiblePersonName,
   isBookingStep,
   logBotEvent,
-  isShopOpenNow,
+  getShopHoursPhase,
+  shopHoursStatusNotice,
   closedShopNotice,
   formatServicePriceList,
   askNameAgainText,
@@ -210,16 +211,11 @@ function jidToPhone(raw: unknown): string {
   return phone
 }
 
-/**
- * Destino da resposta = conversa (chatid), NUNCA owner da instância.
- * payload.phone / payload.owner costumam ser o número conectado (você) — não o cliente.
- */
-function extractPhone(msg: UazMessage, payload: Record<string, unknown>): string {
+function collectPhoneCandidates(msg: UazMessage, payload: Record<string, unknown>): unknown[] {
   const chat =
     payload.chat && typeof payload.chat === 'object'
       ? (payload.chat as Record<string, unknown>)
       : {}
-
   const key =
     msg.key && typeof msg.key === 'object'
       ? (msg.key as Record<string, unknown>)
@@ -232,25 +228,48 @@ function extractPhone(msg: UazMessage, payload: Record<string, unknown>): string
     data.key && typeof data.key === 'object'
       ? (data.key as Record<string, unknown>)
       : {}
-
-  // chatid = conversa com quem deve receber a resposta
-  const candidates: unknown[] = [
-    msg.chatid,
+  const nested =
+    payload.message && typeof payload.message === 'object'
+      ? (payload.message as Record<string, unknown>)
+      : {}
+  return [
     msg.sender_pn,
-    msg.sender,
+    (msg as Record<string, unknown>).senderPn,
+    (msg as Record<string, unknown>).senderPN,
+    (msg as Record<string, unknown>).pn,
+    (msg as Record<string, unknown>).wid,
+    (msg as Record<string, unknown>).remoteJid,
+    payload.sender_pn,
+    payload.senderPn,
+    chat.sender_pn,
     key.remoteJid,
     dataKey.remoteJid,
     msg.from,
     data.from,
     chat.wa_chatid,
     chat.phone,
+    chat.pn,
     chat.id,
-    // NÃO usar payload.owner / payload.phone / instance phone
+    data.sender_pn,
+    data.senderPn,
+    nested.sender_pn,
+    msg.sender,
+    msg.chatid,
   ]
+}
 
-  for (const c of candidates) {
+/**
+ * Destino da resposta = conversa. Prefere sender_pn (número real) ao @lid.
+ */
+function extractPhone(msg: UazMessage, payload: Record<string, unknown>): string {
+  for (const c of collectPhoneCandidates(msg, payload)) {
     const phone = jidToPhone(c)
     if (phone) return phone
+  }
+  for (const c of [msg.chatid, msg.sender, payload.chatid, payload.sender]) {
+    if (c == null) continue
+    const s = String(c).trim()
+    if (s.includes('@lid')) return s.split(':')[0]
   }
   return ''
 }
@@ -379,12 +398,33 @@ function withLocalHoursNotice(text: string): string {
   return `${base}\n\n${notice}`
 }
 
-/** Fora do expediente: avisa e segue o papo — nunca silencia (sem depender do banco). */
-async function withClosedShopNotice(
-  _db: ReturnType<typeof getServiceClient>,
+async function appendShopHoursNotice(
+  db: ReturnType<typeof getServiceClient>,
   text: string,
 ): Promise<string> {
-  return withLocalHoursNotice(text)
+  try {
+    const hours = await getShopHoursPhase(db)
+    const notice = shopHoursStatusNotice(hours.phase, hours.open || '08:30')
+    if (!notice) return text
+    const n = normalizeMatch(text)
+    if (n.includes('expediente') || n.includes('08:30') || n.includes('08h30') || n.includes('fechados')) {
+      return text
+    }
+    return `${text}\n\n${notice}`
+  } catch {
+    return text
+  }
+}
+
+/** Fora do expediente: avisa e segue o papo — nunca silencia. */
+async function withClosedShopNotice(
+  db: ReturnType<typeof getServiceClient>,
+  text: string,
+): Promise<string> {
+  const base = String(text || '').trim() || FALLBACK_OUTBOUND
+  const withDb = await appendShopHoursNotice(db, base)
+  if (withDb !== base) return withDb
+  return withLocalHoursNotice(base)
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
@@ -1273,11 +1313,7 @@ async function handlePureGreeting(
     console.warn('greeting appointments', e)
   }
   let hi = greetingWithAppointments(leadName, shop, appts)
-  try {
-    if (!(await isShopOpenNow(db))) hi = `${hi}\n\n${closedShopNotice()}`
-  } catch {
-    /* ignore */
-  }
+  hi = await appendShopHoursNotice(db, hi)
   try {
     const prev = Array.isArray(session.context.history)
       ? (session.context.history as ChatMessage[])
@@ -1363,22 +1399,28 @@ async function processWithMimo(
     }
   }
 
-  let shopOpen = true
+  let shopPhase: Awaited<ReturnType<typeof getShopHoursPhase>>['phase'] = 'open'
+  let shopOpenHm = '08:30'
   try {
-    shopOpen = await isShopOpenNow(db)
+    const hours = await getShopHoursPhase(db)
+    shopPhase = hours.phase
+    if (hours.open) shopOpenHm = hours.open
   } catch {
-    shopOpen = true
+    shopPhase = 'open'
   }
 
+  const offHoursNotice = shopHoursStatusNotice(shopPhase, shopOpenHm)
   const bookingLocked = !greetingTurn && isBookingStep(session.step)
   const system = systemPromptBarber() +
     `\nREGRAS ABSOLUTAS DESTA CONVERSA: se já tiver serviço + data + horário livre, chame create_appointment nesta rodada. PROIBIDO pedir confirmação. PROIBIDO pedir avaliação, nota de 1 a 5, feedback ou comentário sobre a experiência. Depois de agendar, envie só mensagem_cliente (2 a 3 frases).` +
     (bookingLocked
       ? `\nPASSO TRAVADO: ${session.step}. Não peça o nome. Não mude de assunto. Continue este passo.`
       : '') +
-    (shopOpen
-      ? ''
-      : `\nLOJA FECHADA AGORA: ${closedShopNotice()} Avise isso e continue o agendamento para amanhã/outras datas.`) +
+    (offHoursNotice
+      ? shopPhase === 'before_open'
+        ? `\nFORA DO EXPEDIENTE (madrugada/antes de abrir): ${offHoursNotice} NÃO diga que o expediente já encerrou. Convide a agendar para hoje a partir das ${shopOpenHm.replace(':', 'h')}.`
+        : `\nFORA DO EXPEDIENTE: ${offHoursNotice} Avise isso e continue o agendamento para ${shopPhase === 'after_close' ? 'amanhã/outras datas' : 'outro dia disponível'}.`
+      : '') +
     (ctxLines.length
       ? `\nContexto parcial já conhecido desta conversa (não pergunte de novo se já souber):\n- ${ctxLines.join('\n- ')}`
       : '') +
@@ -1756,11 +1798,7 @@ async function processMessage(
         /* ignore */
       }
       let hi = afterNameGreeting(leadName, shop, appts)
-      try {
-        if (!(await isShopOpenNow(db))) hi = `${hi}\n\n${closedShopNotice()}`
-      } catch {
-        /* ignore */
-      }
+      hi = await appendShopHoursNotice(db, hi)
       const prev = Array.isArray(session.context.history)
         ? (session.context.history as ChatMessage[])
         : []
@@ -1804,11 +1842,7 @@ async function processMessage(
           /* ignore */
         }
         let hi = afterNameGreeting(leadName, shop, appts)
-        try {
-          if (!(await isShopOpenNow(db))) hi = `${hi}\n\n${closedShopNotice()}`
-        } catch {
-          /* ignore */
-        }
+        hi = await appendShopHoursNotice(db, hi)
         await saveSession(db, phone, 'chat', {
           history: [
             { role: 'user', content: trimmed },

@@ -270,6 +270,24 @@ export function closedShopNotice(): string {
   return 'O expediente de atendimento de hoje já está encerrado. Posso agendar para amanhã ou outra data disponível, se quiser. Vamos agendar?'
 }
 
+/** Antes da abertura (00:00–abertura): dia ainda não começou. */
+export function beforeOpenNotice(openHm = '08:30'): string {
+  const label = openHm.replace(':', 'h')
+  return `O atendimento presencial começa às ${label}. O dia ainda está começando — posso já listar os horários vagos de hoje a partir das ${label} e deixar o agendamento marcado. Vamos agendar?`
+}
+
+export type ShopHoursPhase = 'open' | 'before_open' | 'after_close' | 'closed_day'
+
+/** Aviso correto conforme a fase do expediente (não misturar “encerrado” com “ainda vai abrir”). */
+export function shopHoursStatusNotice(phase: ShopHoursPhase, openHm = '08:30'): string | null {
+  if (phase === 'open') return null
+  if (phase === 'before_open') return beforeOpenNotice(openHm)
+  if (phase === 'closed_day') {
+    return 'Hoje estamos fechados. Posso agendar para outro dia disponível, se quiser. Vamos agendar?'
+  }
+  return closedShopNotice()
+}
+
 /** Cumprimento da barbearia — Diva, sem se dizer assistente/bot. */
 export function greetingText(
   senderName?: string | null,
@@ -415,7 +433,11 @@ function parseHmRange(raw: string): { open: string; close: string } | null {
 }
 
 /** Expediente da loja agora (America/Sao_Paulo), com horários salvos em Configurações. */
-export async function isShopOpenNow(db: SupabaseClient): Promise<boolean> {
+export async function getShopHoursPhase(db: SupabaseClient): Promise<{
+  phase: ShopHoursPhase
+  open: string | null
+  close: string | null
+}> {
   const info = await fetchShopPublicInfo(db)
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Sao_Paulo',
@@ -438,10 +460,17 @@ export async function isShopOpenNow(db: SupabaseClient): Promise<boolean> {
     : wd.startsWith('fri') || wd === 'sex' ? 'sexta'
     : 'sabado'
   const range = parseHmRange(info.horarios[key as keyof typeof info.horarios])
-  if (!range) return false
+  if (!range) return { phase: 'closed_day', open: null, close: null }
   const hour = map.hour === '24' ? '00' : map.hour
   const now = `${hour}:${map.minute}`
-  return now >= range.open && now < range.close
+  if (now < range.open) return { phase: 'before_open', open: range.open, close: range.close }
+  if (now >= range.close) return { phase: 'after_close', open: range.open, close: range.close }
+  return { phase: 'open', open: range.open, close: range.close }
+}
+
+export async function isShopOpenNow(db: SupabaseClient): Promise<boolean> {
+  const { phase } = await getShopHoursPhase(db)
+  return phase === 'open'
 }
 
 /** Cliente perguntando endereço / funcionamento (não horário de agendamento). */
