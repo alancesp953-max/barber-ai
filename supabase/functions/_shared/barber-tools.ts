@@ -26,7 +26,7 @@ type: 'function',
 function: {
 name: 'list_services',
 description: 'Lista serviços da barbearia com preço e duração',
-parameters: { type: 'object', properties: {}, additionalProperties: false },
+parameters: { type: 'object', properties: {} },
 },
 },
 {
@@ -50,7 +50,7 @@ function: {
 name: 'get_shop_hours',
 description:
 'Retorna endereço e horários de funcionamento da barbearia. Use quando o cliente perguntar onde fica, endereço, localização, funcionamento, que horas abre/fecha.',
-parameters: { type: 'object', properties: {}, additionalProperties: false },
+parameters: { type: 'object', properties: {} },
 },
 },
 {
@@ -67,6 +67,7 @@ servico_id: { type: 'string', description: 'UUID do serviço' },
 barbeiro_id: { type: 'string', description: 'UUID do barbeiro (opcional)' },
 },
 required: ['data', 'servico_id'],
+additionalProperties: false,
 },
 },
 },
@@ -86,6 +87,7 @@ barbeiro_id: { type: 'string', description: 'opcional' },
 cliente_nome: { type: 'string', description: 'nome do cliente se souber' },
 },
 required: ['servico_id', 'data', 'horario'],
+additionalProperties: false,
 },
 },
 },
@@ -94,7 +96,7 @@ type: 'function',
 function: {
 name: 'list_my_appointments',
 description: 'Lista agendamentos futuros do cliente do telefone atual',
-parameters: { type: 'object', properties: {}, additionalProperties: false },
+parameters: { type: 'object', properties: {} },
 },
 },
 {
@@ -108,6 +110,7 @@ properties: {
 agendamento_id: { type: 'string' },
 },
 required: ['agendamento_id'],
+additionalProperties: false,
 },
 },
 },
@@ -318,7 +321,8 @@ try {
   const lastSlots = Array.isArray(sess.context.last_slots)
     ? (sess.context.last_slots as string[]).map((h) => String(h).slice(0, 5))
     : []
-  if (lastSlots.length && !lastSlots.includes(horario)) {
+  const lastSlotsData = sess.context.last_slots_data ? String(sess.context.last_slots_data) : ''
+  if (lastSlots.length && lastSlotsData === data && !lastSlots.includes(horario)) {
     logDiva('create_appointment — horário fora da última lista de vagas', {
       barbeiro: barbeiro_id,
       data,
@@ -455,6 +459,7 @@ return JSON.stringify({ error: `tool desconhecida: ${name}` })
 }
 } catch (e) {
 logDivaError('runBarberTool — exceção', { ferramenta: name, error: e instanceof Error ? e.message : String(e) })
+console.error('[BARBER-TOOL] exceção', name, e instanceof Error ? e.message : String(e), e instanceof Error ? e.stack : null)
 return JSON.stringify({ error: e instanceof Error ? e.message : String(e) })
 }
 }
@@ -507,6 +512,7 @@ Seu objetivo é prestar um atendimento ágil, educado, objetivo e humanizado pel
 - **Tratamento Fora de Expediente:**
   - **Entre 19h30 e 23h59:** Avise que o expediente de hoje encerrou às 19h30 e convide o cliente a agendar para os próximos dias (ou amanhã a partir das 08h30). Nunca diga que o dia “ainda está começando” nesse intervalo.
   - **Entre 00h00 e 08h29:** Avise que o atendimento inicia às 08h30 e sugira já deixar horário para hoje a partir das 08h30. Nunca diga que o expediente “já encerrado” nesse intervalo.
+  - **NUNCA recuse agendar** só porque a loja está fechada agora. Fora do expediente, continue o fluxo normalmente para amanhã ou outra data livre.
 
 ---
 

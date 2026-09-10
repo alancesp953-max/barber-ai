@@ -446,6 +446,25 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T
   })
 }
 
+/** supabase-js rpc() não é Promise nativa — nunca encadear .catch() nele. */
+async function rpcTry(
+  db: ReturnType<typeof getServiceClient>,
+  fn: string,
+  args: Record<string, unknown>,
+): Promise<boolean> {
+  try {
+    const { error } = await db.rpc(fn, args)
+    if (error) {
+      console.warn('[RPC]', fn, error.message)
+      return false
+    }
+    return true
+  } catch (e) {
+    console.warn('[RPC]', fn, e instanceof Error ? e.message : String(e))
+    return false
+  }
+}
+
 /** Envio imediato via UAZAPI: POST /send/text, header token, body { number, text }. */
 async function sendWhatsappMessage(
   phone: string,
@@ -540,6 +559,9 @@ async function reply(
     }
     uaz = resolved.config
   }
+  const sent = await sendWhatsappMessage(phone, out, uaz)
+  if (sent) return
+  console.error('[REPLY] sendWhatsappMessage falhou — tentando humanReply', { phone: phone.slice(-4) })
   const result = await humanReply(phone, out, uaz)
   if (!result.ok) {
     console.error('reply send failed', result.error)
@@ -687,6 +709,128 @@ function extractHorarioHint(text: string, slots?: string[]): string | null {
   return null
 }
 
+function addDaysYmd(ymd: string, days: number): string {
+  const [y, m, d] = ymd.split('-').map(Number)
+  const dt = new Date(Date.UTC(y, (m || 1) - 1, (d || 1) + days))
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`
+}
+
+function parseUtteranceDate(text: string): string | null {
+  const t = normalizeMatch(text)
+  const today = todaySaoPaulo()
+  if (/\bhoje\b/.test(t)) return today
+  if (/\bamanha\b/.test(t)) return addDaysYmd(today, 1)
+  const names = ['domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado']
+  const hit = names.findIndex((n) => t.includes(n))
+  if (hit >= 0) {
+    const [y, m, d] = today.split('-').map(Number)
+    const current = new Date(Date.UTC(y, (m || 1) - 1, d || 1)).getUTCDay()
+    const add = (hit - current + 7) % 7
+    return addDaysYmd(today, add)
+  }
+  return parseDateBR(text)
+}
+
+async function pickDefaultService(
+  db: ReturnType<typeof getServiceClient>,
+  text: string,
+): Promise<{ id: string; nome: string } | null> {
+  const { data, error } = await db
+    .from('servicos')
+    .select('id, nome, ativo')
+    .order('nome')
+  if (error) {
+    console.error('[BOOK-DIRECT] listar serviços', error.message)
+    return null
+  }
+  const list = (data || []).filter((s: { ativo?: boolean }) => s.ativo !== false)
+  if (!list.length) return null
+  const named = matchByName(text, list)
+  if (named) return { id: named.id, nome: named.nome }
+  const corte = list.find((s: { nome: string }) => normalizeMatch(s.nome).includes('corte'))
+  const pick = corte || list[0]
+  return { id: pick.id, nome: pick.nome }
+}
+
+/** Quando a IA estoura timeout, tenta agendar com o que o cliente já mandou. */
+async function tryDirectBookFromUtterance(
+  db: ReturnType<typeof getServiceClient>,
+  phone: string,
+  text: string,
+  leadName?: string | null,
+): Promise<string | null> {
+  const fromSession = await tryAutoCreateAppointment(db, phone, text, '', leadName)
+  if (fromSession) return fromSession
+
+  const horario = extractHorarioHint(text)
+  const data = parseUtteranceDate(text)
+  if (!horario || !data) return null
+
+  try {
+    const service = await pickDefaultService(db, text)
+    if (!service) {
+      console.error('[BOOK-DIRECT] sem serviço cadastrado')
+      return null
+    }
+    let barbeiro_id: string | undefined
+    try {
+      const barbers = await listBookableBarbers(db, data)
+      const matched = matchByName(text, barbers)
+      if (matched) barbeiro_id = matched.id
+    } catch (e) {
+      console.warn('[BOOK-DIRECT] barbeiros', e instanceof Error ? e.message : String(e))
+    }
+
+    const { slots, error } = await fetchAvailableSlots(db, data, service.id, barbeiro_id || null)
+    if (error) console.error('[BOOK-DIRECT] slots', error)
+    const hm = horario.slice(0, 5)
+    if (!slots.includes(hm)) {
+      if (slots.length) {
+        return [
+          `O horário ${hm} não está livre em ${formatDateBR(data)}.`,
+          formatSlotList(data, slots),
+        ].join('\n')
+      }
+      return `Sem horários livres em ${formatDateBR(data)} às ${hm}. Quer tentar outra data?`
+    }
+
+    try {
+      await saveSession(db, phone, 'chat', {
+        last_slots: slots,
+        last_slots_data: data,
+        last_slots_servico_id: service.id,
+        last_slots_barbeiro_id: barbeiro_id || null,
+      })
+    } catch {
+      /* segue o create */
+    }
+
+    const raw = await runBarberTool(
+      db,
+      phone,
+      'create_appointment',
+      JSON.stringify({
+        servico_id: service.id,
+        data,
+        horario: hm,
+        barbeiro_id,
+        cliente_nome: leadName || undefined,
+      }),
+      leadName || undefined,
+    )
+    const parsed = JSON.parse(raw) as { ok?: boolean; mensagem_cliente?: string; error?: string }
+    if (parsed.ok && parsed.mensagem_cliente) {
+      await resetSession(db, phone)
+      return parsed.mensagem_cliente
+    }
+    console.error('[BOOK-DIRECT] create_appointment recusou', parsed.error || raw.slice(0, 300))
+    if (parsed.error) return `Não consegui agendar: ${parsed.error}`
+  } catch (e) {
+    console.error('[BOOK-DIRECT] exceção', e instanceof Error ? e.message : String(e), e instanceof Error ? e.stack : null)
+  }
+  return null
+}
+
 async function tryAutoCreateAppointment(
   db: ReturnType<typeof getServiceClient>,
   phone: string,
@@ -743,9 +887,15 @@ async function handleFallbackIntent(
 ): Promise<string> {
   const t = normalizeMatch(text)
 
+  const bookedNow = await tryDirectBookFromUtterance(db, phone, text)
+  if (bookedNow) return bookedNow
+
   if (
     t.includes('agendar') ||
     t.includes('marcar') ||
+    t.includes('agenda') ||
+    t === 'vamos' ||
+    t.startsWith('vamos ') ||
     t.includes('quero marcar') ||
     (t.includes('horario') && !t.includes('meus') && !t.includes('ver') && !wantsShopInfo(text))
   ) {
@@ -1348,7 +1498,10 @@ async function processWithMimo(
   leadName?: string | null,
 ): Promise<string | null> {
   const config = await loadMimoConfig(db)
-  if (!config) return null
+  if (!config) {
+    console.error('[MIMO] config ausente — sem MIMO_API_KEY / whatsapp_secrets.mimo_api_key. Wizard assume o papo.')
+    return null
+  }
 
   const session = await getSession(db, phone)
   const prevHistory = Array.isArray(session.context.history)
@@ -1412,7 +1565,7 @@ async function processWithMimo(
   const offHoursNotice = shopHoursStatusNotice(shopPhase, shopOpenHm)
   const bookingLocked = !greetingTurn && isBookingStep(session.step)
   const system = systemPromptBarber() +
-    `\nREGRAS ABSOLUTAS DESTA CONVERSA: se já tiver serviço + data + horário livre, chame create_appointment nesta rodada. PROIBIDO pedir confirmação. PROIBIDO pedir avaliação, nota de 1 a 5, feedback ou comentário sobre a experiência. Depois de agendar, envie só mensagem_cliente (2 a 3 frases).` +
+    `\nREGRAS ABSOLUTAS DESTA CONVERSA: se já tiver serviço + data + horário livre, chame create_appointment nesta rodada. PROIBIDO pedir confirmação. PROIBIDO pedir avaliação, nota de 1 a 5, feedback ou comentário sobre a experiência. Depois de agendar, envie só mensagem_cliente (2 a 3 frases). Fora do expediente, AINDA ASSIM agende (para amanhã ou outra data). Nunca recuse só porque a loja está fechada agora.` +
     (bookingLocked
       ? `\nPASSO TRAVADO: ${session.step}. Não peça o nome. Não mude de assunto. Continue este passo.`
       : '') +
@@ -1456,16 +1609,22 @@ async function processWithMimo(
     }
   }
 
+  const MIMO_ROUND_MS = 20000
+  const MIMO_MAX_ROUNDS = 4
   let usedTools: string[] = []
-  for (let round = 0; round < 8; round++) {
-    const res = await mimoChat({
-      config,
-      messages,
-      tools: greetingTurn ? undefined : BARBER_TOOLS,
-      tool_choice: greetingTurn ? 'none' : (round === 0 ? toolChoice : 'auto'),
-      temperature: 0.4,
-      max_completion_tokens: 500,
-    })
+  for (let round = 0; round < MIMO_MAX_ROUNDS; round++) {
+    const res = await withTimeout(
+      mimoChat({
+        config,
+        messages,
+        tools: greetingTurn ? undefined : BARBER_TOOLS,
+        tool_choice: greetingTurn ? 'none' : (round === 0 ? toolChoice : 'auto'),
+        temperature: 0.4,
+        max_completion_tokens: 500,
+      }),
+      MIMO_ROUND_MS,
+      { ok: false as const, error: `timeout_mimo_${MIMO_ROUND_MS}ms` },
+    )
 
     if (!res.ok || !res.message) {
       logDivaError('MiMo error — sem resposta da IA (fallback possível)', {
@@ -1473,7 +1632,14 @@ async function processWithMimo(
         round,
         error: res.error ?? null,
       })
-      console.error('MiMo error', res.error)
+      console.error('[MIMO] falha/timeout', {
+        phone: phone.slice(-4),
+        round,
+        error: res.error ?? null,
+        model: config.model,
+        baseUrl: config.baseUrl,
+        hasKey: Boolean(config.apiKey),
+      })
       return null
     }
 
@@ -1518,7 +1684,25 @@ async function processWithMimo(
           continue
         }
         // tools usam o nome salvo do lead, não o perfil WhatsApp
-        const toolResult = await runBarberTool(db, phone, fnName, fnArgs, leadName || undefined)
+        let toolResult = ''
+        try {
+          toolResult = await withTimeout(
+            runBarberTool(db, phone, fnName, fnArgs, leadName || undefined),
+            8000,
+            JSON.stringify({ error: 'timeout_tool', ferramenta: fnName, ok: false }),
+          )
+        } catch (e) {
+          console.error('[MIMO-TOOL] exceção', {
+            phone: phone.slice(-4),
+            ferramenta: fnName,
+            error: e instanceof Error ? e.message : String(e),
+            stack: e instanceof Error ? e.stack : null,
+          })
+          toolResult = JSON.stringify({
+            error: e instanceof Error ? e.message : String(e),
+            ok: false,
+          })
+        }
         logDiva('resultado da ferramenta devolvido à IA', {
           phone: phone.slice(-4),
           ferramenta: fnName,
@@ -1527,7 +1711,7 @@ async function processWithMimo(
         })
         messages.push({
           role: 'tool',
-          tool_call_id: tc.id,
+          tool_call_id: tc.id || `tool_${round}_${fnName}`,
           name: fnName,
           content: toolResult,
         })
@@ -1753,16 +1937,35 @@ async function processMessage(
       data: session.context.data ?? null,
       horario: session.context.horario ?? null,
     })
-    return dispatchWizard(db, phone, trimmed, session, leadName)
+    try {
+      return await withTimeout(
+        dispatchWizard(db, phone, trimmed, session, leadName),
+        8000,
+        FALLBACK_OUTBOUND,
+      )
+    } catch (e) {
+      console.error('[WIZARD] passo travado falhou', {
+        phone: phone.slice(-4),
+        step: session.step,
+        error: e instanceof Error ? e.message : String(e),
+      })
+      return FALLBACK_OUTBOUND
+    }
   }
 
   let namedBarber = false
   try {
-    const cached = Array.isArray(session.context.last_barbers)
-      ? (session.context.last_barbers as { nome: string }[])
-      : []
-    const barbers = cached.length ? cached : await listBookableBarbers(db)
-    namedBarber = Boolean(matchByName(trimmed, barbers))
+    namedBarber = await withTimeout(
+      (async () => {
+        const cached = Array.isArray(session.context.last_barbers)
+          ? (session.context.last_barbers as { nome: string }[])
+          : []
+        const barbers = cached.length ? cached : await listBookableBarbers(db)
+        return Boolean(matchByName(trimmed, barbers))
+      })(),
+      2500,
+      false,
+    )
   } catch {
     namedBarber = false
   }
@@ -1905,8 +2108,20 @@ async function processMessage(
 
   if (!isBookingStep(step)) {
     try {
-      const ai = await processWithMimo(db, phone, trimmed, leadName)
+      const ai = await withTimeout(
+        processWithMimo(db, phone, trimmed, leadName),
+        32000,
+        null,
+      )
       if (ai) return ai
+      const direct = await tryDirectBookFromUtterance(db, phone, trimmed, leadName)
+      if (direct) {
+        logDiva('fallback inteligente — agendou sem MiMo', {
+          phone: phone.slice(-4),
+          texto: trimmed.slice(0, 120),
+        })
+        return direct
+      }
       logDiva('fallback: IA não devolveu resposta — usando wizard', {
         phone: phone.slice(-4),
         step,
@@ -1919,11 +2134,24 @@ async function processMessage(
         phone: phone.slice(-4),
         error: e instanceof Error ? e.message : String(e),
       })
-      console.error('processWithMimo failed', e)
+      console.error('processWithMimo failed', e instanceof Error ? e.message : String(e), e instanceof Error ? e.stack : null)
     }
   }
 
-  const fallback = await dispatchWizard(db, phone, trimmed, session, leadName)
+  let fallback = ''
+  try {
+    fallback = await withTimeout(
+      dispatchWizard(db, phone, trimmed, session, leadName),
+      8000,
+      FALLBACK_OUTBOUND,
+    )
+  } catch (e) {
+    console.error('[WIZARD] falhou — fallback', {
+      phone: phone.slice(-4),
+      error: e instanceof Error ? e.message : String(e),
+      stack: e instanceof Error ? e.stack : null,
+    })
+  }
   if (!fallback) {
     logDiva('fallback: wizard também sem resposta', { phone: phone.slice(-4), step })
     logBotEvent('bot_fallback', { reason: 'fallback_intent', phone: phone.slice(-4), step })
@@ -2116,7 +2344,17 @@ Deno.serve(async (req) => {
         continue
       }
 
-      await db.rpc('lock_whatsapp_phone', { p_phone: phone }).catch(() => null)
+      // Lock com timeout: lock preso não pode silenciar agendamento (saudação já pulava isso).
+      const locked = await withTimeout(
+        rpcTry(db, 'lock_whatsapp_phone', { p_phone: phone }),
+        1500,
+        false,
+      )
+      if (!locked) {
+        console.warn('[WEBHOOK] lock_whatsapp_phone timeout/falha — seguindo sem lock', {
+          phone: phone.slice(-4),
+        })
+      }
       let shouldFlushBuffer = false
       try {
         if (ownerPhone && phone === ownerPhone) {
@@ -2143,8 +2381,12 @@ Deno.serve(async (req) => {
           }
         }
 
-        await beginTyping(phone, db, 15000)
-        const inbound = await consumeInboundForProcess(db, phone, inboundRaw)
+        await beginTyping(phone, db, 8000)
+        const inbound = await withTimeout(
+          consumeInboundForProcess(db, phone, inboundRaw),
+          2500,
+          inboundRaw,
+        )
         console.log('[WEBHOOK] após debounce', {
           phone: phone.slice(-4),
           inbound,
@@ -2167,13 +2409,31 @@ Deno.serve(async (req) => {
         }
         let answer = FALLBACK_OUTBOUND
         try {
-          answer = String(await processMessage(db, phone, inbound) || '').trim() || FALLBACK_OUTBOUND
+          answer = String(
+            await withTimeout(
+              processMessage(db, phone, inbound),
+              40000,
+              FALLBACK_OUTBOUND,
+            ) || '',
+          ).trim() || FALLBACK_OUTBOUND
         } catch (e) {
-          console.error('[WEBHOOK] processMessage falhou — enviando fallback', e)
+          console.error('[WEBHOOK] processMessage falhou — enviando fallback', {
+            phone: phone.slice(-4),
+            inbound: inbound.slice(0, 120),
+            error: e instanceof Error ? e.message : String(e),
+            stack: e instanceof Error ? e.stack : null,
+          })
           answer = FALLBACK_OUTBOUND
         }
-        answer = await withClosedShopNotice(db, answer)
-        await reply(phone, answer, db, uazCfg, { senderName: leadName, userText: inbound })
+        answer = await withTimeout(withClosedShopNotice(db, answer), 2500, answer)
+        try {
+          await reply(phone, answer, db, uazCfg, { senderName: leadName, userText: inbound })
+        } catch (sendErr) {
+          console.error('[WEBHOOK] reply falhou — sendWhatsappMessage direto', sendErr)
+          const rescue = withLocalHoursNotice(answer || FALLBACK_OUTBOUND)
+          const sent = await sendWhatsappMessage(phone, rescue, uazCfg)
+          if (!sent) throw sendErr
+        }
         results.push({ phone, ok: true, note: 'replied' })
       } catch (err) {
         console.error('[WEBHOOK] deliver error', {
@@ -2198,7 +2458,7 @@ Deno.serve(async (req) => {
         }
       } finally {
         if (shouldFlushBuffer) await clearDebounceBuffer(db, phone)
-        await db.rpc('unlock_whatsapp_phone', { p_phone: phone }).catch(() => null)
+        await rpcTry(db, 'unlock_whatsapp_phone', { p_phone: phone })
       }
     }
 
