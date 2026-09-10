@@ -9,6 +9,7 @@ import {
   formatServicePriceList,
   getSession,
   isKnownLeadName,
+  normalizeMatch,
   parseDateBR,
   saveSession,
 } from './db.ts'
@@ -25,7 +26,8 @@ export const BARBER_TOOLS: ToolDef[] = [
 type: 'function',
 function: {
 name: 'list_services',
-description: 'Lista serviços da barbearia com preço e duração',
+description:
+  'Serviços para agendamento: devolva SÓ as 3 opções principais (Corte de Cabelo, Barba Tradicional, Combo Corte e Barba). Adicionais (pezinho, sobrancelha etc.) só se o cliente pedir expressamente.',
 parameters: { type: 'object', properties: {} },
 },
 },
@@ -154,6 +156,119 @@ export function bookingSuccessText(opts: {
   return `Agendamento confirmado com sucesso! Seu ${servico}${who} está marcado para ${when} às ${hora}. Por favor, chegue com alguns minutos de antecedência para garantir o seu horário.`
 }
 
+export function isBookingSuccessMessage(text: string): boolean {
+  const n = String(text || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+  return n.includes('agendamento confirmado com sucesso')
+}
+
+/** Se a IA ou o rodapé de expediente se misturaram, fica só a confirmação curta. */
+export function isolateBookingSuccessMessage(text: string): string | null {
+  const raw = String(text || '').trim()
+  if (!isBookingSuccessMessage(raw)) return null
+  const m = raw.match(
+    /Agendamento confirmado com sucesso![\s\S]*?anteced[eê]ncia para garantir o seu hor[aá]rio\.?/i,
+  )
+  if (m) return m[0].replace(/[ \t]+/g, ' ').replace(/\s*\n+\s*/g, ' ').trim()
+  const first = raw.split(/\n\s*\n/)[0]?.trim()
+  return first || raw
+}
+
+export const MAIN_SERVICE_LABELS = [
+  'Corte de Cabelo',
+  'Barba Tradicional',
+  'Combo Corte e Barba',
+] as const
+
+export function mainServiceAskText(): string {
+  return [
+    'Qual serviço você quer?',
+    '',
+    '• Corte de Cabelo',
+    '• Barba Tradicional',
+    '• Combo Corte e Barba',
+  ].join('\n')
+}
+
+const EXTRA_SERVICE_RE =
+  /\b(pezinho|sobrancelha|pigmentac|hidratac|luzes|progressiva|selagem|botox|tingimento|colorac|platinado|relaxamento|sombra|design)\b/
+
+export function wantsExtraServices(text: string): boolean {
+  return EXTRA_SERVICE_RE.test(normalizeMatch(text))
+}
+
+export type MainServiceKind = 'corte' | 'barba' | 'combo'
+
+export function classifyMainServiceChoice(text: string): MainServiceKind | null {
+  const t = normalizeMatch(text)
+  if (!t) return null
+  if (t === '1' || t === '1.') return 'corte'
+  if (t === '2' || t === '2.') return 'barba'
+  if (t === '3' || t === '3.') return 'combo'
+  if (
+    /\bcombo\b/.test(t) ||
+    /corte\s+e\s+barba/.test(t) ||
+    /barba\s+e\s+corte/.test(t) ||
+    /\bos dois\b/.test(t) ||
+    /\bcompleto\b/.test(t)
+  ) {
+    return 'combo'
+  }
+  if (/\bcorte\b/.test(t) || /\bcabelo\b/.test(t)) return 'corte'
+  if (/\bbarba\b/.test(t)) return 'barba'
+  return null
+}
+
+export function matchMainServiceRow<T extends { nome: string }>(
+  kind: MainServiceKind,
+  services: T[],
+): T | null {
+  const n = (s: T) => normalizeMatch(s.nome)
+  if (kind === 'combo') {
+    return (
+      services.find((s) => n(s).includes('combo')) ||
+      services.find((s) => n(s).includes('corte') && n(s).includes('barba')) ||
+      null
+    )
+  }
+  if (kind === 'corte') {
+    return (
+      services.find((s) => n(s).includes('corte de cabelo')) ||
+      services.find((s) =>
+        n(s).includes('corte') &&
+        !n(s).includes('combo') &&
+        !n(s).includes('barba') &&
+        !n(s).includes('pezinho')
+      ) ||
+      null
+    )
+  }
+  return (
+    services.find((s) => n(s).includes('barba tradicional')) ||
+    services.find((s) => n(s).includes('barba') && !n(s).includes('combo') && !n(s).includes('corte')) ||
+    null
+  )
+}
+
+export function resolveMainServiceRows<T extends { id: string; nome: string }>(all: T[]): T[] {
+  const corte = matchMainServiceRow('corte', all)
+  const barba = matchMainServiceRow('barba', all)
+  const combo = matchMainServiceRow('combo', all)
+  return [corte, barba, combo].filter((s): s is T => Boolean(s))
+}
+
+const MAIN_SERVICE_KIND_LABEL: Record<MainServiceKind, string> = {
+  corte: 'Corte de Cabelo',
+  barba: 'Barba Tradicional',
+  combo: 'Combo Corte e Barba',
+}
+
+export function mainServiceDisplayName(kind: MainServiceKind): string {
+  return MAIN_SERVICE_KIND_LABEL[kind]
+}
+
 export function looksLikeConfirmationAsk(text: string): boolean {
   const n = String(text || '')
     .normalize('NFD')
@@ -205,7 +320,7 @@ switch (name) {
           .select('id, nome, preco, duracao_minutos, ativo')
           .order('nome')
         if (error) return JSON.stringify({ error: error.message })
-        const list = (data || [])
+        const all = (data || [])
           .filter((s: { ativo?: boolean }) => s.ativo !== false)
           .map((s) => ({
             id: s.id,
@@ -213,10 +328,25 @@ switch (name) {
             preco: Number(s.preco),
             duracao_minutos: s.duracao_minutos,
           }))
+        const principaisRows = resolveMainServiceRows(all)
+        const principaisIds = new Set(principaisRows.map((s) => s.id))
+        const adicionais = all.filter((s) => !principaisIds.has(s.id))
+        const tabela = [
+          '• Corte de Cabelo',
+          '• Barba Tradicional',
+          '• Combo Corte e Barba',
+        ].join('\n')
         return JSON.stringify({
-          servicos: list,
-          tabela: formatServicePriceList(list),
-          dica: 'Envie EXATAMENTE o campo tabela ao cliente. Prefixo: "vou lhe enviar as opções de serviços abaixo". Não invente preço. Não use lista numerada.',
+          servicos: principaisRows,
+          principais: [
+            { rotulo: 'Corte de Cabelo', kind: 'corte', ...(matchMainServiceRow('corte', all) || {}) },
+            { rotulo: 'Barba Tradicional', kind: 'barba', ...(matchMainServiceRow('barba', all) || {}) },
+            { rotulo: 'Combo Corte e Barba', kind: 'combo', ...(matchMainServiceRow('combo', all) || {}) },
+          ],
+          tabela,
+          adicionais,
+          tabela_adicionais: adicionais.length ? formatServicePriceList(adicionais) : '',
+          dica: 'Para pedir o serviço no agendamento, envie ESTRITAMENTE o campo tabela (só estas 3 linhas: Corte de Cabelo, Barba Tradicional, Combo Corte e Barba). NÃO liste pezinho, sobrancelha, pigmentação, hidratação nem outros. Adicionais SOMENTE se o cliente pedir expressamente (aí use tabela_adicionais). NUNCA escolha um serviço sozinha. Só chame create_appointment depois que o cliente disser uma das 3 opções.',
         })
       }
 case 'list_barbers': {
@@ -226,9 +356,14 @@ const barbeiros = await listBookableBarbers(db, dataYmd)
 logDiva('list_barbers — resultado', { data: dataYmd, total: barbeiros.length, barbeiros })
 try {
   const sess = await getSession(db, phone)
+  const prev = (sess.context.pending_booking && typeof sess.context.pending_booking === 'object')
+    ? sess.context.pending_booking as Record<string, unknown>
+    : {}
   await saveSession(db, phone, sess.step || 'chat', {
     last_barbers: barbeiros,
     last_barbers_data: dataYmd,
+    pending_booking: { ...prev, data: dataYmd },
+    data: dataYmd,
   })
 } catch {
   /* ignore */
@@ -273,11 +408,24 @@ logDiva('get_available_slots — parâmetros', { barbeiro: barbeiro_id, data, ho
           })
         }
         try {
-          await saveSession(db, phone, (await getSession(db, phone)).step || 'chat', {
+          const sess = await getSession(db, phone)
+          const prev = (sess.context.pending_booking && typeof sess.context.pending_booking === 'object')
+            ? sess.context.pending_booking as Record<string, unknown>
+            : {}
+          await saveSession(db, phone, sess.step || 'chat', {
             last_slots: horarios,
             last_slots_data: data,
             last_slots_servico_id: servico_id,
             last_slots_barbeiro_id: barbeiro_id,
+            servico_id,
+            barbeiro_id,
+            data,
+            pending_booking: {
+              ...prev,
+              data,
+              servico_id,
+              barbeiro_id,
+            },
           })
         } catch {
           /* ignore */
@@ -392,7 +540,7 @@ servico_nome,
 },
         mensagem: mensagem_cliente,
         mensagem_cliente,
-        dica: 'Envie ao cliente APENAS o campo mensagem_cliente. Máximo 3 frases. Sem perguntas, sem avaliação, sem pedir confirmação, sem texto extra.',
+        dica: 'Envie ao cliente APENAS o campo mensagem_cliente, sem alterar. Sem aviso de expediente, sem "vamos agendar?", sem avaliação, sem pergunta extra.',
 })
 }
 case 'list_my_appointments': {
@@ -478,8 +626,13 @@ Seu objetivo é prestar um atendimento ágil, educado, objetivo e humanizado pel
 - **Apresentação:** A Diva sempre se apresenta como a Diva da **Divina Barbearia Varjota**.
 - **Estilo:** Linguagem natural brasileira, sem enrolação e sem excesso de gírias.
 - **Objetividade Máxima:** Mensagens curtas e claras. Evite textos longos ou redundantes.
-- **Sem avaliação:** NUNCA peça nota, feedback, link de avaliação ou comentário sobre a experiência — nem após o corte, nem após o agendamento.
+- **Sem avaliação:** NUNCA peça nota, feedback, link de avaliação, estrelas ou comentário sobre a experiência — nem após o corte, nem após o agendamento. Depois de confirmar o horário, encerre.
 - **Sem confirmação extra:** NUNCA pergunte se o cliente confirma o agendamento. Se os dados estão completos e o horário está livre, chame create_appointment na hora.
+- **Nunca chute o serviço:** Se faltar o serviço, PERGUNTE e mostre ESTRITAMENTE estas 3 opções (uma por linha, com bullet):
+  - • Corte de Cabelo
+  - • Barba Tradicional
+  - • Combo Corte e Barba
+  NÃO liste pezinho, sobrancelha, pigmentação, hidratação ou outros adicionais. Esses só entram se o cliente pedir expressamente. PROIBIDO escolher qualquer serviço por conta própria.
 
 ---
 
@@ -529,7 +682,8 @@ Seu objetivo é prestar um atendimento ágil, educado, objetivo e humanizado pel
 ---
 
 ## 5. CATÁLOGO DE SERVIÇOS, PREÇOS E DURAÇÃO DINÂMICA
-- **Consulta Dinâmica de Preços e Serviços:** Valores de serviços e tabela de preços **NÃO** devem ser fixos no texto. A Diva DEVE consultar os serviços e preços cadastrados diretamente no painel/banco de dados em tempo real sempre que o cliente perguntar valores ou demonstrar interesse.
+- **Consulta Dinâmica de Preços e Serviços:** Valores de serviços e tabela de preços **NÃO** devem ser fixos no texto. Consulte o painel em tempo real.
+- **Opções na hora de agendar:** mostre SÓ as 3 principais — Corte de Cabelo, Barba Tradicional, Combo Corte e Barba. NÃO ofereça pezinho, sobrancelha, pigmentação, hidratação ou outros a menos que o cliente peça expressamente.
 - **Duração do Atendimento para Agendamento:** O tempo de atendimento (duração em minutos) de cada serviço deve ser buscado dinamicamente no sistema.
   - Ao agendar múltiplos serviços (ex: Corte + Barba), a Diva deve somar as durações cadastradas para reservar a janela de horário exata na agenda do profissional, garantindo que não haja choque de horários.
 
@@ -541,7 +695,13 @@ Seu objetivo é prestar um atendimento ágil, educado, objetivo e humanizado pel
   - \`Profissional\` (se especificado ou via fila de rodízio)
   - \`Serviço\` (com duração e valor consultados no sistema)
   - \`Data\` / \`Horário\` (sempre dentro do intervalo das 08:30 às 19:30)
-- **Validação Direta:** Consulte a disponibilidade em tempo real considerando agenda, tempo total de duração dos serviços, folgas e bloqueios. Se o horário estiver liberado, chame create_appointment IMEDIATAMENTE — sem etapa intermediária de checagem com o cliente. Se houver indisponibilidade ou trava, apresente as alternativas imediatas.
+- **Mensagens curtas em sequência (MEMÓRIA OBRIGATÓRIA):** Se o cliente já disse barbeiro/hora (ex.: *"Marcos às 10h"* ou *"Agendamento hoje às 10h com Marcos"*) e depois mandar só o serviço (ex.: *"Corte"*), junte o contexto da sessão e chame \`create_appointment\`. NUNCA responda *"Oi! Me conta o que você precisa"* nem recomece o papo.
+- **Serviço obrigatório (não inventar):** Se vier barbeiro + data/hora SEM serviço, pergunte qual ele quer e mostre SÓ:
+  • Corte de Cabelo
+  • Barba Tradicional
+  • Combo Corte e Barba
+  Não chame \`create_appointment\` e não escolha um serviço arbitrário. Quando o cliente responder uma dessas 3 (ex.: *"Corte"*, *"Barba"*, *"Combo"*), junte com barbeiro/hora já salvos e chame \`create_appointment\` na hora. Adicionais (pezinho, sobrancelha, pigmentação, hidratação) só se o cliente pedir expressamente.
+- **Validação Direta:** Consulte a disponibilidade em tempo real considerando agenda, tempo total de duração dos serviços, folgas e bloqueios. Se o horário estiver liberado E o cliente já tiver dito o serviço, chame create_appointment IMEDIATAMENTE — sem etapa intermediária de checagem com o cliente. Se houver indisponibilidade ou trava, apresente as alternativas imediatas.
 - **Interpretação de Datas Relativas:** Converta termos como *"amanhã"*, *"sábado"*, *"próxima terça"* para a data futura real mais próxima do calendário e mencione o dia exato (ex.: *"Para este sábado, dia 05/09, às 14h..."*).
 - **Bloqueio de Datas Passadas (Retroativas):** Nunca permita agendar em datas ou horários que já passaram. Avise que o horário é inválido e solicite uma data/hora a partir do momento atual.
 
@@ -551,10 +711,10 @@ Seu objetivo é prestar um atendimento ágil, educado, objetivo e humanizado pel
 - Assim que tiver serviço, profissional (ou rodízio), data e um horário LIVRE, chame \`create_appointment\` IMEDIATAMENTE.
 - **PROIBIDO** perguntar: "Você confirma?", "Podemos fechar?", "Confirma os dados abaixo?", "Posso fechar assim?", "Se tiver certo, me confirma" ou qualquer frase parecida.
 - Não faça etapa extra de revisão se o horário já está disponível.
-- Depois que \`create_appointment\` retornar ok, envie SOMENTE o campo \`mensagem_cliente\` (2 a 3 frases): confirme serviço, profissional, dia e hora, e peça pontualidade no local. Sem questionário, sem repetir, sem texto longo.
-- Exemplo de tom: *"Agendamento confirmado com sucesso! Seu corte com o Jeová está marcado para amanhã às 14h. Por favor, chegue com alguns minutos de antecedência para garantir o seu horário."*
-- **FIM DO LOOP:** Se o cliente fizer outras perguntas depois (ex: localização, formas de pagamento), responda apenas à dúvida. **NUNCA mais pergunte se ele deseja confirmar o agendamento já realizado.**
-- **AVALIAÇÃO PROIBIDA:** Nunca peça nota de 1 a 5, feedback, link ou comentário sobre a experiência.
+- Depois que \`create_appointment\` retornar ok, envie SOMENTE o campo \`mensagem_cliente\`, sem uma vírgula a mais. PROIBIDO concatenar aviso de expediente ("O atendimento presencial começa às 08h30", "Vamos agendar?") na confirmação.
+- Exemplo (use o texto de \`mensagem_cliente\`): *"Agendamento confirmado com sucesso! Seu corte com o Jeová está marcado para amanhã às 14h. Por favor, chegue com alguns minutos de antecedência para garantir o seu horário."*
+- **FIM DO LOOP:** Encerrar após a confirmação. Se o cliente fizer outras perguntas depois (ex: localização, formas de pagamento), responda apenas à dúvida. **NUNCA mais pergunte se ele deseja confirmar o agendamento já realizado. NUNCA peça avaliação.**
+- **AVALIAÇÃO PROIBIDA:** Nunca peça nota de 1 a 5, estrelas, feedback, link ou comentário sobre a experiência.
 
 ---
 

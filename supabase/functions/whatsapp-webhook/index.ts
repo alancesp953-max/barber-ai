@@ -25,7 +25,6 @@ import {
   getShopHoursPhase,
   shopHoursStatusNotice,
   closedShopNotice,
-  formatServicePriceList,
   askNameAgainText,
   looksLikeBookingUtterance,
   matchByName,
@@ -40,9 +39,17 @@ import {
 import {
   BARBER_TOOLS,
   bookingSuccessText,
+  classifyMainServiceChoice,
+  isolateBookingSuccessMessage,
+  isBookingSuccessMessage,
   looksLikeConfirmationAsk,
+  mainServiceAskText,
+  mainServiceDisplayName,
+  matchMainServiceRow,
+  resolveMainServiceRows,
   runBarberTool,
   systemPromptBarber,
+  wantsExtraServices,
 } from '../_shared/barber-tools.ts'
 import { logDiva, logDivaError } from '../_shared/debug-diva.ts'
 import { loadMimoConfig, mimoChat, type ChatMessage } from '../_shared/mimo.ts'
@@ -53,6 +60,7 @@ import {
   fetchAvailableSlots,
   filterPastSlots,
   listBookableBarbers,
+  nowTimeSaoPaulo,
   todaySaoPaulo,
 } from '../_shared/slots.ts'
 import { humanReply, normalizePhone, sendPresence, sendText } from '../_shared/uazapi.ts'
@@ -389,11 +397,14 @@ function hoursNoticeIfClosed(): string | null {
 }
 
 function withLocalHoursNotice(text: string): string {
+  const isolated = isolateBookingSuccessMessage(text)
+  if (isolated) return isolated
   const base = String(text || '').trim() || FALLBACK_OUTBOUND
   const notice = hoursNoticeIfClosed()
   if (!notice) return base
   const n = normalizeMatch(base)
   if (n.includes('expediente') || n.includes('08:30') || n.includes('08h30')) return base
+  if (isBookingSuccessMessage(base)) return base
   console.log('[SHOP-HOURS] fora do expediente — anexando aviso (não silenciar)')
   return `${base}\n\n${notice}`
 }
@@ -402,6 +413,8 @@ async function appendShopHoursNotice(
   db: ReturnType<typeof getServiceClient>,
   text: string,
 ): Promise<string> {
+  const isolated = isolateBookingSuccessMessage(text)
+  if (isolated) return isolated
   try {
     const hours = await getShopHoursPhase(db)
     const notice = shopHoursStatusNotice(hours.phase, hours.open || '08:30')
@@ -410,6 +423,7 @@ async function appendShopHoursNotice(
     if (n.includes('expediente') || n.includes('08:30') || n.includes('08h30') || n.includes('fechados')) {
       return text
     }
+    if (isBookingSuccessMessage(text)) return text
     return `${text}\n\n${notice}`
   } catch {
     return text
@@ -421,6 +435,8 @@ async function withClosedShopNotice(
   db: ReturnType<typeof getServiceClient>,
   text: string,
 ): Promise<string> {
+  const isolated = isolateBookingSuccessMessage(text)
+  if (isolated) return isolated
   const base = String(text || '').trim() || FALLBACK_OUTBOUND
   const withDb = await appendShopHoursNotice(db, base)
   if (withDb !== base) return withDb
@@ -549,7 +565,8 @@ async function reply(
   config?: { baseUrl: string; token: string } | null,
   opts?: { senderName?: string | null; userText?: string },
 ) {
-  const out = humanizeOutbound(text, { senderName: opts?.senderName, userText: opts?.userText })
+  const isolated = isolateBookingSuccessMessage(text)
+  const out = isolated || humanizeOutbound(text, { senderName: opts?.senderName, userText: opts?.userText })
   let uaz = config
   if (!uaz) {
     const resolved = await resolveUazConfig(db)
@@ -731,89 +748,206 @@ function parseUtteranceDate(text: string): string | null {
   return parseDateBR(text)
 }
 
-async function pickDefaultService(
-  db: ReturnType<typeof getServiceClient>,
-  text: string,
-): Promise<{ id: string; nome: string } | null> {
-  const { data, error } = await db
-    .from('servicos')
-    .select('id, nome, ativo')
-    .order('nome')
-  if (error) {
-    console.error('[BOOK-DIRECT] listar serviços', error.message)
-    return null
-  }
-  const list = (data || []).filter((s: { ativo?: boolean }) => s.ativo !== false)
-  if (!list.length) return null
-  const named = matchByName(text, list)
-  if (named) return { id: named.id, nome: named.nome }
-  const corte = list.find((s: { nome: string }) => normalizeMatch(s.nome).includes('corte'))
-  const pick = corte || list[0]
-  return { id: pick.id, nome: pick.nome }
+type PendingBooking = {
+  servico_id: string | null
+  servico_nome: string | null
+  barbeiro_id: string | null
+  barbeiro_nome: string | null
+  data: string | null
+  horario: string | null
 }
 
-/** Quando a IA estoura timeout, tenta agendar com o que o cliente já mandou. */
-async function tryDirectBookFromUtterance(
+function asPendingStr(v: unknown): string | null {
+  const s = v == null ? '' : String(v).trim()
+  return s && s !== 'null' && s !== 'undefined' ? s : null
+}
+
+function readPending(ctx: Record<string, unknown>): PendingBooking {
+  const raw = ctx.pending_booking && typeof ctx.pending_booking === 'object'
+    ? ctx.pending_booking as Record<string, unknown>
+    : {}
+  return {
+    servico_id: asPendingStr(raw.servico_id || ctx.servico_id || ctx.last_slots_servico_id),
+    servico_nome: asPendingStr(raw.servico_nome || ctx.servico_nome),
+    barbeiro_id: asPendingStr(raw.barbeiro_id || ctx.barbeiro_id || ctx.last_slots_barbeiro_id),
+    barbeiro_nome: asPendingStr(raw.barbeiro_nome || ctx.barbeiro_nome),
+    data: asPendingStr(raw.data || ctx.data || ctx.last_slots_data),
+    horario: asPendingStr(raw.horario || ctx.horario),
+  }
+}
+
+function pendingHasAny(p: PendingBooking): boolean {
+  return Boolean(p.servico_id || p.servico_nome || p.barbeiro_id || p.barbeiro_nome || p.data || p.horario)
+}
+
+function pendingReady(p: PendingBooking): boolean {
+  return Boolean(p.servico_id && p.data && p.horario)
+}
+
+function mergePending(base: PendingBooking, extra: Partial<PendingBooking>): PendingBooking {
+  return {
+    servico_id: extra.servico_id || base.servico_id,
+    servico_nome: extra.servico_nome || base.servico_nome,
+    barbeiro_id: extra.barbeiro_id || base.barbeiro_id,
+    barbeiro_nome: extra.barbeiro_nome || base.barbeiro_nome,
+    data: extra.data || base.data,
+    horario: extra.horario || base.horario,
+  }
+}
+
+function ymdIsSunday(ymd: string): boolean {
+  const [y, m, d] = ymd.split('-').map(Number)
+  return new Date(Date.UTC(y, (m || 1) - 1, d || 1)).getUTCDay() === 0
+}
+
+function defaultDateForTime(horario: string): string {
+  const today = todaySaoPaulo()
+  const hm = horario.slice(0, 5)
+  let ymd = hm <= nowTimeSaoPaulo() ? addDaysYmd(today, 1) : today
+  while (ymdIsSunday(ymd)) ymd = addDaysYmd(ymd, 1)
+  return ymd
+}
+
+async function listActiveServices(
+  db: ReturnType<typeof getServiceClient>,
+): Promise<{ id: string; nome: string; preco: number }[]> {
+  const { data, error } = await db
+    .from('servicos')
+    .select('id, nome, preco, ativo')
+    .order('nome')
+  if (error) {
+    console.warn('[SERVICOS] listar', error.message)
+    return []
+  }
+  return (data || [])
+    .filter((s: { ativo?: boolean }) => s.ativo !== false)
+    .map((s: { id: string; nome: string; preco: number }) => ({
+      id: s.id,
+      nome: s.nome,
+      preco: Number(s.preco) || 0,
+    }))
+}
+
+async function missingBookingPrompt(
+  db: ReturnType<typeof getServiceClient>,
+  p: PendingBooking,
+): Promise<string | null> {
+  if (!p.servico_id) return mainServiceAskText()
+  if (!p.horario) return 'Qual horário fica melhor pra você?'
+  if (!p.data) return 'Pra qual data? Pode ser hoje, amanhã ou o dia (ex.: 15/09).'
+  return null
+}
+
+async function persistPending(
   db: ReturnType<typeof getServiceClient>,
   phone: string,
+  step: string,
+  pending: PendingBooking,
+): Promise<void> {
+  await saveSession(db, phone, step || 'chat', {
+    pending_booking: pending,
+    servico_id: pending.servico_id,
+    servico_nome: pending.servico_nome,
+    barbeiro_id: pending.barbeiro_id,
+    barbeiro_nome: pending.barbeiro_nome,
+    data: pending.data,
+    horario: pending.horario,
+  })
+}
+
+async function extractBookingPieces(
+  db: ReturnType<typeof getServiceClient>,
   text: string,
+  ctx: Record<string, unknown>,
+): Promise<Partial<PendingBooking>> {
+  const out: Partial<PendingBooking> = {}
+  const horario = extractHorarioHint(text, [
+    ...((Array.isArray(ctx.last_slots) ? ctx.last_slots : []) as string[]),
+    ...((Array.isArray(ctx.slots) ? ctx.slots : []) as string[]),
+  ])
+  if (horario) out.horario = horario
+  const data = parseUtteranceDate(text)
+  if (data) out.data = data
+  try {
+    const { data: services } = await db.from('servicos').select('id, nome, ativo').order('nome')
+    const list = (services || []).filter((s: { ativo?: boolean }) => s.ativo !== false)
+    const kind = classifyMainServiceChoice(text)
+    if (kind) {
+      const named = matchMainServiceRow(kind, list)
+      if (named) {
+        out.servico_id = named.id
+        out.servico_nome = mainServiceDisplayName(kind)
+      }
+    } else if (wantsExtraServices(text)) {
+      const named = matchByName(text, list)
+      if (named) {
+        out.servico_id = named.id
+        out.servico_nome = named.nome
+      }
+    }
+  } catch (e) {
+    console.warn('[PENDING] serviços', e instanceof Error ? e.message : String(e))
+  }
+  try {
+    const dateHint = out.data || asPendingStr(ctx.data) || asPendingStr(ctx.last_slots_data) || todaySaoPaulo()
+    const cached = Array.isArray(ctx.last_barbers) ? ctx.last_barbers as { id: string; nome: string }[] : []
+    const barbers = cached.length ? cached : await listBookableBarbers(db, dateHint)
+    const matched = matchByName(text, barbers)
+    if (matched) {
+      out.barbeiro_id = matched.id
+      out.barbeiro_nome = matched.nome
+    }
+  } catch (e) {
+    console.warn('[PENDING] barbeiros', e instanceof Error ? e.message : String(e))
+  }
+  return out
+}
+
+async function commitPendingAppointment(
+  db: ReturnType<typeof getServiceClient>,
+  phone: string,
+  pending: PendingBooking,
   leadName?: string | null,
 ): Promise<string | null> {
-  const fromSession = await tryAutoCreateAppointment(db, phone, text, '', leadName)
-  if (fromSession) return fromSession
-
-  const horario = extractHorarioHint(text)
-  const data = parseUtteranceDate(text)
-  if (!horario || !data) return null
-
+  if (!pendingReady(pending) || !pending.servico_id || !pending.data || !pending.horario) return null
   try {
-    const service = await pickDefaultService(db, text)
-    if (!service) {
-      console.error('[BOOK-DIRECT] sem serviço cadastrado')
-      return null
-    }
-    let barbeiro_id: string | undefined
-    try {
-      const barbers = await listBookableBarbers(db, data)
-      const matched = matchByName(text, barbers)
-      if (matched) barbeiro_id = matched.id
-    } catch (e) {
-      console.warn('[BOOK-DIRECT] barbeiros', e instanceof Error ? e.message : String(e))
-    }
-
-    const { slots, error } = await fetchAvailableSlots(db, data, service.id, barbeiro_id || null)
+    const { slots, error } = await fetchAvailableSlots(
+      db,
+      pending.data,
+      pending.servico_id,
+      pending.barbeiro_id,
+    )
     if (error) console.error('[BOOK-DIRECT] slots', error)
-    const hm = horario.slice(0, 5)
+    const hm = pending.horario.slice(0, 5)
     if (!slots.includes(hm)) {
       if (slots.length) {
         return [
-          `O horário ${hm} não está livre em ${formatDateBR(data)}.`,
-          formatSlotList(data, slots),
+          `O horário ${hm} não está livre em ${formatDateBR(pending.data)}.`,
+          formatSlotList(pending.data, slots, pending.barbeiro_nome || undefined),
         ].join('\n')
       }
-      return `Sem horários livres em ${formatDateBR(data)} às ${hm}. Quer tentar outra data?`
+      return `Sem horários livres em ${formatDateBR(pending.data)} às ${hm}. Quer tentar outra data?`
     }
-
     try {
       await saveSession(db, phone, 'chat', {
         last_slots: slots,
-        last_slots_data: data,
-        last_slots_servico_id: service.id,
-        last_slots_barbeiro_id: barbeiro_id || null,
+        last_slots_data: pending.data,
+        last_slots_servico_id: pending.servico_id,
+        last_slots_barbeiro_id: pending.barbeiro_id,
+        pending_booking: pending,
       })
     } catch {
-      /* segue o create */
+      /* segue */
     }
-
     const raw = await runBarberTool(
       db,
       phone,
       'create_appointment',
       JSON.stringify({
-        servico_id: service.id,
-        data,
+        servico_id: pending.servico_id,
+        data: pending.data,
         horario: hm,
-        barbeiro_id,
+        barbeiro_id: pending.barbeiro_id || undefined,
         cliente_nome: leadName || undefined,
       }),
       leadName || undefined,
@@ -827,6 +961,99 @@ async function tryDirectBookFromUtterance(
     if (parsed.error) return `Não consegui agendar: ${parsed.error}`
   } catch (e) {
     console.error('[BOOK-DIRECT] exceção', e instanceof Error ? e.message : String(e), e instanceof Error ? e.stack : null)
+  }
+  return null
+}
+
+/** Junta a mensagem atual ao contexto e agenda se já estiver completo. */
+async function continuePendingBooking(
+  db: ReturnType<typeof getServiceClient>,
+  phone: string,
+  text: string,
+  session: { step: string; context: Record<string, unknown> },
+  leadName?: string | null,
+  opts?: { askIfIncomplete?: boolean },
+): Promise<string | null> {
+  const extracted = await extractBookingPieces(db, text, session.context)
+  let pending = mergePending(readPending(session.context), extracted)
+  if (pending.horario && !pending.data) pending.data = defaultDateForTime(pending.horario)
+  const grew = Object.values(extracted).some(Boolean)
+  if (grew || pendingHasAny(pending)) {
+    try {
+      await persistPending(db, phone, session.step || 'chat', pending)
+    } catch (e) {
+      console.warn('[PENDING] save', e instanceof Error ? e.message : String(e))
+    }
+  }
+  if (pendingReady(pending)) {
+    const decline = normalizeMatch(text)
+    if (
+      decline === 'n' ||
+      decline === 'nao' ||
+      decline === 'no' ||
+      decline.includes('nao quero') ||
+      decline.includes('desisto')
+    ) {
+      await resetSession(db, phone)
+      return 'Beleza, não marquei nada.\n\n' + aftercareText()
+    }
+    return commitPendingAppointment(db, phone, pending, leadName)
+  }
+  const t = normalizeMatch(text)
+  const bookingish =
+    grew ||
+    looksLikeBookingUtterance(text) ||
+    /^(vamos|agendar|marcar|agenda)\b/.test(t) ||
+    t.includes('agendar') ||
+    t.includes('marcar')
+  if (opts?.askIfIncomplete && bookingish && pendingHasAny(pending)) {
+    const ask = await missingBookingPrompt(db, pending)
+    if (ask && !pending.servico_id) {
+      const list = resolveMainServiceRows(await listActiveServices(db))
+      try {
+        await saveSession(db, phone, 'choose_service', {
+          pending_booking: pending,
+          servico_id: pending.servico_id,
+          servico_nome: pending.servico_nome,
+          barbeiro_id: pending.barbeiro_id,
+          barbeiro_nome: pending.barbeiro_nome,
+          data: pending.data,
+          horario: pending.horario,
+          services: list.map((s) => ({ id: s.id, nome: s.nome, preco: s.preco, duracao: 0 })),
+        })
+      } catch {
+        /* ignore */
+      }
+    }
+    return ask
+  }
+  return null
+}
+
+/** Quando a IA estoura timeout, tenta agendar com o que o cliente já mandou + sessão. */
+async function tryDirectBookFromUtterance(
+  db: ReturnType<typeof getServiceClient>,
+  phone: string,
+  text: string,
+  leadName?: string | null,
+): Promise<string | null> {
+  const fromSession = await tryAutoCreateAppointment(db, phone, text, '', leadName)
+  if (fromSession) return fromSession
+  try {
+    const sess = await getSession(db, phone)
+    const prev = readPending(sess.context)
+    const extracted = await extractBookingPieces(db, text, sess.context)
+    let pending = mergePending(prev, extracted)
+    if (pending.horario && !pending.data) pending.data = defaultDateForTime(pending.horario)
+    await persistPending(db, phone, sess.step || 'chat', pending)
+    if (pendingReady(pending)) {
+      return commitPendingAppointment(db, phone, pending, leadName)
+    }
+    if (pendingHasAny(pending) && (Object.values(extracted).some(Boolean) || pendingHasAny(prev))) {
+      return await missingBookingPrompt(db, pending)
+    }
+  } catch (e) {
+    console.error('[BOOK-DIRECT] tryDirect', e instanceof Error ? e.message : String(e))
   }
   return null
 }
@@ -848,10 +1075,7 @@ async function tryAutoCreateAppointment(
       : Array.isArray(c.slots)
         ? (c.slots as string[])
         : []
-    const horario =
-      extractHorarioHint(text, slots) ||
-      extractHorarioHint(extraHint || '', slots) ||
-      (c.horario ? String(c.horario).slice(0, 5) : '')
+    const horario = matchSlot(text, slots) || matchSlot(extraHint || '', slots)
     if (!servico_id || !data || !horario) return null
     const barbeiro_id = c.last_slots_barbeiro_id || c.barbeiro_id || null
     const raw = await runBarberTool(
@@ -943,6 +1167,16 @@ async function handleFallbackIntent(
     )
   }
 
+  try {
+    const sess = await getSession(db, phone)
+    const pending = readPending(sess.context)
+    if (pendingHasAny(pending)) {
+      const ask = await missingBookingPrompt(db, pending)
+      if (ask) return ask
+    }
+  } catch {
+    /* ignore */
+  }
   return 'Oi! Me conta o que você precisa.'
 }
 
@@ -950,33 +1184,23 @@ async function startBooking(
   db: ReturnType<typeof getServiceClient>,
   phone: string,
 ): Promise<string> {
-  const { data: services } = await db
-    .from('servicos')
-    .select('id, nome, preco, duracao_minutos, ativo')
-    .order('nome')
-
-  const list = (services || []).filter((s: { ativo?: boolean }) => s.ativo !== false)
+  const all = await listActiveServices(db)
+  const list = resolveMainServiceRows(all)
   if (!list.length) {
     await resetSession(db, phone)
     return 'No momento não tenho serviços disponíveis. Tenta mais tarde?'
   }
 
   await saveSession(db, phone, 'choose_service', {
-    services: list.map((s: { id: string; nome: string; preco: number; duracao_minutos: number }) => ({
+    services: list.map((s) => ({
       id: s.id,
       nome: s.nome,
       preco: s.preco,
-      duracao: s.duracao_minutos,
+      duracao: 0,
     })),
   })
 
-  return [
-    'Vou lhe enviar as opções de serviços abaixo',
-    '',
-    formatServicePriceList(list),
-    '',
-    'Qual você quer?',
-  ].join('\n')
+  return mainServiceAskText()
 }
 
 async function listAppointments(
@@ -1107,27 +1331,39 @@ async function proceedAfterService(
   phone: string,
   context: Record<string, unknown>,
   service: { id: string; nome: string; preco: number; duracao: number },
+  senderName?: string,
 ): Promise<string> {
-  const dateHint = typeof context.data === 'string' ? String(context.data) : todaySaoPaulo()
+  const next = {
+    ...context,
+    servico_id: service.id,
+    servico_nome: service.nome,
+  }
+  const pending = mergePending(readPending(next), {
+    servico_id: service.id,
+    servico_nome: service.nome,
+  })
+  if (pending.horario && !pending.data) pending.data = defaultDateForTime(pending.horario)
+  if (pendingReady(pending)) {
+    return commitPendingAppointment(db, phone, pending, senderName)
+  }
+
+  const dateHint = typeof next.data === 'string' ? String(next.data) : todaySaoPaulo()
   const list = await listBookableBarbers(db, dateHint)
 
   if (!list.length) {
     await saveSession(db, phone, 'choose_date', {
-      ...context,
-      servico_id: service.id,
-      servico_nome: service.nome,
+      ...next,
       barbeiro_id: null,
       barbeiro_nome: null,
+      pending_booking: pending,
     })
     return `Beleza, *${service.nome}*. Pra qual data? (ex.: 15/08)`
   }
 
-  // Sempre pergunta preferência de barbeiro (1 ou vários)
   await saveSession(db, phone, 'choose_barber', {
-    ...context,
-    servico_id: service.id,
-    servico_nome: service.nome,
+    ...next,
     barbers: list.map((b) => ({ id: b.id, nome: b.nome })),
+    pending_booking: pending,
   })
 
   if (list.length === 1) {
@@ -1150,25 +1386,37 @@ async function handleChooseService(
   phone: string,
   text: string,
   context: Record<string, unknown>,
+  senderName?: string,
 ): Promise<string> {
   if (wantsRestart(text)) {
     await resetSession(db, phone)
     return greetingText()
   }
 
-  const services = (context.services as { id: string; nome: string; preco: number; duracao: number }[]) || []
-  const service = matchByName(text, services)
+  let services = (context.services as { id: string; nome: string; preco: number; duracao: number }[]) || []
+  if (!services.length) {
+    const fetched = resolveMainServiceRows(await listActiveServices(db))
+    services = fetched.map((s) => ({ id: s.id, nome: s.nome, preco: s.preco, duracao: 0 }))
+  } else {
+    services = resolveMainServiceRows(services)
+  }
+  const kind = classifyMainServiceChoice(text)
+  let service = kind ? matchMainServiceRow(kind, services) : null
+  if (!service && wantsExtraServices(text)) {
+    const extras = await listActiveServices(db)
+    const named = matchByName(text, extras)
+    if (named) service = { id: named.id, nome: named.nome, preco: named.preco, duracao: 0 }
+  }
   if (!service) {
     return [
-      'Não achei esse serviço. Temos:',
+      'Não achei esse serviço.',
       '',
-      formatNameList(services.map((s) => s.nome)),
-      '',
-      'Qual prefere?',
+      mainServiceAskText(),
     ].join('\n')
   }
+  if (kind) service = { ...service, nome: mainServiceDisplayName(kind) }
 
-  return proceedAfterService(db, phone, context, service)
+  return proceedAfterService(db, phone, context, service, senderName)
 }
 
 async function handleChooseBarber(
@@ -1176,6 +1424,7 @@ async function handleChooseBarber(
   phone: string,
   text: string,
   context: Record<string, unknown>,
+  senderName?: string,
 ): Promise<string> {
   if (wantsRestart(text)) {
     await resetSession(db, phone)
@@ -1217,11 +1466,24 @@ async function handleChooseBarber(
     barbeiro_nome = matched.nome
   }
 
-  await saveSession(db, phone, 'choose_date', {
+  const next = {
     ...context,
     barbeiro_id,
     barbeiro_nome,
     from_rotation: !barbeiro_id,
+  }
+  const pending = mergePending(readPending(next), {
+    barbeiro_id,
+    barbeiro_nome,
+  })
+  if (pending.horario && !pending.data) pending.data = defaultDateForTime(pending.horario)
+  if (pendingReady(pending)) {
+    return commitPendingAppointment(db, phone, pending, senderName)
+  }
+
+  await saveSession(db, phone, 'choose_date', {
+    ...next,
+    pending_booking: pending,
   })
 
   return [
@@ -1238,6 +1500,7 @@ async function handleChooseDate(
   phone: string,
   text: string,
   context: Record<string, unknown>,
+  senderName?: string,
 ): Promise<string> {
   if (wantsRestart(text)) {
     await resetSession(db, phone)
@@ -1276,10 +1539,21 @@ async function handleChooseDate(
     ].join('\n')
   }
 
+  const wanted = context.horario ? String(context.horario).slice(0, 5) : ''
+  if (wanted && list.map((h) => h.slice(0, 5)).includes(wanted) && servico_id) {
+    return finalizeWizardBooking(db, phone, { ...context, data, slots: list }, senderName)
+  }
+
   await saveSession(db, phone, 'choose_time', {
     ...context,
     data,
     slots: list,
+    pending_booking: {
+      ...readPending(context),
+      data,
+      servico_id: servico_id || null,
+      barbeiro_id,
+    },
   })
 
   return formatSlotList(data, list, context.barbeiro_nome as string | undefined)
@@ -1529,10 +1803,20 @@ async function processWithMimo(
   const ctxLines: string[] = []
   const c = session.context
   if (!greetingTurn) {
-    if (c.servico_nome) ctxLines.push(`serviço em papo: ${c.servico_nome}`)
-    if (c.barbeiro_nome) ctxLines.push(`barbeiro: ${c.barbeiro_nome}`)
-    if (c.data) ctxLines.push(`data: ${c.data}`)
-    if (c.horario) ctxLines.push(`horário: ${c.horario}`)
+    const pendingCtx = readPending(c)
+    if (c.servico_nome || pendingCtx.servico_nome) {
+      ctxLines.push(`serviço em papo: ${c.servico_nome || pendingCtx.servico_nome}`)
+    }
+    if (c.barbeiro_nome || pendingCtx.barbeiro_nome) {
+      ctxLines.push(`barbeiro: ${c.barbeiro_nome || pendingCtx.barbeiro_nome}`)
+    }
+    if (c.data || pendingCtx.data) ctxLines.push(`data: ${c.data || pendingCtx.data}`)
+    if (c.horario || pendingCtx.horario) ctxLines.push(`horário: ${c.horario || pendingCtx.horario}`)
+    if (pendingHasAny(pendingCtx)) {
+      ctxLines.push(
+        'MEMÓRIA: use estes dados pendentes. Se a mensagem atual completar serviço+barbeiro+data+hora, chame create_appointment agora. Não peça confirmação e não recomece com "Oi! Me conta o que você precisa".',
+      )
+    }
     if (session.step && session.step !== 'menu' && session.step !== 'chat' && session.step !== 'ask_name') {
       ctxLines.push(`estava no passo interno: ${session.step}`)
     }
@@ -1565,7 +1849,7 @@ async function processWithMimo(
   const offHoursNotice = shopHoursStatusNotice(shopPhase, shopOpenHm)
   const bookingLocked = !greetingTurn && isBookingStep(session.step)
   const system = systemPromptBarber() +
-    `\nREGRAS ABSOLUTAS DESTA CONVERSA: se já tiver serviço + data + horário livre, chame create_appointment nesta rodada. PROIBIDO pedir confirmação. PROIBIDO pedir avaliação, nota de 1 a 5, feedback ou comentário sobre a experiência. Depois de agendar, envie só mensagem_cliente (2 a 3 frases). Fora do expediente, AINDA ASSIM agende (para amanhã ou outra data). Nunca recuse só porque a loja está fechada agora.` +
+    `\nREGRAS ABSOLUTAS DESTA CONVERSA: se já tiver serviço + barbeiro + data + horário livre, chame create_appointment nesta rodada. PROIBIDO pedir confirmação. PROIBIDO escolher serviço sozinha. Se faltar o serviço, pergunte e mostre SÓ: Corte de Cabelo, Barba Tradicional, Combo Corte e Barba — sem pezinho/sobrancelha/etc. PROIBIDO pedir avaliação. Depois de agendar, envie SÓ mensagem_cliente — sem aviso de expediente, sem "vamos agendar?". Fora do expediente, AINDA ASSIM agende (para amanhã ou outra data).` +
     (bookingLocked
       ? `\nPASSO TRAVADO: ${session.step}. Não peça o nome. Não mude de assunto. Continue este passo.`
       : '') +
@@ -1609,8 +1893,8 @@ async function processWithMimo(
     }
   }
 
-  const MIMO_ROUND_MS = 20000
-  const MIMO_MAX_ROUNDS = 4
+  const MIMO_ROUND_MS = 12000
+  const MIMO_MAX_ROUNDS = 2
   let usedTools: string[] = []
   for (let round = 0; round < MIMO_MAX_ROUNDS; round++) {
     const res = await withTimeout(
@@ -1795,11 +2079,13 @@ async function processWithMimo(
       const forced = created && created.ok && typeof created.mensagem_cliente === 'string'
         ? String(created.mensagem_cliente).trim()
         : ''
-      if (forced) answer = forced
+      if (forced) answer = isolateBookingSuccessMessage(forced) || forced
     } else if (looksLikeConfirmationAsk(answer)) {
-      const booked = await tryAutoCreateAppointment(db, phone, text, answer, leadName)
-      if (booked) answer = booked
+      const booked = await tryDirectBookFromUtterance(db, phone, text, leadName)
+      if (booked) answer = isolateBookingSuccessMessage(booked) || booked
     }
+    const isolatedAnswer = isolateBookingSuccessMessage(answer)
+    if (isolatedAnswer) answer = isolatedAnswer
 
     const toStore = messages
       .filter((m) => m.role !== 'system')
@@ -1832,6 +2118,14 @@ async function processWithMimo(
             last_slots_barbeiro_id: null,
             slots: [],
             horario: null,
+            pending_booking: {
+              servico_id: null,
+              servico_nome: null,
+              barbeiro_id: null,
+              barbeiro_nome: null,
+              data: null,
+              horario: null,
+            },
           }
         : {}),
     })
@@ -1848,6 +2142,7 @@ async function processWithMimo(
 
 function sessionHasBookingContext(session: { step?: string; context: Record<string, unknown> }): boolean {
   if (isBookingStep(session.step)) return true
+  if (pendingHasAny(readPending(session.context || {}))) return true
   const hist = session.context?.history
   if (!Array.isArray(hist) || !hist.length) return false
   const blob = hist
@@ -1902,6 +2197,24 @@ async function processMessage(
   if (isRatingSessionStep(session.step)) {
     await resetSession(db, phone)
     session = { step: 'chat', context: {} }
+  }
+
+  if (
+    !isPureGreeting(trimmed) &&
+    !wantsShopInfo(trimmed) &&
+    !wantsRestart(trimmed) &&
+    !['reset', 'limpar', '/start'].includes(trimmed.toLowerCase()) &&
+    !/cancel|desmarcar|remarc/.test(normalizeMatch(trimmed))
+  ) {
+    try {
+      const continued = await continuePendingBooking(db, phone, trimmed, session, leadName, {
+        askIfIncomplete: true,
+      })
+      if (continued) return continued
+      session = await getSession(db, phone)
+    } catch (e) {
+      console.error('[PENDING] continue falhou', e instanceof Error ? e.message : String(e))
+    }
   }
 
   // ── Saudação pura: nunca wizard, nunca get_available_slots, nunca last_slots ─
@@ -2110,7 +2423,7 @@ async function processMessage(
     try {
       const ai = await withTimeout(
         processWithMimo(db, phone, trimmed, leadName),
-        32000,
+        13000,
         null,
       )
       if (ai) return ai
@@ -2176,11 +2489,11 @@ async function dispatchWizard(
   })
   switch (step) {
     case 'choose_service':
-      return handleChooseService(db, phone, trimmed, context)
+      return handleChooseService(db, phone, trimmed, context, leadName || undefined)
     case 'choose_barber':
-      return handleChooseBarber(db, phone, trimmed, context)
+      return handleChooseBarber(db, phone, trimmed, context, leadName || undefined)
     case 'choose_date':
-      return handleChooseDate(db, phone, trimmed, context)
+      return handleChooseDate(db, phone, trimmed, context, leadName || undefined)
     case 'choose_time':
       return handleChooseTime(db, phone, trimmed, context, leadName || undefined)
     case 'confirm':
@@ -2407,24 +2720,42 @@ Deno.serve(async (req) => {
         } catch (e) {
           console.warn('[WEBHOOK] lead não encontrado — segue envio', e)
         }
-        let answer = FALLBACK_OUTBOUND
+        let answer = ''
         try {
           answer = String(
             await withTimeout(
               processMessage(db, phone, inbound),
-              40000,
-              FALLBACK_OUTBOUND,
+              20000,
+              '',
             ) || '',
-          ).trim() || FALLBACK_OUTBOUND
+          ).trim()
         } catch (e) {
-          console.error('[WEBHOOK] processMessage falhou — enviando fallback', {
+          console.error('[WEBHOOK] processMessage falhou — tentando agendamento direto', {
             phone: phone.slice(-4),
             inbound: inbound.slice(0, 120),
             error: e instanceof Error ? e.message : String(e),
             stack: e instanceof Error ? e.stack : null,
           })
-          answer = FALLBACK_OUTBOUND
         }
+        if (!answer) {
+          try {
+            const rescueBook = await withTimeout(
+              tryDirectBookFromUtterance(db, phone, inbound, leadName),
+              6000,
+              null,
+            )
+            if (rescueBook) {
+              logDiva('HTTP timeout/falha — agendou no fallback determinístico', {
+                phone: phone.slice(-4),
+                texto: inbound.slice(0, 120),
+              })
+              answer = rescueBook
+            }
+          } catch (e) {
+            console.error('[WEBHOOK] rescue book falhou', e instanceof Error ? e.message : String(e))
+          }
+        }
+        answer = answer || FALLBACK_OUTBOUND
         answer = await withTimeout(withClosedShopNotice(db, answer), 2500, answer)
         try {
           await reply(phone, answer, db, uazCfg, { senderName: leadName, userText: inbound })
