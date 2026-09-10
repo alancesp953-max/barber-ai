@@ -269,6 +269,115 @@ export function mainServiceDisplayName(kind: MainServiceKind): string {
   return MAIN_SERVICE_KIND_LABEL[kind]
 }
 
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0
+  if (!a.length) return b.length
+  if (!b.length) return a.length
+  const row = Array.from({ length: b.length + 1 }, (_, i) => i)
+  for (let i = 1; i <= a.length; i++) {
+    let prev = i - 1
+    row[0] = i
+    for (let j = 1; j <= b.length; j++) {
+      const cur = row[j]
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + cost)
+      prev = cur
+    }
+  }
+  return row[b.length]
+}
+
+function foldPhonetic(s: string): string {
+  return normalizeMatch(s)
+    .replace(/qu/g, 'c')
+    .replace(/ph/g, 'f')
+    .replace(/lh/g, 'l')
+    .replace(/nh/g, 'n')
+    .replace(/[kw]/g, 'c')
+    .replace(/y/g, 'i')
+    .replace(/z/g, 's')
+    .replace(/(.)\1+/g, '$1')
+}
+
+const BARBER_STOP = new Set([
+  'com', 'o', 'a', 'os', 'as', 'de', 'da', 'do', 'dos', 'das', 'um', 'uma',
+  'para', 'pra', 'por', 'no', 'na', 'em', 'ao', 'aos', 'que', 'quero', 'queria',
+  'agendar', 'marcar', 'agenda', 'horario', 'hora', 'horas', 'hoje', 'amanha',
+  'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado', 'domingo',
+  'corte', 'cabelo', 'barba', 'combo', 'tradicional', 'qualquer', 'tanto', 'faz',
+  'as', 'ate', 'depois', 'antes', 'pelo', 'pela', 'seu', 'sua',
+])
+
+export function wantsAnyBarber(text: string): boolean {
+  const t = normalizeMatch(text)
+  return (
+    /\btanto faz\b/.test(t) ||
+    /\bqualquer um\b/.test(t) ||
+    /\bqualquer barbeiro\b/.test(t) ||
+    /\bindiferente\b/.test(t) ||
+    /\bsem preferencia\b/.test(t) ||
+    t === 'qualquer'
+  )
+}
+
+function firstName(nome: string): string {
+  return normalizeMatch(nome).split(/\s+/)[0] || ''
+}
+
+function barberQueryTokens(text: string): string[] {
+  const t = normalizeMatch(text).replace(/\d{1,2}[:h]\d{0,2}/g, ' ')
+  const raw = t.split(/[^a-z]+/).filter((w) => w.length >= 3 && !BARBER_STOP.has(w))
+  return [...new Set(raw)]
+}
+
+function scoreBarberName(query: string, nome: string): number {
+  const q = foldPhonetic(query)
+  const full = foldPhonetic(nome)
+  const first = foldPhonetic(firstName(nome))
+  if (!q || q.length < 3) return 99
+  if (full === q || first === q) return 0
+  if (first.startsWith(q) || q.startsWith(first)) return 0.4
+  if (full.includes(q) || q.includes(first)) return 0.8
+  const dFirst = levenshtein(q, first)
+  const dFull = levenshtein(q, full)
+  return Math.min(dFirst, dFull)
+}
+
+/** Reconhece barbeiro com erro de digitação / fonética. Nunca pergunta "você quis dizer". */
+export function matchBarberFuzzy<T extends { nome: string }>(
+  text: string,
+  barbers: T[],
+): T | null {
+  if (!barbers.length) return null
+  const raw = String(text || '').trim()
+  if (!raw) return null
+  if (wantsAnyBarber(raw) && barberQueryTokens(raw).length === 0) return null
+
+  const exact = barbers.find((b) => normalizeMatch(b.nome) === normalizeMatch(raw))
+  if (exact) return exact
+
+  const tokens = barberQueryTokens(raw)
+  if (!tokens.length) return null
+
+  let best: T | null = null
+  let bestScore = 99
+  for (const b of barbers) {
+    let score = 99
+    for (const tok of tokens) {
+      score = Math.min(score, scoreBarberName(tok, b.nome))
+    }
+    score = Math.min(score, scoreBarberName(normalizeMatch(raw), b.nome))
+    if (score < bestScore) {
+      bestScore = score
+      best = b
+    }
+  }
+  const qLen = Math.max(...tokens.map((t) => t.length), 3)
+  const maxDist = qLen <= 4 ? 1 : 2
+  if (best && bestScore <= maxDist) return best
+  return null
+}
+
 export function looksLikeConfirmationAsk(text: string): boolean {
   const n = String(text || '')
     .normalize('NFD')
@@ -391,11 +500,20 @@ dica: `Responda em prosa natural usando EXATAMENTE estes horários salvos (não 
 case 'get_available_slots': {
 const data = normalizeDate(String(args.data || ''))
 const servico_id = String(args.servico_id || '')
-const barbeiro_id = args.barbeiro_id ? String(args.barbeiro_id) : null
+let barbeiro_id = args.barbeiro_id ? String(args.barbeiro_id) : null
 if (!data || !servico_id) {
 logDivaError('get_available_slots — parâmetros inválidos', { data, servico_id, barbeiro_id })
 return JSON.stringify({ error: 'data e servico_id são obrigatórios' })
 }
+        try {
+          const sess = await getSession(db, phone)
+          const prev = (sess.context.pending_booking && typeof sess.context.pending_booking === 'object')
+            ? sess.context.pending_booking as Record<string, unknown>
+            : {}
+          if (!barbeiro_id) {
+            const kept = String(prev.barbeiro_id || sess.context.barbeiro_id || '').trim()
+            if (kept && kept !== 'null') barbeiro_id = kept
+          }
 logDiva('get_available_slots — parâmetros', { barbeiro: barbeiro_id, data, horario: null, servico_id })
         const { slots: horarios, error } = await fetchAvailableSlots(db, data, servico_id, barbeiro_id)
         if (error) {
@@ -407,31 +525,23 @@ logDiva('get_available_slots — parâmetros', { barbeiro: barbeiro_id, data, ho
             aviso: `rpc: ${error}`,
           })
         }
-        try {
-          const sess = await getSession(db, phone)
-          const prev = (sess.context.pending_booking && typeof sess.context.pending_booking === 'object')
-            ? sess.context.pending_booking as Record<string, unknown>
-            : {}
           await saveSession(db, phone, sess.step || 'chat', {
             last_slots: horarios,
             last_slots_data: data,
             last_slots_servico_id: servico_id,
-            last_slots_barbeiro_id: barbeiro_id,
+            last_slots_barbeiro_id: barbeiro_id || prev.barbeiro_id || null,
             servico_id,
-            barbeiro_id,
+            barbeiro_id: barbeiro_id || prev.barbeiro_id || null,
             data,
             pending_booking: {
               ...prev,
               data,
               servico_id,
-              barbeiro_id,
+              barbeiro_id: barbeiro_id || prev.barbeiro_id || null,
             },
           })
-        } catch {
-          /* ignore */
-        }
-const primeiro = horarios[0] || null
-const ultimo = horarios.length ? horarios[horarios.length - 1] : null
+        const primeiro = horarios[0] || null
+        const ultimo = horarios.length ? horarios[horarios.length - 1] : null
 logDiva('get_available_slots — horários usados na resposta à IA', {
   barbeiro: barbeiro_id,
   data,
@@ -450,22 +560,33 @@ primeiro_horario: primeiro,
 ultimo_horario: ultimo,
 dica:
 horarios.length === 0
-? 'Sem horários livres (ocupados, fora do funcionamento salvo em Configurações, ou já passaram no dia de hoje). Peça outra data ou barbeiro.'
-: `SÓ liste horários desta lista. O primeiro disponível é ${primeiro} (não diga que abre às 08:00 se a lista não começar assim). Se o cliente já escolheu um horário desta lista, chame create_appointment AGORA — não pergunte confirmação.`,
+? 'Sem horários livres (ocupados, fora do funcionamento salvo em Configurações, ou já passaram no dia de hoje). Peça outra data ou outro horário deste barbeiro. NÃO troque o barbeiro escolhido por rodízio.'
+: `SÓ liste horários desta lista. O primeiro disponível é ${primeiro} (não diga que abre às 08:00 se a lista não começar assim). Se o cliente já escolheu um horário desta lista, chame create_appointment AGORA com o mesmo barbeiro_id — não pergunte confirmação e não use rodízio.`,
 })
+        } catch (e) {
+          logDivaError('get_available_slots — exceção', { error: e instanceof Error ? e.message : String(e) })
+          return JSON.stringify({ error: e instanceof Error ? e.message : String(e), ok: false })
+        }
 }
 case 'create_appointment': {
 const servico_id = String(args.servico_id || '')
 const data = normalizeDate(String(args.data || ''))
 const horario = String(args.horario || '').slice(0, 5)
-const barbeiro_id = args.barbeiro_id ? String(args.barbeiro_id) : null
+let barbeiro_id = args.barbeiro_id ? String(args.barbeiro_id) : null
 if (!servico_id || !data || !horario) {
 logDivaError('create_appointment — parâmetros inválidos', { barbeiro: barbeiro_id, data, horario, servico_id })
 return JSON.stringify({ error: 'servico_id, data e horario são obrigatórios' })
 }
-logDiva('create_appointment — parâmetros', { barbeiro: barbeiro_id, data, horario, servico_id })
 try {
   const sess = await getSession(db, phone)
+  const prev = (sess.context.pending_booking && typeof sess.context.pending_booking === 'object')
+    ? sess.context.pending_booking as Record<string, unknown>
+    : {}
+  if (!barbeiro_id) {
+    const kept = String(prev.barbeiro_id || sess.context.barbeiro_id || sess.context.last_slots_barbeiro_id || '').trim()
+    if (kept && kept !== 'null') barbeiro_id = kept
+  }
+logDiva('create_appointment — parâmetros', { barbeiro: barbeiro_id, data, horario, servico_id, rodizio: !barbeiro_id })
   const lastSlots = Array.isArray(sess.context.last_slots)
     ? (sess.context.last_slots as string[]).map((h) => String(h).slice(0, 5))
     : []
@@ -670,14 +791,15 @@ Seu objetivo é prestar um atendimento ágil, educado, objetivo e humanizado pel
 ---
 
 ## 4. SELEÇÃO DE PROFISSIONAL, RODÍZIO E VALIDAÇÃO DE FOLGAS/BLOQUEIOS
+- **Reconhecimento de nome (INEGOCIÁVEL):** Se o cliente citar um nome parecido com um barbeiro (Marcos, Markos, Marco, Marques, "Marcos com k", etc.), ASSUMA esse profissional na hora. NUNCA pergunte "Você quis dizer Marcos?". Salve o barbeiro e use nas mensagens seguintes.
+- **Prioridade do barbeiro escolhido:** Se um profissional foi citado (mesmo com erro de digitação), o RODÍZIO ESTÁ PROIBIDO. Chame create_appointment com o barbeiro_id dele. Só use rodízio se o cliente disser "tanto faz", "qualquer um" ou se não citar ninguém.
+- **Rodízio (só sem preferência):** comece pelo 1º da fila. Se estiver ocupado no horário, passe ao próximo livre da sequência. Nunca troque um barbeiro escolhido por outro da fila.
 - **Consulta Obrigatória ao Painel/Sistema:** Antes de apresentar ou confirmar qualquer horário, a Diva DEVE checar o status do barbeiro no sistema:
   - Verificar se o profissional está em **dia de folga**, férias ou ausência programada.
   - Verificar se o profissional possui **horários travados/bloqueados** (ex: almoço, intervalo, compromisso pessoal ou bloqueio manual no painel).
 - **Tratamento de Indisponibilidade/Folga:**
   - Se o barbeiro solicitado estiver de folga ou travado no horário pedido, informe educadamente (ex: *"O barbeiro [Nome] está indisponível/de folga nesse horário"*).
-  - Ofereça os horários livres mais próximos daquele mesmo barbeiro OU sugira o próximo profissional disponível na fila de rodízio.
-- **Cliente SEM preferência:** 
-  - Consulte a **fila de rodízio do sistema** e filtre apenas os profissionais que NÃO estejam de folga ou com o horário bloqueado, direcionando para o próximo prioritário.
+  - Ofereça os horários livres mais próximos **daquele mesmo barbeiro**. Não coloque outro profissional no lugar sem o cliente pedir.
 
 ---
 

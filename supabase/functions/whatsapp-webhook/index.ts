@@ -45,10 +45,12 @@ import {
   looksLikeConfirmationAsk,
   mainServiceAskText,
   mainServiceDisplayName,
+  matchBarberFuzzy,
   matchMainServiceRow,
   resolveMainServiceRows,
   runBarberTool,
   systemPromptBarber,
+  wantsAnyBarber,
   wantsExtraServices,
 } from '../_shared/barber-tools.ts'
 import { logDiva, logDivaError } from '../_shared/debug-diva.ts'
@@ -125,19 +127,74 @@ function normalizeInboundFragments(raw: unknown): string[] {
   return out
 }
 
+const INBOUND_DEBOUNCE_MS = 3000
+
+function newDebounceToken(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 function pendingFromSession(context: Record<string, unknown>, phone: string): string[] {
   const fromDb = normalizeInboundFragments(context.pending_inbound)
   const fromMem = debounceMemory.get(phone) || []
-  return fromDb.length ? fromDb : fromMem
+  return fromDb.length >= fromMem.length ? fromDb : fromMem
 }
 
 /** Junta o buffer com a mensagem atual, sem anexar texto antigo a uma saudação pura. */
 function composeInboundFromBuffer(pending: string[], fresh: string): string {
   const latest = fresh.trim()
   if (!latest) return pending.filter((p) => !isPureGreeting(p)).join('\n').trim()
-  if (isPureGreeting(latest)) return latest
   const kept = pending.map((p) => p.trim()).filter((p) => p && !isPureGreeting(p))
-  return [...kept, latest].join('\n').trim() || latest
+  if (isPureGreeting(latest) && !kept.length) return latest
+  const all = isPureGreeting(latest) ? kept : [...kept, latest]
+  return all.join('\n').trim() || latest
+}
+
+async function enqueueInboundFragment(
+  db: ReturnType<typeof getServiceClient>,
+  phone: string,
+  fresh: string,
+): Promise<string> {
+  const token = newDebounceToken()
+  const text = fresh.trim()
+  try {
+    const sess = await getSession(db, phone)
+    const pending = pendingFromSession(sess.context, phone)
+    const next = text && !pending.includes(text) ? [...pending, text] : pending
+    debounceMemory.set(phone, next)
+    await saveSession(db, phone, sess.step || 'chat', {
+      pending_inbound: next.map((t) => ({ text: t, at: Date.now() })),
+      debounce_token: token,
+    })
+  } catch (e) {
+    console.error('[DEBOUNCE] enqueue falhou', e)
+    const mem = debounceMemory.get(phone) || []
+    if (text) mem.push(text)
+    debounceMemory.set(phone, mem)
+  }
+  return token
+}
+
+async function waitForInboundBurst(
+  db: ReturnType<typeof getServiceClient>,
+  phone: string,
+  token: string,
+  fresh: string,
+): Promise<string | null> {
+  await new Promise((resolve) => setTimeout(resolve, INBOUND_DEBOUNCE_MS))
+  try {
+    const sess = await getSession(db, phone)
+    if (String(sess.context.debounce_token || '') !== token) {
+      console.log('[DEBOUNCE] burst mais novo — esta invocação não responde', {
+        phone: phone.slice(-4),
+      })
+      return null
+    }
+    const pending = pendingFromSession(sess.context, phone)
+    return composeInboundFromBuffer(pending, '') || fresh.trim() || 'oi'
+  } catch (e) {
+    console.warn('[DEBOUNCE] wait falhou — processando texto fresco', e)
+    return fresh.trim() || 'oi'
+  }
 }
 
 async function consumeInboundForProcess(
@@ -148,17 +205,7 @@ async function consumeInboundForProcess(
   try {
     const sess = await getSession(db, phone)
     const pending = pendingFromSession(sess.context, phone)
-    const composed = composeInboundFromBuffer(pending, fresh)
-    const mem = debounceMemory.get(phone) || []
-    if (fresh.trim()) mem.push(fresh.trim())
-    debounceMemory.set(phone, mem)
-    await saveSession(db, phone, sess.step || 'chat', {
-      pending_inbound: [
-        ...pending.map((text) => ({ text, at: Date.now() })),
-        ...(fresh.trim() ? [{ text: fresh.trim(), at: Date.now() }] : []),
-      ],
-    })
-    return composed || fresh.trim() || 'oi'
+    return composeInboundFromBuffer(pending, fresh) || fresh.trim() || 'oi'
   } catch (e) {
     console.error('[DEBOUNCE] sessão falhou — processando texto fresco', e)
     return fresh.trim() || 'oi'
@@ -808,6 +855,24 @@ function defaultDateForTime(horario: string): string {
   return ymd
 }
 
+async function listActiveBarbers(
+  db: ReturnType<typeof getServiceClient>,
+): Promise<{ id: string; nome: string }[]> {
+  try {
+    const { data, error } = await db.from('barbeiros').select('id, nome, ativo').eq('ativo', true)
+    if (error) {
+      console.warn('[BARBEIROS] listar', error.message)
+      return []
+    }
+    return (data || [])
+      .filter((b: { ativo?: boolean }) => b.ativo !== false)
+      .map((b: { id: string; nome: string }) => ({ id: b.id, nome: String(b.nome) }))
+  } catch (e) {
+    console.warn('[BARBEIROS] listar', e instanceof Error ? e.message : String(e))
+    return []
+  }
+}
+
 async function listActiveServices(
   db: ReturnType<typeof getServiceClient>,
 ): Promise<{ id: string; nome: string; preco: number }[]> {
@@ -891,11 +956,16 @@ async function extractBookingPieces(
   try {
     const dateHint = out.data || asPendingStr(ctx.data) || asPendingStr(ctx.last_slots_data) || todaySaoPaulo()
     const cached = Array.isArray(ctx.last_barbers) ? ctx.last_barbers as { id: string; nome: string }[] : []
-    const barbers = cached.length ? cached : await listBookableBarbers(db, dateHint)
-    const matched = matchByName(text, barbers)
-    if (matched) {
-      out.barbeiro_id = matched.id
-      out.barbeiro_nome = matched.nome
+    const all = await listActiveBarbers(db)
+    const barbers = all.length ? all : cached.length ? cached : await listBookableBarbers(db, dateHint)
+    if (wantsAnyBarber(text) && !matchBarberFuzzy(text, barbers)) {
+      /* rodízio só se não citou profissional */
+    } else {
+      const matched = matchBarberFuzzy(text, barbers)
+      if (matched) {
+        out.barbeiro_id = matched.id
+        out.barbeiro_nome = matched.nome
+      }
     }
   } catch (e) {
     console.warn('[PENDING] barbeiros', e instanceof Error ? e.message : String(e))
@@ -1347,6 +1417,20 @@ async function proceedAfterService(
     return commitPendingAppointment(db, phone, pending, senderName)
   }
 
+  if (pending.barbeiro_id) {
+    await saveSession(db, phone, pending.horario ? 'choose_time' : 'choose_date', {
+      ...next,
+      barbeiro_id: pending.barbeiro_id,
+      barbeiro_nome: pending.barbeiro_nome,
+      from_rotation: false,
+      pending_booking: pending,
+    })
+    if (pending.horario) {
+      return 'Qual horário fica melhor pra você?'
+    }
+    return `Beleza, *${service.nome}* com *${pending.barbeiro_nome}*. Pra qual data? (ex.: 15/08)`
+  }
+
   const dateHint = typeof next.data === 'string' ? String(next.data) : todaySaoPaulo()
   const list = await listBookableBarbers(db, dateHint)
 
@@ -1431,19 +1515,14 @@ async function handleChooseBarber(
     return greetingText()
   }
 
-  const barbers = (context.barbers as { id: string; nome: string }[]) || []
+  let barbers = (context.barbers as { id: string; nome: string }[]) || []
+  if (!barbers.length) barbers = await listActiveBarbers(db)
   const t = normalizeMatch(text)
 
   let barbeiro_id: string | null = null
   let barbeiro_nome: string | null = 'Qualquer'
 
-  const anyPref = [
-    'qualquer',
-    'tanto faz',
-    'sem preferencia',
-    'indiferente',
-    'qualquer um',
-  ].some((k) => t === k || t.includes(k))
+  const anyPref = wantsAnyBarber(text)
 
   const yes = t === 's' || t === 'sim' || t === 'pode' || t === 'ok' || t === 'pode ser'
   const no = t === 'n' || t === 'nao' || t === 'no'
@@ -1455,7 +1534,7 @@ async function handleChooseBarber(
     barbeiro_id = null
     barbeiro_nome = 'Qualquer'
   } else {
-    const matched = matchByName(text, barbers)
+    const matched = matchBarberFuzzy(text, barbers)
     if (!matched) {
       if (barbers.length === 1) {
         return `Quer com *${barbers[0].nome}*? Responde sim, ou "qualquer um".`
@@ -1849,7 +1928,7 @@ async function processWithMimo(
   const offHoursNotice = shopHoursStatusNotice(shopPhase, shopOpenHm)
   const bookingLocked = !greetingTurn && isBookingStep(session.step)
   const system = systemPromptBarber() +
-    `\nREGRAS ABSOLUTAS DESTA CONVERSA: se já tiver serviço + barbeiro + data + horário livre, chame create_appointment nesta rodada. PROIBIDO pedir confirmação. PROIBIDO escolher serviço sozinha. Se faltar o serviço, pergunte e mostre SÓ: Corte de Cabelo, Barba Tradicional, Combo Corte e Barba — sem pezinho/sobrancelha/etc. PROIBIDO pedir avaliação. Depois de agendar, envie SÓ mensagem_cliente — sem aviso de expediente, sem "vamos agendar?". Fora do expediente, AINDA ASSIM agende (para amanhã ou outra data).` +
+    `\nREGRAS ABSOLUTAS DESTA CONVERSA: se já tiver serviço + barbeiro + data + horário livre, chame create_appointment nesta rodada com o barbeiro_id citado (rodízio PROIBIDO se o cliente nomeou alguém, mesmo com erro de digitação: Markos/Marco/Marques = Marcos). PROIBIDO pedir "você quis dizer". PROIBIDO pedir confirmação. PROIBIDO escolher serviço sozinha. Se faltar o serviço, pergunte e mostre SÓ: Corte de Cabelo, Barba Tradicional, Combo Corte e Barba. PROIBIDO pedir avaliação. Depois de agendar, envie SÓ mensagem_cliente — sem aviso de expediente.` +
     (bookingLocked
       ? `\nPASSO TRAVADO: ${session.step}. Não peça o nome. Não mude de assunto. Continue este passo.`
       : '') +
@@ -2273,8 +2352,8 @@ async function processMessage(
         const cached = Array.isArray(session.context.last_barbers)
           ? (session.context.last_barbers as { nome: string }[])
           : []
-        const barbers = cached.length ? cached : await listBookableBarbers(db)
-        return Boolean(matchByName(trimmed, barbers))
+        const barbers = cached.length ? cached : await listActiveBarbers(db)
+        return Boolean(matchBarberFuzzy(trimmed, barbers.length ? barbers : await listBookableBarbers(db)))
       })(),
       2500,
       false,
@@ -2637,23 +2716,61 @@ Deno.serve(async (req) => {
         isGreeting: isPureGreeting(inboundRaw),
       })
 
-      // Saudação: envia ANTES do lock de banco (trava noturna / lock preso = silêncio).
-      if (uazCfg && isPureGreeting(inboundRaw)) {
-        console.log('[GREETING-REGEX] match HTTP', { phone: phone.slice(-4), inboundRaw })
+      if (!uazCfg) {
+        results.push({ phone, ok: false, note: 'uaz_unavailable' })
+        continue
+      }
+
+      if (!payloadText) {
+        let hist: unknown[] = []
         try {
-          await deliverPureGreeting(db, phone, inboundRaw, uazCfg)
-          await clearDebounceBuffer(db, phone)
-          results.push({ phone, ok: true, note: 'greeting_sent' })
-        } catch (err) {
-          console.error('[GREETING] erro', {
-            phone: phone.slice(-4),
-            error: err instanceof Error ? err.message : String(err),
-            stack: err instanceof Error ? err.stack : null,
-          })
-          const rescue = withLocalHoursNotice(FALLBACK_OUTBOUND)
-          const sent = await sendWhatsappMessage(phone, rescue, uazCfg)
-          results.push({ phone, ok: sent, note: sent ? 'greeting_rescue' : 'greeting_failed' })
+          const sess = await getSession(db, phone)
+          hist = Array.isArray(sess.context.history) ? sess.context.history : []
+        } catch (e) {
+          console.warn('[WEBHOOK] empty payload, sessão falhou — não silenciar lead novo', e)
         }
+        if (hist.length) {
+          console.log('[WEBHOOK] empty_ignored', { phone: phone.slice(-4) })
+          results.push({ phone, ok: true, note: 'empty_ignored' })
+          continue
+        }
+      }
+
+      // Saudação pura e sem burst: responde na hora. Se já há pedaços na fila, espera o debounce.
+      if (isPureGreeting(inboundRaw)) {
+        let pendingBurst: string[] = []
+        try {
+          const sess = await getSession(db, phone)
+          pendingBurst = pendingFromSession(sess.context, phone)
+        } catch {
+          /* ignore */
+        }
+        const hasBurst = pendingBurst.some((p) => p && !isPureGreeting(p))
+        if (!hasBurst) {
+          console.log('[GREETING-REGEX] match HTTP', { phone: phone.slice(-4), inboundRaw })
+          try {
+            await deliverPureGreeting(db, phone, inboundRaw, uazCfg)
+            await clearDebounceBuffer(db, phone)
+            results.push({ phone, ok: true, note: 'greeting_sent' })
+          } catch (err) {
+            console.error('[GREETING] erro', {
+              phone: phone.slice(-4),
+              error: err instanceof Error ? err.message : String(err),
+              stack: err instanceof Error ? err.stack : null,
+            })
+            const rescue = withLocalHoursNotice(FALLBACK_OUTBOUND)
+            const sent = await sendWhatsappMessage(phone, rescue, uazCfg)
+            results.push({ phone, ok: sent, note: sent ? 'greeting_rescue' : 'greeting_failed' })
+          }
+          continue
+        }
+      }
+
+      const debounceToken = await enqueueInboundFragment(db, phone, inboundRaw)
+      await beginTyping(phone, db, 8000)
+      const inbound = await waitForInboundBurst(db, phone, debounceToken, inboundRaw)
+      if (!inbound) {
+        results.push({ phone, ok: true, note: 'debounced' })
         continue
       }
 
@@ -2674,32 +2791,6 @@ Deno.serve(async (req) => {
           console.info('whatsapp-webhook: reply to instance owner (self-test or same number)', phone)
         }
 
-        if (!uazCfg) {
-          results.push({ phone, ok: false, note: 'uaz_unavailable' })
-          continue
-        }
-
-        if (!payloadText) {
-          let hist: unknown[] = []
-          try {
-            const sess = await getSession(db, phone)
-            hist = Array.isArray(sess.context.history) ? sess.context.history : []
-          } catch (e) {
-            console.warn('[WEBHOOK] empty payload, sessão falhou — não silenciar lead novo', e)
-          }
-          if (hist.length) {
-            console.log('[WEBHOOK] empty_ignored', { phone: phone.slice(-4) })
-            results.push({ phone, ok: true, note: 'empty_ignored' })
-            continue
-          }
-        }
-
-        await beginTyping(phone, db, 8000)
-        const inbound = await withTimeout(
-          consumeInboundForProcess(db, phone, inboundRaw),
-          2500,
-          inboundRaw,
-        )
         console.log('[WEBHOOK] após debounce', {
           phone: phone.slice(-4),
           inbound,
