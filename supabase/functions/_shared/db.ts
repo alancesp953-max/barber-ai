@@ -74,6 +74,38 @@ export async function saveSession(
   })
 }
 
+/** Campos de rascunho de agendamento — não podem “grudar” após sucesso/falha. */
+export const BOOKING_DRAFT_CLEAR: Record<string, null> = {
+  data: null,
+  horario: null,
+  barbeiro_id: null,
+  barbeiro_nome: null,
+  servico_id: null,
+  servico_nome: null,
+  last_slots: null,
+  last_slots_data: null,
+  last_slots_barbeiro_id: null,
+  last_slots_servico_id: null,
+  slots: null,
+  from_rotation: null,
+  services: null,
+}
+
+export function bookingDraftClearPatch(
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return { ...BOOKING_DRAFT_CLEAR, ...extra }
+}
+
+/** Zera rascunho de agenda mantendo histórico/nome. */
+export async function clearBookingDraft(
+  db: SupabaseClient,
+  phone: string,
+  extra: Record<string, unknown> = {},
+): Promise<void> {
+  await saveSession(db, phone, 'chat', bookingDraftClearPatch(extra))
+}
+
 export async function resetSession(db: SupabaseClient, phone: string): Promise<void> {
   await saveSession(db, phone, 'chat', {}, { merge: false })
 }
@@ -874,15 +906,72 @@ export function parseDateBR(input: string): string | null {
   const t = input.trim()
   // YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t
-  // DD/MM/YYYY or DD/MM
+  // DD/MM/YYYY or DD/MM (string inteira)
   const m = t.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/)
-  if (!m) return null
-  const day = m[1].padStart(2, '0')
-  const month = m[2].padStart(2, '0')
-  let year = m[3]
-  if (!year) year = String(new Date().getFullYear())
-  if (year.length === 2) year = `20${year}`
-  return `${year}-${month}-${day}`
+  if (m) {
+    const day = m[1].padStart(2, '0')
+    const month = m[2].padStart(2, '0')
+    let year = m[3]
+    if (!year) year = String(new Date().getFullYear())
+    if (year.length === 2) year = `20${year}`
+    return `${year}-${month}-${day}`
+  }
+  return extractDateFromText(t)
+}
+
+const MONTHS_PT: Record<string, string> = {
+  janeiro: '01',
+  fevereiro: '02',
+  marco: '03',
+  março: '03',
+  abril: '04',
+  maio: '05',
+  junho: '06',
+  julho: '07',
+  agosto: '08',
+  setembro: '09',
+  outubre: '10',
+  outubro: '10',
+  novembro: '11',
+  dezembro: '12',
+}
+
+/** Extrai a primeira data em texto livre (ex.: "dia 18 de setembro com Jeova"). */
+export function extractDateFromText(input: string): string | null {
+  const raw = String(input || '')
+  if (!raw.trim()) return null
+
+  const iso = raw.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/)
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`
+
+  const slash = raw.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/)
+  if (slash) {
+    const day = slash[1].padStart(2, '0')
+    const month = slash[2].padStart(2, '0')
+    let year = slash[3]
+    if (!year) year = String(new Date().getFullYear())
+    if (year.length === 2) year = `20${year}`
+    return `${year}-${month}-${day}`
+  }
+
+  const norm = raw
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+  const named = norm.match(
+    /\b(\d{1,2})\s*(?:de\s+)?(janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|outubre|novembro|dezembro)(?:\s*(?:de\s+)?(20\d{2}|\d{2}))?\b/,
+  )
+  if (named) {
+    const day = named[1].padStart(2, '0')
+    const month = MONTHS_PT[named[2]] || MONTHS_PT[named[2].normalize('NFD').replace(/[\u0300-\u036f]/g, '')]
+    if (!month) return null
+    let year = named[3]
+    if (!year) year = String(new Date().getFullYear())
+    if (year.length === 2) year = `20${year}`
+    return `${year}-${month}-${day}`
+  }
+
+  return null
 }
 
 export function formatDateBR(isoDate: string): string {

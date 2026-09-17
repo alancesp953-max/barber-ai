@@ -35,6 +35,9 @@ import {
   matchSlot,
   normalizeMatch,
   parseDateBR,
+  extractDateFromText,
+  clearBookingDraft,
+  bookingDraftClearPatch,
   parseRatingScore,
   resetSession,
   saveLeadName,
@@ -1041,13 +1044,22 @@ async function processWithMimo(
     })
     .slice(-24)
 
-  // Resumo do que já foi falado no fallback wizard (se existir), para a IA não “zerar”
+  // Resumo do rascunho — NUNCA como ordem para reutilizar data/hora falha
   const ctxLines: string[] = []
   const c = session.context
-  if (c.servico_nome) ctxLines.push(`serviço em papo: ${c.servico_nome}`)
-  if (c.barbeiro_nome) ctxLines.push(`barbeiro: ${c.barbeiro_nome}`)
-  if (c.data) ctxLines.push(`data: ${c.data}`)
-  if (c.horario) ctxLines.push(`horário: ${c.horario}`)
+  if (c.servico_nome) ctxLines.push(`serviço em papo (preferência): ${c.servico_nome}`)
+  if (c.barbeiro_nome) ctxLines.push(`barbeiro em papo (preferência): ${c.barbeiro_nome}`)
+  if (c.data || c.horario) {
+    ctxLines.push(
+      `rascunho anterior: data=${c.data || '?'} horário=${c.horario || 'ainda não escolhido'} — NÃO chame create_appointment com esse rascunho se o cliente pediu OUTRA data/horário. Se o último create falhou, peça nova opção e use get_available_slots.`,
+    )
+  }
+  if (c.last_failed_slot && typeof c.last_failed_slot === 'object') {
+    const fail = c.last_failed_slot as { data?: string; horario?: string }
+    ctxLines.push(
+      `ÚLTIMA FALHA de reserva: ${fail.data || '?'} ${fail.horario || ''} — NÃO tente esse mesmo slot de novo.`,
+    )
+  }
   if (session.step && session.step !== 'menu' && session.step !== 'chat' && session.step !== 'ask_name') {
     ctxLines.push(`estava no passo interno: ${session.step}`)
   }
@@ -1266,10 +1278,18 @@ async function processWithMimo(
       .slice(-28)
 
     const keepStep = isBookingStep(session.step) ? session.step : 'chat'
+    const bookedOk = usedTools.includes('create_appointment') &&
+      /"ok"\s*:\s*true/.test(
+        messages
+          .filter((m) => m.role === 'tool' && m.name === 'create_appointment')
+          .map((m) => String(m.content || ''))
+          .join('\n'),
+      )
     await saveSession(db, phone, keepStep, {
       history: toStore,
       mode: 'mimo',
       lead_name: leadName || undefined,
+      ...(bookedOk ? bookingDraftClearPatch({ last_failed_slot: null }) : {}),
     })
     return answer
   }
@@ -1301,6 +1321,50 @@ function sessionHasBookingContext(session: { step?: string; context: Record<stri
   )
 }
 
+/**
+ * Impede rascunho preso: "Oi" limpa data/hora; mensagem com outra data atualiza e zera horário.
+ */
+async function syncBookingDraftFromUserMessage(
+  db: ReturnType<typeof getServiceClient>,
+  phone: string,
+  text: string,
+  session: { step: string; context: Record<string, unknown> },
+): Promise<{ step: string; context: Record<string, unknown> }> {
+  try {
+    if (!text.trim() || isGreetingOnly(text)) {
+      // Não apaga se está no meio do wizard de passos
+      if (!isBookingStep(session.step)) {
+        await clearBookingDraft(db, phone)
+        return await getSession(db, phone)
+      }
+      return session
+    }
+
+    const newDate = extractDateFromText(text)
+    const prevData = session.context.data != null ? String(session.context.data) : ''
+    if (newDate && newDate !== prevData) {
+      const step = isBookingStep(session.step) ? session.step : 'chat'
+      await saveSession(db, phone, step, {
+        data: newDate,
+        horario: null,
+        last_slots: null,
+        last_slots_data: null,
+        slots: null,
+        last_failed_slot: null,
+      })
+      logDiva('rascunho de agenda atualizado por nova data do cliente', {
+        phone: phone.slice(-4),
+        data_anterior: prevData || null,
+        data_nova: newDate,
+      })
+      return await getSession(db, phone)
+    }
+  } catch (e) {
+    console.warn('syncBookingDraftFromUserMessage', e)
+  }
+  return session
+}
+
 async function processMessage(
   db: ReturnType<typeof getServiceClient>,
   phone: string,
@@ -1310,12 +1374,15 @@ async function processMessage(
   const trimmed = text.trim()
   // Nome do perfil WhatsApp NÃO é usado — só o que o lead informou e está em clientes.nome
   let leadName = await getLeadDisplayName(db, phone)
-  const session = await getSession(db, phone)
+  let session = await getSession(db, phone)
   const shop = await fetchShopName(db)
 
   // ── Captura de contato + nome (não bloqueia a conversa) ────────────────────
   await findOrCreateClientByPhone(db, phone).catch(() => null)
   leadName = await getLeadDisplayName(db, phone)
+
+  // Evita loop: cumprimento zera rascunho; nova data invalida horário antigo
+  session = await syncBookingDraftFromUserMessage(db, phone, trimmed, session)
 
   // ── Avaliação pós-corte (antes da captura de nome / IA) ────────────────────
   if (session.step === 'rate_ask') {
@@ -1479,6 +1546,7 @@ async function processMessage(
         { role: 'assistant' as const, content: hi },
       ].slice(-28)
       await saveSession(db, phone, 'chat', {
+        ...bookingDraftClearPatch({ last_failed_slot: null }),
         history,
         mode: 'mimo',
         lead_name: leadName,

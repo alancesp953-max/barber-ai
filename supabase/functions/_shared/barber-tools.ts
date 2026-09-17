@@ -3,6 +3,7 @@
 */
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1'
 import {
+  clearBookingDraft,
   fetchShopPublicInfo,
   findOrCreateClientByPhone,
   formatDateBR,
@@ -294,7 +295,20 @@ useRotation: !barbeiro_id,
 })
 if (!booked.ok) {
 logDivaError('create_appointment — falha', { barbeiro: barbeiro_id, data, horario, error: booked.error })
-return JSON.stringify({ error: booked.error, ok: false })
+// Não deixar o mesmo horário preso: senão a IA re-tenta o mesmo slot em toda mensagem
+try {
+  await saveSession(db, phone, 'chat', {
+    horario: null,
+    last_failed_slot: { data, horario, error: booked.error, at: new Date().toISOString() },
+  })
+} catch {
+  /* ignore */
+}
+return JSON.stringify({
+  error: booked.error,
+  ok: false,
+  dica: 'NÃO tente o mesmo data+horário de novo. Pergunte outra data/horário ou chame get_available_slots.',
+})
 }
 logDiva('create_appointment — sucesso', {
   barbeiro: booked.barbeiro_id,
@@ -303,6 +317,12 @@ logDiva('create_appointment — sucesso', {
   horario: booked.horario,
   id: booked.id,
 })
+// Sucesso: limpa rascunho para não re-agendar o mesmo slot nas próximas mensagens
+try {
+  await clearBookingDraft(db, phone)
+} catch {
+  /* ignore */
+}
 return JSON.stringify({
 ok: true,
 agendamento: {
@@ -431,6 +451,7 @@ Seu objetivo é prestar um atendimento ágil, educado, objetivo e humanizado pel
 - **Tratamento Fora de Expediente:**
   - **Entre 19h30 e 23h59:** Avise que o expediente de hoje encerrou às 19h30 e convide o cliente a agendar para os próximos dias (ou amanhã a partir das 08h30). Nunca diga que o dia “ainda está começando” nesse intervalo.
   - **Entre 00h00 e 08h29:** Avise que o atendimento inicia às 08h30 e sugira já deixar horário para hoje a partir das 08h30. Nunca diga que o expediente “já encerrado” nesse intervalo.
+  - **Rascunho de agenda:** Se o cliente mandar uma data/horário NOVOS, ignore data/hora antigas do contexto. Nunca chame create_appointment de novo com o mesmo par data+horário que acabou de falhar.
 
 ---
 
