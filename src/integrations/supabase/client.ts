@@ -1,5 +1,7 @@
 export {
   default,
+  isDemoMode,
+  isFirebaseConfigured,
   isSupabaseConfigured,
   supabase,
   supabaseClient,

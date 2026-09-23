@@ -1,6 +1,8 @@
-import { createFileRoute } from '@tanstack/react-router'
-import BarberDashboard from '../../pages/barber/Dashboard'
+import { createFileRoute, redirect } from '@tanstack/react-router'
 
 export const Route = createFileRoute('/barber/dashboard')({
-  component: BarberDashboard,
+  beforeLoad: () => {
+    throw redirect({ to: '/barber/agenda' })
+  },
+  component: () => null,
 })

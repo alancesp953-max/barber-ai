@@ -25,4 +25,6 @@ dist-ssr
 
 supabase/.temp/
 .webhook-secret.local
+serviceAccountKey.json
+*-firebase-adminsdk-*.json
 

@@ -1,5 +1,6 @@
 import {
   Alert,
+  Badge,
   Box,
   Button,
   Card,
@@ -8,6 +9,7 @@ import {
   Loader,
   NativeSelect,
   NumberInput,
+  PasswordInput,
   SimpleGrid,
   Stack,
   Switch,
@@ -21,13 +23,22 @@ import {
   connectWhatsAppInstance,
   disconnectWhatsAppInstance,
   getConfiguracoes,
+  getWhatsAppAudioConfig,
   getWhatsAppInstanceStatus,
   runCrmDispatch,
+  saveWhatsAppAudioConfig,
+  simulateWhatsAppQrScan,
+  testElevenLabsAudio,
+  testGeminiAudio,
   updateConfiguracoes,
+  type WhatsAppAudioConfig,
   type WhatsAppInstanceResult,
 } from '../../lib/api'
 import { PageHeader } from '../../components/PageHeader'
+import { LocalAudioMessageLab } from '../../components/LocalAudioMessageLab'
 import { withShopDefaults } from '../../lib/shopDefaults'
+import { AUDIO_SETTINGS_KEY, GEMINI_DEFAULT_MODEL, maskSecret, resolveElevenLabsModel, resolveElevenLabsVoiceId } from '../../lib/audioSettings'
+import { isDemoMode } from '../../services/supabaseClient'
 
 
 const inputStyles = {
@@ -110,6 +121,20 @@ export default function Configuracoes() {
   const [waError, setWaError] = useState<string | null>(null)
   const [crmRunning, setCrmRunning] = useState(false)
 
+  // Estados do WhatsApp Áudio
+  const [audioConfig, setAudioConfig] = useState<WhatsAppAudioConfig | null>(null)
+  const [audioAtivo, setAudioAtivo] = useState(false)
+  const [audioMode, setAudioMode] = useState('audio_se_cliente_mandar')
+  const [geminiApiKey, setGeminiApiKey] = useState('')
+  const [geminiModel, setGeminiModel] = useState(GEMINI_DEFAULT_MODEL)
+  const [elevenlabsApiKey, setElevenlabsApiKey] = useState('')
+  const [elevenlabsVoiceId, setElevenlabsVoiceId] = useState('21m00Tcm4TlvDq8ikWAM')
+  const [elevenlabsModel, setElevenlabsModel] = useState('eleven_multilingual_v2')
+  const [savingAudio, setSavingAudio] = useState(false)
+  const [testingGemini, setTestingGemini] = useState(false)
+  const [testingElevenLabs, setTestingElevenLabs] = useState(false)
+  const [audioFeedback, setAudioFeedback] = useState<{ tipo: 'sucesso' | 'erro'; texto: string } | null>(null)
+
   useEffect(() => {
     async function load() {
       try {
@@ -119,6 +144,25 @@ export default function Configuracoes() {
         setMessage({ tipo: 'erro', texto: 'Erro ao carregar configurações.' })
       } finally {
         setLoading(false)
+      }
+
+      // Carrega configs de áudio
+      try {
+        const audioData = await getWhatsAppAudioConfig()
+        if (audioData) {
+          setAudioConfig(audioData)
+          setAudioAtivo(audioData.audio_whatsapp_ativo ?? false)
+          setAudioMode(audioData.audio_whatsapp_mode || 'audio_se_cliente_mandar')
+          if (audioData.gemini_model) {
+            setGeminiModel(GEMINI_DEFAULT_MODEL)
+          }
+          if (audioData.elevenlabs_model) setElevenlabsModel(resolveElevenLabsModel(audioData.elevenlabs_model))
+          if (audioData.elevenlabs_voice_id) setElevenlabsVoiceId(resolveElevenLabsVoiceId(audioData.elevenlabs_voice_id))
+          if (audioData.gemini_api_key) setGeminiApiKey(audioData.gemini_api_key)
+          if (audioData.elevenlabs_api_key) setElevenlabsApiKey(audioData.elevenlabs_api_key)
+        }
+      } catch (err) {
+        console.warn('Não foi possível carregar config de áudio:', err)
       }
     }
     load()
@@ -183,6 +227,90 @@ export default function Configuracoes() {
     }
   }
 
+  async function handleSaveAudio() {
+    setSavingAudio(true)
+    setAudioFeedback(null)
+    try {
+      const payload: Parameters<typeof saveWhatsAppAudioConfig>[0] = {
+        audio_whatsapp_ativo: audioAtivo,
+        audio_whatsapp_mode: audioMode,
+        gemini_model: geminiModel,
+        elevenlabs_model: elevenlabsModel,
+        elevenlabs_voice_id: elevenlabsVoiceId,
+      }
+      if (geminiApiKey.trim()) {
+        payload.gemini_api_key = geminiApiKey.trim()
+      }
+      if (elevenlabsApiKey.trim()) {
+        payload.elevenlabs_api_key = elevenlabsApiKey.trim()
+      }
+      await saveWhatsAppAudioConfig(payload)
+      const updated = await getWhatsAppAudioConfig()
+      if (updated) {
+        setAudioConfig(updated)
+        if (updated.gemini_api_key) setGeminiApiKey(updated.gemini_api_key)
+        if (updated.elevenlabs_api_key) setElevenlabsApiKey(updated.elevenlabs_api_key)
+      }
+      setAudioFeedback({
+        tipo: 'sucesso',
+        texto: `Configurações do WhatsApp Áudio salvas em ${AUDIO_SETTINGS_KEY}.`,
+      })
+    } catch (err) {
+      setAudioFeedback({
+        tipo: 'erro',
+        texto: err instanceof Error ? err.message : 'Erro ao salvar configurações de áudio.',
+      })
+    } finally {
+      setSavingAudio(false)
+    }
+  }
+
+  async function handleTestGemini() {
+    setTestingGemini(true)
+    setAudioFeedback(null)
+    try {
+      const res = await testGeminiAudio({
+        gemini_api_key: geminiApiKey.trim() || audioConfig?.gemini_api_key,
+        gemini_model: geminiModel,
+      })
+      if (res.ok) {
+        setAudioFeedback({ tipo: 'sucesso', texto: res.message || 'Gemini API conectada com sucesso!' })
+      } else {
+        setAudioFeedback({ tipo: 'erro', texto: res.error || 'Falha ao testar Gemini API.' })
+      }
+    } catch (err) {
+      setAudioFeedback({
+        tipo: 'erro',
+        texto: err instanceof Error ? err.message : 'Erro ao testar Gemini API.',
+      })
+    } finally {
+      setTestingGemini(false)
+    }
+  }
+
+  async function handleTestElevenLabs() {
+    setTestingElevenLabs(true)
+    setAudioFeedback(null)
+    try {
+      const res = await testElevenLabsAudio({
+        elevenlabs_api_key: elevenlabsApiKey.trim() || audioConfig?.elevenlabs_api_key,
+        elevenlabs_voice_id: elevenlabsVoiceId.trim() || undefined,
+      })
+      if (res.ok) {
+        setAudioFeedback({ tipo: 'sucesso', texto: res.message || 'ElevenLabs conectado com sucesso!' })
+      } else {
+        setAudioFeedback({ tipo: 'erro', texto: res.error || 'Falha ao testar ElevenLabs.' })
+      }
+    } catch (err) {
+      setAudioFeedback({
+        tipo: 'erro',
+        texto: err instanceof Error ? err.message : 'Erro ao testar ElevenLabs.',
+      })
+    } finally {
+      setTestingElevenLabs(false)
+    }
+  }
+
   async function handleGenerateQr() {
     setWaLoading(true)
     setWaError(null)
@@ -209,7 +337,11 @@ export default function Configuracoes() {
       setQrcode(result.qrcode || null)
       setPaircode(result.paircode || null)
       if (!result.qrcode && !result.paircode) {
-        setWaError('A UAZAPI não retornou QR code. Confira secrets e status da instância.')
+        setWaError(
+          isDemoMode
+            ? 'O laboratório local não gerou o QR. Recarregue a página e tente de novo.'
+            : 'A UAZAPI não retornou QR code. Confira secrets e status da instância.',
+        )
       }
     } catch (err) {
       setWaError(err instanceof Error ? err.message : 'Erro ao gerar QR')
@@ -236,6 +368,31 @@ export default function Configuracoes() {
       setMessage({ tipo: 'sucesso', texto: 'Instância desconectada.' })
     } catch (err) {
       setWaError(err instanceof Error ? err.message : 'Erro ao desconectar')
+    } finally {
+      setWaLoading(false)
+    }
+  }
+
+  async function handleSimulateScan() {
+    setWaLoading(true)
+    setWaError(null)
+    setMessage(null)
+    try {
+      const result = await simulateWhatsAppQrScan()
+      if (!result.ok) {
+        setWaError(result.error || 'Não foi possível simular a leitura do QR')
+        return
+      }
+      const status = resolveStatusFromResult(result)
+      setWaStatus(status)
+      const profile = resolveProfileFromResult(result)
+      if (profile.name) setProfileName(profile.name)
+      if (profile.owner) setProfileOwner(profile.owner)
+      setQrcode(null)
+      setPaircode(null)
+      setMessage({ tipo: 'sucesso', texto: 'QR lido neste computador. Instância local conectada — produção não foi alterada.' })
+    } catch (err) {
+      setWaError(err instanceof Error ? err.message : 'Erro ao simular leitura do QR')
     } finally {
       setWaLoading(false)
     }
@@ -358,12 +515,19 @@ export default function Configuracoes() {
 
       <Card withBorder padding="lg" radius="lg">
         <Title order={4} c="gold" mb="xs">
-          Bot WhatsApp (UAZAPI)
+          {isDemoMode ? 'Bot WhatsApp (laboratório local)' : 'Bot WhatsApp (UAZAPI)'}
         </Title>
-        <Text size="sm" c="dimmed" mb="md">
-          Escaneie o QR no celular (WhatsApp → Aparelhos conectados). Preferir WhatsApp Business.
-          Mensagens são respondidas pela IA MiMo via Edge Function.
-        </Text>
+        {isDemoMode ? (
+          <Alert color="teal" variant="light" mb="md" title="Isolado deste computador">
+            QR, status e mensagens ficam só neste PC (localStorage). Não chama UAZAPI, Edge Function nem o
+            WhatsApp de produção. Pode clicar em Gerar / renovar QR code — não precisa de outro comando no terminal.
+          </Alert>
+        ) : (
+          <Text size="sm" c="dimmed" mb="md">
+            Escaneie o QR no celular (WhatsApp → Aparelhos conectados). Preferir WhatsApp Business.
+            Mensagens são respondidas pela IA MiMo via Edge Function.
+          </Text>
+        )}
         <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
           <NativeSelect
             label="Bot ativo"
@@ -406,7 +570,11 @@ export default function Configuracoes() {
                 {profileOwner ? ` · ${profileOwner}` : ''}
               </Text>
             ) : (
-              <Text size="sm">Gere o QR e escaneie no celular. Ao conectar, o QR some automaticamente.</Text>
+              <Text size="sm">
+                {isDemoMode
+                  ? 'Gere o QR neste computador e clique em Simular leitura do QR neste PC. Não emparelha WhatsApp real.'
+                  : 'Gere o QR e escaneie no celular. Ao conectar, o QR some automaticamente.'}
+              </Text>
             )}
           </Alert>
 
@@ -435,6 +603,17 @@ export default function Configuracoes() {
             >
               Atualizar status
             </Button>
+            {isDemoMode && !connected && (
+              <Button
+                color="gold"
+                c="#0A0A0A"
+                onClick={() => void handleSimulateScan()}
+                loading={waLoading}
+                disabled={!qrcode && !paircode}
+              >
+                Simular leitura do QR neste PC
+              </Button>
+            )}
             {connected && (
               <Button
                 variant="outline"
@@ -450,7 +629,9 @@ export default function Configuracoes() {
           {showQr && (
             <Stack align="center" gap="sm">
               <Text size="sm" c="dimmed">
-                Abra o WhatsApp → Aparelhos conectados → Conectar um aparelho e escaneie:
+                {isDemoMode
+                  ? 'QR de laboratório gerado neste navegador. Não emparelha o WhatsApp de produção.'
+                  : 'Abra o WhatsApp → Aparelhos conectados → Conectar um aparelho e escaneie:'}
               </Text>
               <Box p="md" bg="white" style={{ borderRadius: 12 }}>
                 <Image
@@ -481,8 +662,203 @@ export default function Configuracoes() {
               Clique em <strong>Gerar / renovar QR code</strong> para conectar o WhatsApp.
             </Text>
           )}
+
+          {isDemoMode && (
+            <Text size="xs" c="dimmed" mt="sm">
+              O teste de Gemini + ElevenLabs está no simulador de áudio abaixo — não depende deste QR.
+            </Text>
+          )}
         </Card>
       </Card>
+
+      {/* WhatsApp Áudio (Gemini + ElevenLabs) */}
+      <Card withBorder padding="lg" radius="lg">
+        <Group justify="space-between" mb="xs">
+          <div>
+            <Title order={4} c="gold">
+              WhatsApp Áudio (Gemini & ElevenLabs)
+            </Title>
+            <Text size="sm" c="dimmed">
+              Transcreva áudios recebidos dos clientes pelo <strong>Google Gemini</strong> e responda com voz natural usando <strong>ElevenLabs</strong>.
+            </Text>
+          </div>
+          <Switch
+            checked={audioAtivo}
+            onChange={(e) => setAudioAtivo(e.currentTarget.checked)}
+            color="gold"
+            size="md"
+            label={audioAtivo ? 'Áudio Ativo' : 'Áudio Desativado'}
+            styles={{ label: { color: audioAtivo ? '#E5C07B' : '#888', fontWeight: 600 } }}
+          />
+        </Group>
+
+        {audioFeedback && (
+          <Alert
+            color={audioFeedback.tipo === 'sucesso' ? 'teal' : 'red'}
+            variant="light"
+            my="sm"
+            withCloseButton
+            onClose={() => setAudioFeedback(null)}
+          >
+            {audioFeedback.texto}
+          </Alert>
+        )}
+
+        <Stack gap="md" mt="md">
+          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+            <NativeSelect
+              label="Modo de envio de áudio"
+              description="Quando o robô deve responder gerando áudio com a voz da barbearia"
+              value={audioMode}
+              onChange={(e) => setAudioMode(e.currentTarget.value)}
+              data={[
+                { value: 'audio_se_cliente_mandar', label: 'Responder com áudio apenas quando o cliente mandar áudio' },
+                { value: 'sempre', label: 'Responder com áudio e texto em todas as mensagens' },
+                { value: 'apenas_transcrever', label: 'Apenas transcrever áudio recebido (responder só em texto)' },
+              ]}
+              styles={inputStyles}
+            />
+
+            <Box>
+              <Text size="sm" fw={500} c="dimmed" mb={6}>
+                Status das integrações
+              </Text>
+              <Group gap="xs" mt={4}>
+                <Badge
+                  color={audioConfig?.has_gemini_key ? 'teal' : 'gray'}
+                  variant="filled"
+                  size="lg"
+                >
+                  GEMINI STT: {audioConfig?.has_gemini_key ? 'CONFIGURADO' : 'NÃO CONFIGURADO'}
+                </Badge>
+                <Badge
+                  color={audioConfig?.has_elevenlabs_key ? 'teal' : 'gray'}
+                  variant="filled"
+                  size="lg"
+                >
+                  ELEVENLABS TTS: {audioConfig?.has_elevenlabs_key ? 'CONFIGURADO' : 'NÃO CONFIGURADO'}
+                </Badge>
+              </Group>
+            </Box>
+          </SimpleGrid>
+
+          {/* Integração Google Gemini */}
+          <Card withBorder padding="md" radius="md" bg="dark.8">
+            <Group justify="space-between" mb="xs">
+              <Text fw={600} c="gold">
+                1. Google Gemini API (Transcrição de Áudio recebido)
+              </Text>
+              <Button
+                variant="subtle"
+                color="gold"
+                size="xs"
+                onClick={() => void handleTestGemini()}
+                loading={testingGemini}
+              >
+                Testar Conexão Gemini
+              </Button>
+            </Group>
+            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+              <PasswordInput
+                label="Chave da API do Gemini (gemini_api_key)"
+                placeholder={audioConfig?.has_gemini_key ? maskSecret(geminiApiKey) || '••••••••' : 'AIzaSy...'}
+                description={
+                  audioConfig?.has_gemini_key
+                    ? `Chave salva localmente (${maskSecret(audioConfig.gemini_api_key || geminiApiKey) || '••••••••'}). Edite só se quiser trocar.`
+                    : 'Insira sua chave do Google AI Studio. Será gravada em barbearia_audio_settings.'
+                }
+                value={geminiApiKey}
+                onChange={(e) => setGeminiApiKey(e.currentTarget.value)}
+                styles={inputStyles}
+              />
+              <NativeSelect
+                label="Modelo do Gemini"
+                value={geminiModel}
+                onChange={(e) => setGeminiModel(e.currentTarget.value)}
+                data={[{ value: GEMINI_DEFAULT_MODEL, label: `${GEMINI_DEFAULT_MODEL} (Recomendado)` }]}
+                styles={inputStyles}
+              />
+            </SimpleGrid>
+          </Card>
+
+          {/* Integração ElevenLabs */}
+          <Card withBorder padding="md" radius="md" bg="dark.8">
+            <Group justify="space-between" mb="xs">
+              <Text fw={600} c="gold">
+                2. ElevenLabs API (Síntese de Voz / Áudio de resposta)
+              </Text>
+              <Button
+                variant="subtle"
+                color="gold"
+                size="xs"
+                onClick={() => void handleTestElevenLabs()}
+                loading={testingElevenLabs}
+              >
+                Testar Conexão ElevenLabs
+              </Button>
+            </Group>
+            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+              <PasswordInput
+                label="Chave da API do ElevenLabs (elevenlabs_api_key)"
+                placeholder={audioConfig?.has_elevenlabs_key ? maskSecret(elevenlabsApiKey) || '••••••••' : 'sk_...'}
+                description={
+                  audioConfig?.has_elevenlabs_key
+                    ? `Chave salva localmente (${maskSecret(audioConfig.elevenlabs_api_key || elevenlabsApiKey) || '••••••••'}). Edite só se quiser trocar.`
+                    : 'Chave obtida no painel da ElevenLabs. Será gravada em barbearia_audio_settings.'
+                }
+                value={elevenlabsApiKey}
+                onChange={(e) => setElevenlabsApiKey(e.currentTarget.value)}
+                styles={inputStyles}
+              />
+              <NativeSelect
+                label="ID da Voz ElevenLabs (plano gratuito)"
+                description="A API gratuita recusa vozes da biblioteca — inclusive Rachel/Adam em muitas contas. O simulador tenta essas vozes e, se der 402, usa automaticamente uma premade/gerada da sua conta. Modelo: eleven_multilingual_v2."
+                value={elevenlabsVoiceId}
+                onChange={(e) => setElevenlabsVoiceId(e.currentTarget.value)}
+                data={[
+                  { value: '21m00Tcm4TlvDq8ikWAM', label: 'Rachel (21m00Tcm4TlvDq8ikWAM)' },
+                  { value: 'pNInz6obpgDQGcFmaJgB', label: 'Adam (pNInz6obpgDQGcFmaJgB)' },
+                  { value: 'JBFqnCBsd6RMkjVDRZzb', label: 'George (JBFqnCBsd6RMkjVDRZzb — premade)' },
+                ]}
+                styles={inputStyles}
+              />
+              <NativeSelect
+                label="Modelo ElevenLabs"
+                value={elevenlabsModel}
+                onChange={(e) => setElevenlabsModel(e.currentTarget.value)}
+                data={[
+                  { value: 'eleven_multilingual_v2', label: 'eleven_multilingual_v2 (português, plano gratuito)' },
+                ]}
+                styles={inputStyles}
+              />
+            </SimpleGrid>
+          </Card>
+
+          <Group justify="flex-start" mt="xs">
+            <Button
+              color="gold"
+              c="#0A0A0A"
+              onClick={() => void handleSaveAudio()}
+              loading={savingAudio}
+            >
+              Salvar Opções de Áudio
+            </Button>
+          </Group>
+        </Stack>
+      </Card>
+
+      {isDemoMode && (
+        <Card withBorder padding="lg" radius="lg">
+          <Title order={4} c="gold" mb="xs">
+            Simulador de áudio (Gemini STT + ElevenLabs TTS)
+          </Title>
+          <Text size="sm" c="dimmed" mb="md">
+            Use este bloco agora, sem QR e sem WhatsApp. Microfone ou arquivo → Gemini transcreve → ElevenLabs
+            responde em áudio neste computador.
+          </Text>
+          <LocalAudioMessageLab />
+        </Card>
+      )}
 
       <Card withBorder padding="lg" radius="lg">
         <Title order={4} c="gold" mb="xs">

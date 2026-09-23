@@ -13,6 +13,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AuthCard, AuthShell } from '../components/AuthShell'
 import { getBarbeiroByUserId } from '../lib/api'
+import { enterDemo } from '../lib/mockSupabase'
 import { isSupabaseConfigured, supabase } from '../integrations/supabase/client'
 
 export default function Login() {
@@ -21,7 +22,36 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [demoLoading, setDemoLoading] = useState<'admin' | 'barber' | null>(null)
   const navigate = useNavigate()
+
+  const goAfterAuth = async (userId?: string | null) => {
+    if (userId) {
+      try {
+        const barbeiro = await getBarbeiroByUserId(userId)
+        if (barbeiro) {
+          navigate({ to: '/barber/agenda' })
+          return
+        }
+      } catch {
+        /* segue para admin */
+      }
+    }
+    navigate({ to: '/admin/dashboard' })
+  }
+
+  const handleDemoEnter = async (role: 'admin' | 'barber') => {
+    setError(null)
+    setDemoLoading(role)
+    try {
+      const session = enterDemo(role)
+      await goAfterAuth(session.user.id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível entrar no modo demo.')
+    } finally {
+      setDemoLoading(null)
+    }
+  }
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -53,20 +83,8 @@ export default function Login() {
       return
     }
 
-    const userId = data.user?.id
-    if (userId) {
-      try {
-        const barbeiro = await getBarbeiroByUserId(userId)
-        if (barbeiro) {
-          navigate({ to: '/barber/agenda' })
-          return
-        }
-      } catch {
-        /* segue para admin */
-      }
-    }
-
-    navigate({ to: '/admin/dashboard' })
+    await goAfterAuth(data.user?.id)
+    setLoading(false)
   }
 
   return (
@@ -83,8 +101,8 @@ export default function Login() {
           </div>
 
           {!isSupabaseConfigured && (
-            <Alert color="yellow" variant="light">
-              {t('login.supabaseNotConfigured')}
+            <Alert color="gold" variant="light" title={t('login.demoModeTitle')}>
+              {t('login.demoModeHint')}
             </Alert>
           )}
 
@@ -94,35 +112,67 @@ export default function Login() {
             </Alert>
           )}
 
-          <form onSubmit={handleLogin}>
-            <Stack gap="md">
-              <TextInput
-                label={t('login.email')}
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.currentTarget.value)}
-                required
-                placeholder="seu@email.com"
-              />
-              <PasswordInput
-                label={t('login.password')}
-                value={password}
-                onChange={(e) => setPassword(e.currentTarget.value)}
-                required
-                placeholder="••••••••"
-              />
-              <Button type="submit" fullWidth color="gold" size="md" loading={loading} c="dark.9" fw={700}>
-                {loading ? t('login.signingIn') : t('login.signIn')}
+          {!isSupabaseConfigured && (
+            <Stack gap="sm">
+              <Button
+                fullWidth
+                color="gold"
+                size="md"
+                c="dark.9"
+                fw={700}
+                loading={demoLoading === 'admin'}
+                disabled={demoLoading !== null}
+                onClick={() => void handleDemoEnter('admin')}
+              >
+                {t('login.enterAsAdminDemo')}
+              </Button>
+              <Button
+                fullWidth
+                variant="outline"
+                color="gold"
+                size="md"
+                loading={demoLoading === 'barber'}
+                disabled={demoLoading !== null}
+                onClick={() => void handleDemoEnter('barber')}
+              >
+                {t('login.enterAsBarberDemo')}
               </Button>
             </Stack>
-          </form>
+          )}
 
-          <Text ta="center" size="sm" c="dimmed">
-            {t('login.noAccount')}{' '}
-            <Anchor component={Link} to="/signup" c="gold.4" fw={600}>
-              {t('login.signUp')}
-            </Anchor>
-          </Text>
+          {isSupabaseConfigured && (
+            <>
+              <form onSubmit={handleLogin}>
+                <Stack gap="md">
+                  <TextInput
+                    label={t('login.email')}
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.currentTarget.value)}
+                    required
+                    placeholder="seu@email.com"
+                  />
+                  <PasswordInput
+                    label={t('login.password')}
+                    value={password}
+                    onChange={(e) => setPassword(e.currentTarget.value)}
+                    required
+                    placeholder="••••••••"
+                  />
+                  <Button type="submit" fullWidth color="gold" size="md" loading={loading} c="dark.9" fw={700}>
+                    {loading ? t('login.signingIn') : t('login.signIn')}
+                  </Button>
+                </Stack>
+              </form>
+
+              <Text ta="center" size="sm" c="dimmed">
+                {t('login.noAccount')}{' '}
+                <Anchor component={Link} to="/signup" c="gold.4" fw={600}>
+                  {t('login.signUp')}
+                </Anchor>
+              </Text>
+            </>
+          )}
         </Stack>
       </AuthCard>
     </AuthShell>

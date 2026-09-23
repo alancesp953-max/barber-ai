@@ -1,39 +1,38 @@
-import { createClient } from '@supabase/supabase-js'
+import { createFirebaseAuthAdapter } from '../lib/firebaseAuth'
+import { isDemoAvailable } from '../lib/demoAuth'
+import { isFirebaseConfigured } from '../lib/firebase'
+import { createMockSupabaseClient } from '../lib/mockSupabase'
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? ''
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY ?? ''
+export { isFirebaseConfigured }
 
-export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey)
+/** Login e-mail/senha quando o Firebase Web está preenchido. */
+export const isSupabaseConfigured = isFirebaseConfigured()
+export const isDemoMode = !isFirebaseConfigured() && isDemoAvailable()
 
-if (!isSupabaseConfigured) {
-  console.warn(
-    'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY. Copy .env.example to .env and add your Supabase credentials.',
+if (isFirebaseConfigured()) {
+  console.info('Firebase ativo: Auth + Firestore (coleções barbeiros, agendamentos, servicos).')
+} else {
+  console.info(
+    'Modo demonstração ativo: Firebase não configurado. O painel usa dados locais fictícios.',
   )
 }
 
-export const supabase = createClient(
-  supabaseUrl || 'https://placeholder.supabase.co',
-  supabaseAnonKey || 'placeholder-key',
-  {
-    auth: {
-      autoRefreshToken: true,
-      persistSession: true,
-      detectSessionInUrl: false,
-    },
-  },
-)
+const dataClient = createMockSupabaseClient()
 
-// Monitora mudanças na autenticação
-supabase.auth.onAuthStateChange((event) => {
+export const supabase = (
+  isFirebaseConfigured()
+    ? { ...dataClient, auth: createFirebaseAuthAdapter() }
+    : dataClient
+) as any
+
+export const supabaseClient = supabase
+
+export default supabaseClient
+
+supabase.auth.onAuthStateChange((event: string) => {
   if (event === 'SIGNED_OUT') {
-    // Redireciona para o login se estiver em uma página admin
-    if (window.location.pathname.startsWith('/admin')) {
+    if (window.location.pathname.startsWith('/admin') || window.location.pathname.startsWith('/barber')) {
       window.location.href = '/login'
     }
   }
 })
-
-/** Alias for named imports that prefer `supabaseClient`. */
-export const supabaseClient = supabase
-
-export default supabaseClient

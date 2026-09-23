@@ -18,6 +18,9 @@ export interface Barber {
   active?: boolean
   ordem_rodizio?: number | null
   senha_temporaria?: string | null
+  intervalo_ativo?: boolean | null
+  intervalo_inicio?: string | null
+  intervalo_fim?: string | null
   created_at: string
 }
 
@@ -32,6 +35,9 @@ export type CreateBarberInput = {
   comissao_produto_tipo?: string
   avaliacao?: number
   foto_url?: string | null
+  intervalo_ativo?: boolean
+  intervalo_inicio?: string | null
+  intervalo_fim?: string | null
 }
 
 export interface Service {
@@ -68,6 +74,12 @@ export interface Appointment {
   barbeiros?: Pick<Barber, 'nome' | 'foto_url'> | null
   servicos?: Pick<Service, 'nome' | 'duracao_minutos' | 'preco'> | null
   clientes?: Pick<Client, 'nome' | 'email'> | null
+  comanda_itens?: {
+    id: string
+    nome: string
+    preco: number
+    duracao_minutos?: number
+  }[] | null
 }
 
 export interface Agendamento extends Appointment {}

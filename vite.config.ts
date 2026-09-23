@@ -10,4 +10,16 @@ export default defineConfig({
     }),
     react(),
   ],
+  server: {
+    proxy: {
+      '/__local/elevenlabs': {
+        target: 'https://api.elevenlabs.io',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/__local\/elevenlabs/, ''),
+      },
+    },
+  },
+  optimizeDeps: {
+    exclude: ['firebase', 'firebase/app', 'firebase/auth', 'firebase/firestore'],
+  },
 })

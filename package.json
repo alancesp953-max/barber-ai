@@ -8,7 +8,9 @@
     "start": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "server": "node server/index.mjs",
+    "test:diva-webhook": "node scripts/test-diva-local-webhook.mjs"
   },
   "dependencies": {
     "@mantine/charts": "^9.5.1",
@@ -16,10 +18,12 @@
     "@mantine/form": "^9.5.1",
     "@mantine/hooks": "^9.5.1",
     "@mantine/notifications": "^9.5.1",
-    "@supabase/supabase-js": "^2.107.0",
     "@tabler/icons-react": "^3.46.0",
     "@tanstack/react-router": "^1.170.11",
     "date-fns": "^4.4.0",
+    "express": "^5.2.1",
+    "firebase": "^12.19.0",
+    "firebase-admin": "^13.10.0",
     "html2canvas": "^1.4.1",
     "i18next": "^26.3.1",
     "jspdf": "^4.2.1",
@@ -49,6 +53,6 @@
     "postcss-simple-vars": "^7.0.1",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.59.2",
-    "vite": "^8.0.12"
+    "vite": "^8.2.2"
   }
 }

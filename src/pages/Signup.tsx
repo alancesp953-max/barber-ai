@@ -79,8 +79,11 @@ export default function Signup() {
           </div>
 
           {!isSupabaseConfigured && (
-            <Alert color="yellow" variant="light">
-              {t('login.supabaseNotConfigured')}
+            <Alert color="gold" variant="light" title={t('login.demoModeTitle')}>
+              {t('login.demoModeHint')}{' '}
+              <Anchor component={Link} to="/login" c="gold.4" fw={600}>
+                {t('login.enterAsAdminDemo')}
+              </Anchor>
             </Alert>
           )}
 

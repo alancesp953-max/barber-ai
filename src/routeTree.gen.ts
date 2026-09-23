@@ -9,39 +9,29 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as SignupRouteImport } from './routes/signup'
-import { Route as LoginRouteImport } from './routes/login'
-import { Route as BarberRouteImport } from './routes/barber'
-import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as BarberLoginRouteImport } from './routes/barber/login'
-import { Route as BarberDashboardRouteImport } from './routes/barber/dashboard'
-import { Route as BarberAgendaRouteImport } from './routes/barber/agenda'
-import { Route as AdminUsuariosRouteImport } from './routes/admin/usuarios'
-import { Route as AdminServicesRouteImport } from './routes/admin/services'
-import { Route as AdminRelatoriosRouteImport } from './routes/admin/relatorios'
-import { Route as AdminProdutosRouteImport } from './routes/admin/produtos'
-import { Route as AdminMarketingRouteImport } from './routes/admin/marketing'
-import { Route as AdminFinanceiroRouteImport } from './routes/admin/financeiro'
-import { Route as AdminDashboardRouteImport } from './routes/admin/dashboard'
-import { Route as AdminConfiguracoesRouteImport } from './routes/admin/configuracoes'
-import { Route as AdminComissoesRouteImport } from './routes/admin/comissoes'
-import { Route as AdminBarbersRouteImport } from './routes/admin/barbers'
+import { Route as AdminRouteImport } from './routes/admin'
+import { Route as BarberRouteImport } from './routes/barber'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as SignupRouteImport } from './routes/signup'
 import { Route as AdminAppointmentsRouteImport } from './routes/admin/appointments'
+import { Route as AdminBarbersRouteImport } from './routes/admin/barbers'
+import { Route as AdminComissoesRouteImport } from './routes/admin/comissoes'
+import { Route as AdminConfiguracoesRouteImport } from './routes/admin/configuracoes'
+import { Route as AdminDashboardRouteImport } from './routes/admin/dashboard'
+import { Route as AdminFinanceiroRouteImport } from './routes/admin/financeiro'
+import { Route as AdminMarketingRouteImport } from './routes/admin/marketing'
+import { Route as AdminProdutosRouteImport } from './routes/admin/produtos'
+import { Route as AdminRelatoriosRouteImport } from './routes/admin/relatorios'
+import { Route as AdminServicesRouteImport } from './routes/admin/services'
+import { Route as AdminUsuariosRouteImport } from './routes/admin/usuarios'
+import { Route as BarberAgendaRouteImport } from './routes/barber/agenda'
+import { Route as BarberDashboardRouteImport } from './routes/barber/dashboard'
+import { Route as BarberLoginRouteImport } from './routes/barber/login'
 
-const SignupRoute = SignupRouteImport.update({
-  id: '/signup',
-  path: '/signup',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LoginRoute = LoginRouteImport.update({
-  id: '/login',
-  path: '/login',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const BarberRoute = BarberRouteImport.update({
-  id: '/barber',
-  path: '/barber',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminRoute = AdminRouteImport.update({
@@ -49,69 +39,24 @@ const AdminRoute = AdminRouteImport.update({
   path: '/admin',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const BarberRoute = BarberRouteImport.update({
+  id: '/barber',
+  path: '/barber',
   getParentRoute: () => rootRouteImport,
 } as any)
-const BarberLoginRoute = BarberLoginRouteImport.update({
+const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
-  getParentRoute: () => BarberRoute,
+  getParentRoute: () => rootRouteImport,
 } as any)
-const BarberDashboardRoute = BarberDashboardRouteImport.update({
-  id: '/dashboard',
-  path: '/dashboard',
-  getParentRoute: () => BarberRoute,
+const SignupRoute = SignupRouteImport.update({
+  id: '/signup',
+  path: '/signup',
+  getParentRoute: () => rootRouteImport,
 } as any)
-const BarberAgendaRoute = BarberAgendaRouteImport.update({
-  id: '/agenda',
-  path: '/agenda',
-  getParentRoute: () => BarberRoute,
-} as any)
-const AdminUsuariosRoute = AdminUsuariosRouteImport.update({
-  id: '/usuarios',
-  path: '/usuarios',
-  getParentRoute: () => AdminRoute,
-} as any)
-const AdminServicesRoute = AdminServicesRouteImport.update({
-  id: '/services',
-  path: '/services',
-  getParentRoute: () => AdminRoute,
-} as any)
-const AdminRelatoriosRoute = AdminRelatoriosRouteImport.update({
-  id: '/relatorios',
-  path: '/relatorios',
-  getParentRoute: () => AdminRoute,
-} as any)
-const AdminProdutosRoute = AdminProdutosRouteImport.update({
-  id: '/produtos',
-  path: '/produtos',
-  getParentRoute: () => AdminRoute,
-} as any)
-const AdminMarketingRoute = AdminMarketingRouteImport.update({
-  id: '/marketing',
-  path: '/marketing',
-  getParentRoute: () => AdminRoute,
-} as any)
-const AdminFinanceiroRoute = AdminFinanceiroRouteImport.update({
-  id: '/financeiro',
-  path: '/financeiro',
-  getParentRoute: () => AdminRoute,
-} as any)
-const AdminDashboardRoute = AdminDashboardRouteImport.update({
-  id: '/dashboard',
-  path: '/dashboard',
-  getParentRoute: () => AdminRoute,
-} as any)
-const AdminConfiguracoesRoute = AdminConfiguracoesRouteImport.update({
-  id: '/configuracoes',
-  path: '/configuracoes',
-  getParentRoute: () => AdminRoute,
-} as any)
-const AdminComissoesRoute = AdminComissoesRouteImport.update({
-  id: '/comissoes',
-  path: '/comissoes',
+const AdminAppointmentsRoute = AdminAppointmentsRouteImport.update({
+  id: '/appointments',
+  path: '/appointments',
   getParentRoute: () => AdminRoute,
 } as any)
 const AdminBarbersRoute = AdminBarbersRouteImport.update({
@@ -119,10 +64,65 @@ const AdminBarbersRoute = AdminBarbersRouteImport.update({
   path: '/barbers',
   getParentRoute: () => AdminRoute,
 } as any)
-const AdminAppointmentsRoute = AdminAppointmentsRouteImport.update({
-  id: '/appointments',
-  path: '/appointments',
+const AdminComissoesRoute = AdminComissoesRouteImport.update({
+  id: '/comissoes',
+  path: '/comissoes',
   getParentRoute: () => AdminRoute,
+} as any)
+const AdminConfiguracoesRoute = AdminConfiguracoesRouteImport.update({
+  id: '/configuracoes',
+  path: '/configuracoes',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminDashboardRoute = AdminDashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminFinanceiroRoute = AdminFinanceiroRouteImport.update({
+  id: '/financeiro',
+  path: '/financeiro',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminMarketingRoute = AdminMarketingRouteImport.update({
+  id: '/marketing',
+  path: '/marketing',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminProdutosRoute = AdminProdutosRouteImport.update({
+  id: '/produtos',
+  path: '/produtos',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminRelatoriosRoute = AdminRelatoriosRouteImport.update({
+  id: '/relatorios',
+  path: '/relatorios',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminServicesRoute = AdminServicesRouteImport.update({
+  id: '/services',
+  path: '/services',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminUsuariosRoute = AdminUsuariosRouteImport.update({
+  id: '/usuarios',
+  path: '/usuarios',
+  getParentRoute: () => AdminRoute,
+} as any)
+const BarberAgendaRoute = BarberAgendaRouteImport.update({
+  id: '/agenda',
+  path: '/agenda',
+  getParentRoute: () => BarberRoute,
+} as any)
+const BarberDashboardRoute = BarberDashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
+  getParentRoute: () => BarberRoute,
+} as any)
+const BarberLoginRoute = BarberLoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => BarberRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
@@ -265,25 +265,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/signup': {
-      id: '/signup'
-      path: '/signup'
-      fullPath: '/signup'
-      preLoaderRoute: typeof SignupRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/login': {
-      id: '/login'
-      path: '/login'
-      fullPath: '/login'
-      preLoaderRoute: typeof LoginRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/barber': {
-      id: '/barber'
-      path: '/barber'
-      fullPath: '/barber'
-      preLoaderRoute: typeof BarberRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin': {
@@ -293,95 +279,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/barber': {
+      id: '/barber'
+      path: '/barber'
+      fullPath: '/barber'
+      preLoaderRoute: typeof BarberRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/barber/login': {
-      id: '/barber/login'
+    '/login': {
+      id: '/login'
       path: '/login'
-      fullPath: '/barber/login'
-      preLoaderRoute: typeof BarberLoginRouteImport
-      parentRoute: typeof BarberRoute
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/barber/dashboard': {
-      id: '/barber/dashboard'
-      path: '/dashboard'
-      fullPath: '/barber/dashboard'
-      preLoaderRoute: typeof BarberDashboardRouteImport
-      parentRoute: typeof BarberRoute
+    '/signup': {
+      id: '/signup'
+      path: '/signup'
+      fullPath: '/signup'
+      preLoaderRoute: typeof SignupRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/barber/agenda': {
-      id: '/barber/agenda'
-      path: '/agenda'
-      fullPath: '/barber/agenda'
-      preLoaderRoute: typeof BarberAgendaRouteImport
-      parentRoute: typeof BarberRoute
-    }
-    '/admin/usuarios': {
-      id: '/admin/usuarios'
-      path: '/usuarios'
-      fullPath: '/admin/usuarios'
-      preLoaderRoute: typeof AdminUsuariosRouteImport
-      parentRoute: typeof AdminRoute
-    }
-    '/admin/services': {
-      id: '/admin/services'
-      path: '/services'
-      fullPath: '/admin/services'
-      preLoaderRoute: typeof AdminServicesRouteImport
-      parentRoute: typeof AdminRoute
-    }
-    '/admin/relatorios': {
-      id: '/admin/relatorios'
-      path: '/relatorios'
-      fullPath: '/admin/relatorios'
-      preLoaderRoute: typeof AdminRelatoriosRouteImport
-      parentRoute: typeof AdminRoute
-    }
-    '/admin/produtos': {
-      id: '/admin/produtos'
-      path: '/produtos'
-      fullPath: '/admin/produtos'
-      preLoaderRoute: typeof AdminProdutosRouteImport
-      parentRoute: typeof AdminRoute
-    }
-    '/admin/marketing': {
-      id: '/admin/marketing'
-      path: '/marketing'
-      fullPath: '/admin/marketing'
-      preLoaderRoute: typeof AdminMarketingRouteImport
-      parentRoute: typeof AdminRoute
-    }
-    '/admin/financeiro': {
-      id: '/admin/financeiro'
-      path: '/financeiro'
-      fullPath: '/admin/financeiro'
-      preLoaderRoute: typeof AdminFinanceiroRouteImport
-      parentRoute: typeof AdminRoute
-    }
-    '/admin/dashboard': {
-      id: '/admin/dashboard'
-      path: '/dashboard'
-      fullPath: '/admin/dashboard'
-      preLoaderRoute: typeof AdminDashboardRouteImport
-      parentRoute: typeof AdminRoute
-    }
-    '/admin/configuracoes': {
-      id: '/admin/configuracoes'
-      path: '/configuracoes'
-      fullPath: '/admin/configuracoes'
-      preLoaderRoute: typeof AdminConfiguracoesRouteImport
-      parentRoute: typeof AdminRoute
-    }
-    '/admin/comissoes': {
-      id: '/admin/comissoes'
-      path: '/comissoes'
-      fullPath: '/admin/comissoes'
-      preLoaderRoute: typeof AdminComissoesRouteImport
+    '/admin/appointments': {
+      id: '/admin/appointments'
+      path: '/appointments'
+      fullPath: '/admin/appointments'
+      preLoaderRoute: typeof AdminAppointmentsRouteImport
       parentRoute: typeof AdminRoute
     }
     '/admin/barbers': {
@@ -391,12 +314,89 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminBarbersRouteImport
       parentRoute: typeof AdminRoute
     }
-    '/admin/appointments': {
-      id: '/admin/appointments'
-      path: '/appointments'
-      fullPath: '/admin/appointments'
-      preLoaderRoute: typeof AdminAppointmentsRouteImport
+    '/admin/comissoes': {
+      id: '/admin/comissoes'
+      path: '/comissoes'
+      fullPath: '/admin/comissoes'
+      preLoaderRoute: typeof AdminComissoesRouteImport
       parentRoute: typeof AdminRoute
+    }
+    '/admin/configuracoes': {
+      id: '/admin/configuracoes'
+      path: '/configuracoes'
+      fullPath: '/admin/configuracoes'
+      preLoaderRoute: typeof AdminConfiguracoesRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/dashboard': {
+      id: '/admin/dashboard'
+      path: '/dashboard'
+      fullPath: '/admin/dashboard'
+      preLoaderRoute: typeof AdminDashboardRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/financeiro': {
+      id: '/admin/financeiro'
+      path: '/financeiro'
+      fullPath: '/admin/financeiro'
+      preLoaderRoute: typeof AdminFinanceiroRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/marketing': {
+      id: '/admin/marketing'
+      path: '/marketing'
+      fullPath: '/admin/marketing'
+      preLoaderRoute: typeof AdminMarketingRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/produtos': {
+      id: '/admin/produtos'
+      path: '/produtos'
+      fullPath: '/admin/produtos'
+      preLoaderRoute: typeof AdminProdutosRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/relatorios': {
+      id: '/admin/relatorios'
+      path: '/relatorios'
+      fullPath: '/admin/relatorios'
+      preLoaderRoute: typeof AdminRelatoriosRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/services': {
+      id: '/admin/services'
+      path: '/services'
+      fullPath: '/admin/services'
+      preLoaderRoute: typeof AdminServicesRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/usuarios': {
+      id: '/admin/usuarios'
+      path: '/usuarios'
+      fullPath: '/admin/usuarios'
+      preLoaderRoute: typeof AdminUsuariosRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/barber/agenda': {
+      id: '/barber/agenda'
+      path: '/agenda'
+      fullPath: '/barber/agenda'
+      preLoaderRoute: typeof BarberAgendaRouteImport
+      parentRoute: typeof BarberRoute
+    }
+    '/barber/dashboard': {
+      id: '/barber/dashboard'
+      path: '/dashboard'
+      fullPath: '/barber/dashboard'
+      preLoaderRoute: typeof BarberDashboardRouteImport
+      parentRoute: typeof BarberRoute
+    }
+    '/barber/login': {
+      id: '/barber/login'
+      path: '/login'
+      fullPath: '/barber/login'
+      preLoaderRoute: typeof BarberLoginRouteImport
+      parentRoute: typeof BarberRoute
     }
   }
 }

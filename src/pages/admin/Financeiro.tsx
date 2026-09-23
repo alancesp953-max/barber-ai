@@ -117,8 +117,8 @@ export default function Financeiro({
     try {
       const prev = await getPagamentosDoAgendamento(id)
       const sum = prev
-        .filter((p) => !p.status || p.status === 'Pago')
-        .reduce((s, p) => s + Number(p.valor || 0), 0)
+        .filter((p: { status?: string | null }) => !p.status || p.status === 'Pago')
+        .reduce((s: number, p: { valor?: number | null }) => s + Number(p.valor || 0), 0)
       setPaidBefore(sum)
       const restante = Math.max(0, Number(ag?.total_comanda ?? total + sum) - sum)
       setLines([{ forma: 'Dinheiro', valor: restante > 0 ? restante.toFixed(2).replace('.', ',') : '' }])
