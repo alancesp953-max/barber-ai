@@ -64,9 +64,14 @@
     "noAccount": "Não tem uma conta?",
     "signup": "Cadastre-se",
     "signUp": "Cadastre-se",
-    "invalidCredentials": "E-mail ou senha inválidos",
-    "success": "Login realizado com sucesso",
-    "supabaseNotConfigured": "Supabase não configurado. Copie .env.example para .env e adicione URL e anon key."
+    "invalidCredentials": "Invalid email or password",
+    "success": "Signed in successfully",
+    "supabaseNotConfigured": "Supabase is not configured. Copy .env.example to .env and add the URL and anon key.",
+    "demoModeTitle": "Demo mode",
+    "demoModeHint": "Supabase is not configured. Sign in with local sample data to prototype the screens — no official WhatsApp or database will be used.",
+    "enterAsAdminDemo": "Enter as Admin (Demo)",
+    "enterAsBarberDemo": "Enter as Barber (Demo)",
+    "demoBanner": "Demo mode — local sample data. No connection to the official database or WhatsApp."
   },
   "signup": {
     "title": "Criar conta",

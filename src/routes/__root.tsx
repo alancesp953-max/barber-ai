@@ -5,7 +5,7 @@ import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { supabase } from '../services/supabaseClient'
 
-function RootError({ error }: { error: Error }) {
+function RootError({ error }: { error: any }) {
   const { t } = useTranslation()
   const router = useRouter()
 

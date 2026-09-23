@@ -66,7 +66,12 @@
     "signUp": "Cadastre-se",
     "invalidCredentials": "E-mail ou senha inválidos",
     "success": "Login realizado com sucesso",
-    "supabaseNotConfigured": "Supabase não configurado. Copie .env.example para .env e adicione URL e anon key."
+    "supabaseNotConfigured": "Supabase não configurado. Copie .env.example para .env e adicione URL e anon key.",
+    "demoModeTitle": "Modo demonstração",
+    "demoModeHint": "Supabase não configurado. Entre com dados fictícios locais para prototipar as telas — nenhum WhatsApp ou banco oficial será usado.",
+    "enterAsAdminDemo": "Entrar como Admin (Demo)",
+    "enterAsBarberDemo": "Entrar como Barbeiro (Demo)",
+    "demoBanner": "Modo demonstração — dados locais fictícios. Sem conexão com o banco ou WhatsApp oficiais."
   },
   "signup": {
     "title": "Criar conta",

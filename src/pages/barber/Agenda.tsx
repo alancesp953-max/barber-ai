@@ -21,33 +21,41 @@ import {
   CalendarX2,
   Clock,
   LogOut,
+  Plus,
   RefreshCw,
   Star,
-  Trash2,
   User as UserIcon,
 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
+import { AppointmentCreateModal } from '../../components/AppointmentCreateModal'
 import { BrandLogo } from '../../components/BrandLogo'
 import {
   createBarbeiroBloqueio,
   deleteBarbeiroBloqueio,
   getAgendaBarbeiro,
+  getBarber,
   getBarbeiroBloqueios,
   getBarbeiroByUserId,
   getBarbeiroHorarios,
+  getServices,
   saveBarbeiroDiasAtendimento,
   type BarberBlock,
   type BarberDayHours,
 } from '../../lib/api'
 import { BarberWeeklyDays } from '../../components/BarberWeeklyDays'
+import { BarberDailyBreak } from '../../components/BarberDailyBreak'
+import { BarberActiveBlocksList, type DailyBreakSummary } from '../../components/BarberActiveBlocksList'
+import { readConfiguredDailyBreak } from '../../lib/availability'
 import { supabase } from '../../services/supabaseClient'
+import type { Service } from '../../types/database'
 
 type AgendaItem = {
   id: string
   data: string
   horario?: string | null
   status: string | null
+  barbeiro_id?: string | null
   servicos: { nome: string; duracao_minutos: number | null; preco: number | null } | null
   clientes: { nome: string; telefone: string | null } | null
 }
@@ -132,49 +140,6 @@ const addDaysYmd = (ymd: string, days: number) => {
 /** ISO com offset de Fortaleza (BRT, sem horário de verão). */
 const toBrtIso = (date: string, time: string) => `${date}T${time.length === 5 ? `${time}:00` : time}-03:00`
 
-const formatBlockRange = (inicio: string, fim: string | null) => {
-  const a = new Date(inicio)
-  if (!fim) {
-    return `${a.toLocaleString('pt-BR', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })} → sem previsão de retorno`
-  }
-  const b = new Date(fim)
-  const sameDay = a.toDateString() === b.toDateString()
-  const dOpts: Intl.DateTimeFormatOptions = {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }
-  if (sameDay) {
-    return `${a.toLocaleDateString('pt-BR')} · ${a.toLocaleTimeString('pt-BR', {
-      hour: '2-digit',
-      minute: '2-digit',
-    })} → ${b.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
-  }
-  return `${a.toLocaleString('pt-BR', dOpts)} → ${b.toLocaleString('pt-BR', dOpts)}`
-}
-
-const blockStatus = (inicio: string, fim: string | null) => {
-  const now = Date.now()
-  const a = new Date(inicio).getTime()
-  if (!fim) {
-    return now >= a
-      ? { label: 'Afastamento ativo', color: 'red' as const }
-      : { label: 'Afastamento programado', color: 'gold' as const }
-  }
-  const b = new Date(fim).getTime()
-  if (now >= a && now < b) return { label: 'Ativo agora', color: 'orange' as const }
-  if (now < a) return { label: 'Programado', color: 'gold' as const }
-  return { label: 'Encerrado', color: 'gray' as const }
-}
-
 const appointmentOverlapsBlock = (
   item: AgendaItem,
   blockStartMs: number,
@@ -195,12 +160,15 @@ export default function BarberAgenda() {
   const navigate = useNavigate()
   const [barbeiro, setBarbeiro] = useState<BarberInfo | null>(null)
   const [agenda, setAgenda] = useState<AgendaItem[]>([])
+  const [services, setServices] = useState<Service[]>([])
+  const [showCreate, setShowCreate] = useState(false)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
 
   const [horarios, setHorarios] = useState<Record<number, BarberDayHours>>({})
   const [bloqueios, setBloqueios] = useState<BarberBlock[]>([])
+  const [dailyBreak, setDailyBreak] = useState<DailyBreakSummary | null>(null)
   const [blockStartDate, setBlockStartDate] = useState(todayYmd)
   const [blockStartTime, setBlockStartTime] = useState('08:30')
   const [blockEndDate, setBlockEndDate] = useState(todayYmd)
@@ -212,9 +180,10 @@ export default function BarberAgenda() {
   const [availMsgTone, setAvailMsgTone] = useState<'gold' | 'orange' | 'red'>('gold')
 
   const loadAvailability = useCallback(async (barbeiroId: string) => {
-    const [hRows, bRows] = await Promise.all([
+    const [hRows, bRows, barberRow] = await Promise.all([
       getBarbeiroHorarios(barbeiroId),
       getBarbeiroBloqueios(barbeiroId),
+      getBarber(barbeiroId),
     ])
     const map: Record<number, BarberDayHours> = {}
     for (const d of DIAS) {
@@ -228,7 +197,13 @@ export default function BarberAgenda() {
       }
     }
     setHorarios(map)
-    setBloqueios(bRows)
+    setBloqueios(bRows.filter((row) => row.barbeiro_id === barbeiroId))
+    const configured = readConfiguredDailyBreak(barberRow)
+    setDailyBreak(
+      configured && barberRow.id === barbeiroId
+        ? { ativo: true, inicio: configured.inicio, fim: configured.fim, barbeiroId }
+        : null,
+    )
   }, [])
 
   const loadAgenda = useCallback(
@@ -254,8 +229,12 @@ export default function BarberAgenda() {
         }
 
         setBarbeiro(info)
-        const itens = await getAgendaBarbeiro(info.id)
-        setAgenda(itens as AgendaItem[])
+        const [itens, catalog] = await Promise.all([
+          getAgendaBarbeiro(info.id),
+          getServices(),
+        ])
+        setAgenda((itens as AgendaItem[]).filter((item) => item.barbeiro_id === info.id))
+        setServices(catalog)
         await loadAvailability(info.id)
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Erro ao carregar agenda.')
@@ -469,6 +448,15 @@ export default function BarberAgenda() {
             </Box>
           </Group>
           <Button
+            color="gold"
+            size="sm"
+            c="dark.9"
+            leftSection={<Plus size={16} />}
+            onClick={() => setShowCreate(true)}
+          >
+            Novo agendamento
+          </Button>
+          <Button
             variant="default"
             size="sm"
             leftSection={<RefreshCw size={14} />}
@@ -595,6 +583,15 @@ export default function BarberAgenda() {
                   <Alert color={availMsgTone} variant="light">
                     {availMsg}
                   </Alert>
+                )}
+
+                {barbeiro && (
+                <Card withBorder padding="lg">
+                  <BarberDailyBreak
+                    barbeiroId={barbeiro.id}
+                    onSaved={() => void loadAvailability(barbeiro.id)}
+                  />
+                </Card>
                 )}
 
                 {barbeiro && (
@@ -763,48 +760,23 @@ export default function BarberAgenda() {
                     <Text size="sm" fw={600}>
                       Bloqueios futuros e ativos
                     </Text>
-                    {bloqueios.length === 0 ? (
-                      <Text size="sm" c="dimmed">
-                        Nenhuma folga/bloqueio programado.
-                      </Text>
-                    ) : (
-                      bloqueios.map((b) => {
-                        const st = blockStatus(b.inicio, b.fim)
-                        return (
-                          <Group key={b.id} justify="space-between" wrap="nowrap" align="flex-start">
-                            <div style={{ minWidth: 0 }}>
-                              <Group gap="xs" mb={4}>
-                                <Badge color={st.color} variant="light" size="sm">
-                                  {st.label}
-                                </Badge>
-                                {b.motivo && (
-                                  <Text size="xs" c="dimmed" lineClamp={1}>
-                                    {b.motivo}
-                                  </Text>
-                                )}
-                              </Group>
-                              <Text size="sm" fw={600}>
-                                {formatBlockRange(b.inicio, b.fim)}
-                              </Text>
-                            </div>
-                            <Button
-                              variant="subtle"
-                              color="red"
-                              size="xs"
-                              leftSection={<Trash2 size={14} />}
-                              onClick={async () => {
-                                await deleteBarbeiroBloqueio(b.id)
-                                if (barbeiro) await loadAvailability(barbeiro.id)
-                                setAvailMsgTone('gold')
-                                setAvailMsg('Bloqueio removido. Você volta a aparecer na agenda e no rodízio.')
-                              }}
-                            >
-                              Remover
-                            </Button>
-                          </Group>
-                        )
-                      })
-                    )}
+                    <BarberActiveBlocksList
+                      bloqueios={bloqueios}
+                      dailyBreak={dailyBreak}
+                      removedMessage="Bloqueio removido. Você volta a aparecer na agenda e no rodízio."
+                      onRemove={async (id) => {
+                        await deleteBarbeiroBloqueio(id)
+                        if (barbeiro) await loadAvailability(barbeiro.id)
+                      }}
+                      onRemoved={(message) => {
+                        setAvailMsgTone('gold')
+                        setAvailMsg(message)
+                      }}
+                      onError={(message) => {
+                        setAvailMsgTone('red')
+                        setAvailMsg(message)
+                      }}
+                    />
                   </Stack>
                 </Card>
               </Stack>
@@ -812,6 +784,18 @@ export default function BarberAgenda() {
           </Tabs>
         )}
       </Box>
+
+      {barbeiro && (
+        <AppointmentCreateModal
+          opened={showCreate}
+          onClose={() => setShowCreate(false)}
+          onCreated={() => void loadAgenda({ soft: true })}
+          barbers={[{ id: barbeiro.id, nome: barbeiro.nome }]}
+          services={services}
+          lockedBarber={{ id: barbeiro.id, nome: barbeiro.nome }}
+          defaultDate={todayYmd()}
+        />
+      )}
     </Box>
   )
 }

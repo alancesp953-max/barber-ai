@@ -1,6 +1,5 @@
 import {
   Alert,
-  Badge,
   Button,
   Group,
   SimpleGrid,
@@ -9,14 +8,17 @@ import {
   Text,
   TextInput,
 } from '@mantine/core'
-import { Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import {
   createBarbeiroBloqueio,
   deleteBarbeiroBloqueio,
+  getBarber,
   getBarbeiroBloqueios,
   type BarberBlock,
 } from '../lib/api'
+import { readConfiguredDailyBreak } from '../lib/availability'
+import { BarberActiveBlocksList, type DailyBreakSummary } from './BarberActiveBlocksList'
+import { BarberDailyBreak } from './BarberDailyBreak'
 
 const todayYmd = () => {
   const d = new Date()
@@ -38,49 +40,6 @@ const addDaysYmd = (ymd: string, days: number) => {
 const toBrtIso = (date: string, time: string) =>
   `${date}T${time.length === 5 ? `${time}:00` : time}-03:00`
 
-const formatBlockRange = (inicio: string, fim: string | null) => {
-  const a = new Date(inicio)
-  if (!fim) {
-    return `${a.toLocaleString('pt-BR', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })} → sem previsão de retorno`
-  }
-  const b = new Date(fim)
-  const sameDay = a.toDateString() === b.toDateString()
-  const dOpts: Intl.DateTimeFormatOptions = {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }
-  if (sameDay) {
-    return `${a.toLocaleDateString('pt-BR')} · ${a.toLocaleTimeString('pt-BR', {
-      hour: '2-digit',
-      minute: '2-digit',
-    })} → ${b.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
-  }
-  return `${a.toLocaleString('pt-BR', dOpts)} → ${b.toLocaleString('pt-BR', dOpts)}`
-}
-
-const blockStatus = (inicio: string, fim: string | null) => {
-  const now = Date.now()
-  const a = new Date(inicio).getTime()
-  if (!fim) {
-    return now >= a
-      ? { label: 'Afastamento ativo', color: 'red' as const }
-      : { label: 'Afastamento programado', color: 'gold' as const }
-  }
-  const b = new Date(fim).getTime()
-  if (now >= a && now < b) return { label: 'Ativo agora', color: 'orange' as const }
-  if (now < a) return { label: 'Programado', color: 'gold' as const }
-  return { label: 'Encerrado', color: 'gray' as const }
-}
-
 type Props = {
   barbeiroId: string
   barbeiroNome?: string
@@ -90,6 +49,7 @@ type Props = {
 
 export function BarberBlocksManager({ barbeiroId, barbeiroNome, inputStyles }: Props) {
   const [bloqueios, setBloqueios] = useState<BarberBlock[]>([])
+  const [dailyBreak, setDailyBreak] = useState<DailyBreakSummary | null>(null)
   const [blockStartDate, setBlockStartDate] = useState(todayYmd)
   const [blockStartTime, setBlockStartTime] = useState('08:30')
   const [blockEndDate, setBlockEndDate] = useState(todayYmd)
@@ -101,8 +61,19 @@ export function BarberBlocksManager({ barbeiroId, barbeiroNome, inputStyles }: P
   const [msgTone, setMsgTone] = useState<'gold' | 'orange' | 'red'>('gold')
 
   const load = useCallback(async () => {
-    const rows = await getBarbeiroBloqueios(barbeiroId)
-    setBloqueios(rows)
+    setDailyBreak(null)
+    const [rows, barber] = await Promise.all([
+      getBarbeiroBloqueios(barbeiroId),
+      getBarber(barbeiroId),
+    ])
+    if (barber.id !== barbeiroId) return
+    setBloqueios(rows.filter((row) => row.barbeiro_id === barbeiroId))
+    const configured = readConfiguredDailyBreak(barber)
+    setDailyBreak(
+      configured
+        ? { ativo: true, inicio: configured.inicio, fim: configured.fim, barbeiroId: barber.id }
+        : null,
+    )
   }, [barbeiroId])
 
   useEffect(() => {
@@ -160,7 +131,7 @@ export function BarberBlocksManager({ barbeiroId, barbeiroNome, inputStyles }: P
       return
     }
     const inicio = toBrtIso(blockStartDate, blockStartTime)
-    const fim = blockNoEnd ? null : toBrtIso(blockEndDate, blockEndTime)
+    const fim = blockNoEnd ? null : toBrtIso(blockEndDate, blockEndTime) || null
     if (fim && !(new Date(fim).getTime() > new Date(inicio).getTime())) {
       setMsgTone('orange')
       setMsg('O fim do período precisa ser depois do início.')
@@ -194,6 +165,8 @@ export function BarberBlocksManager({ barbeiroId, barbeiroNome, inputStyles }: P
 
   return (
     <Stack gap="md">
+      <BarberDailyBreak barbeiroId={barbeiroId} inputStyles={inputStyles} onSaved={() => void load()} />
+
       <Text size="sm" c="dimmed">
         Pause a escala por turno, dia ou período (férias, atestado). Enquanto ativo, a Diva não oferece
         horários desse barbeiro e o rodízio (&quot;qualquer um&quot;) pula ele automaticamente.
@@ -280,48 +253,22 @@ export function BarberBlocksManager({ barbeiroId, barbeiroNome, inputStyles }: P
         <Text size="sm" fw={600}>
           Bloqueios futuros e ativos
         </Text>
-        {bloqueios.length === 0 ? (
-          <Text size="sm" c="dimmed">
-            Nenhuma folga/bloqueio programado.
-          </Text>
-        ) : (
-          bloqueios.map((b) => {
-            const st = blockStatus(b.inicio, b.fim)
-            return (
-              <Group key={b.id} justify="space-between" wrap="nowrap" align="flex-start">
-                <div style={{ minWidth: 0 }}>
-                  <Group gap="xs" mb={4}>
-                    <Badge color={st.color} variant="light" size="sm">
-                      {st.label}
-                    </Badge>
-                    {b.motivo && (
-                      <Text size="xs" c="dimmed" lineClamp={1}>
-                        {b.motivo}
-                      </Text>
-                    )}
-                  </Group>
-                  <Text size="sm" fw={600}>
-                    {formatBlockRange(b.inicio, b.fim)}
-                  </Text>
-                </div>
-                <Button
-                  variant="subtle"
-                  color="red"
-                  size="xs"
-                  leftSection={<Trash2 size={14} />}
-                  onClick={async () => {
-                    await deleteBarbeiroBloqueio(b.id)
-                    await load()
-                    setMsgTone('gold')
-                    setMsg('Bloqueio removido. O barbeiro volta a aparecer na agenda e no rodízio.')
-                  }}
-                >
-                  Remover
-                </Button>
-              </Group>
-            )
-          })
-        )}
+        <BarberActiveBlocksList
+          bloqueios={bloqueios}
+          dailyBreak={dailyBreak}
+          onRemove={async (id) => {
+            await deleteBarbeiroBloqueio(id)
+            await load()
+          }}
+          onRemoved={(message) => {
+            setMsgTone('gold')
+            setMsg(message)
+          }}
+          onError={(message) => {
+            setMsgTone('red')
+            setMsg(message)
+          }}
+        />
       </Stack>
     </Stack>
   )

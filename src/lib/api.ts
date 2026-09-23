@@ -1,9 +1,46 @@
-import { supabase } from '../services/supabaseClient'
+import { isDemoMode, supabase } from '../services/supabaseClient'
 import type { Appointment, Barber, CreateBarberInput } from '../types/database'
+import {
+  audioConfigFromSettings,
+  loadAudioSettings,
+  saveAudioSettings,
+  testElevenLabsWithKey,
+  testGeminiWithKey,
+} from './audioSettings'
+import {
+  connectWhatsAppLab,
+  disconnectWhatsAppLab,
+  simulateWhatsAppLabScan,
+  statusWhatsAppLab,
+} from './localWhatsAppLab'
 
 function joinOne<T>(value: T | T[] | null | undefined): T | null {
   if (value == null) return null
   return Array.isArray(value) ? value[0] ?? null : value
+}
+
+const SHOP_TZ = 'America/Fortaleza'
+
+function ymdInShopTz(value?: string | Date | null) {
+  const date = value instanceof Date ? value : value ? new Date(value) : new Date()
+  if (Number.isNaN(date.getTime())) return ''
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: SHOP_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+  const get = (type: string) => parts.find((part) => part.type === type)?.value || ''
+  return `${get('year')}-${get('month')}-${get('day')}`
+}
+
+function isCreatedToday(createdAt?: string | null) {
+  const ymd = ymdInShopTz(createdAt)
+  return Boolean(ymd) && ymd === ymdInShopTz(new Date())
+}
+
+function normalizeFormaPagamento(raw: unknown) {
+  return String(raw || '').trim().toUpperCase()
 }
 
 // =====================
@@ -91,6 +128,9 @@ export async function createBarber(barber: CreateBarberInput): Promise<Barber> {
       foto_url: barber.foto_url ?? null,
       ordem_rodizio: nextOrdem,
       ativo: true,
+      intervalo_ativo: barber.intervalo_ativo === true,
+      intervalo_inicio: barber.intervalo_inicio ?? null,
+      intervalo_fim: barber.intervalo_fim ?? null,
     })
     .select()
     .single()
@@ -107,6 +147,49 @@ export async function updateBarber(id: string, updates: Partial<Barber>): Promis
     .single()
   if (error) throw new Error(`Erro ao atualizar barbeiro: ${error.message}`)
   return data
+}
+
+export async function saveBarberDailyBreak(
+  barbeiroId: string,
+  breakConfig: {
+    intervalo_ativo: boolean
+    intervalo_inicio: string
+    intervalo_fim: string
+  },
+): Promise<Barber> {
+  const inicio = String(breakConfig.intervalo_inicio || '').trim().slice(0, 5) || null
+  const fim = String(breakConfig.intervalo_fim || '').trim().slice(0, 5) || null
+  if (breakConfig.intervalo_ativo) {
+    if (!inicio || !fim) {
+      throw new Error('Preencha o início e o fim do intervalo deste barbeiro.')
+    }
+    if (fim <= inicio) {
+      throw new Error('O fim do intervalo precisa ser depois do início.')
+    }
+  }
+  return updateBarber(barbeiroId, {
+    intervalo_ativo: breakConfig.intervalo_ativo,
+    intervalo_inicio: inicio,
+    intervalo_fim: fim,
+  })
+}
+
+export async function getAvailableSlots(params: {
+  data: string
+  servico_id?: string | null
+  barbeiro_id?: string | null
+  allowPast?: boolean
+}): Promise<string[]> {
+  const { data, error } = await supabase.rpc('get_available_slots', {
+    p_data: params.data,
+    p_servico_id: params.servico_id || null,
+    p_barbeiro_id: params.barbeiro_id || null,
+    p_allow_past: params.allowPast ?? true,
+  })
+  if (error) throw new Error(`Erro ao buscar horários livres: ${error.message}`)
+  return ((data as { horario: string }[]) || [])
+    .map((row) => String(row.horario || '').slice(0, 5))
+    .filter(Boolean)
 }
 
 /** Define a ordem do rodízio (1 = próximo da fila). */
@@ -281,8 +364,41 @@ export async function getAppointments() {
 
 export async function createAppointment(appointment: any) {
   const payload = { ...appointment }
+  const allowOverlap = Boolean(payload.allowOverlap)
+  delete payload.allowOverlap
   if (!payload.cliente_id || !payload.servico_id || !payload.data || !payload.horario) {
     throw new Error('cliente_id, servico_id, data e horario são obrigatórios')
+  }
+
+  const horario = String(payload.horario).slice(0, 5) + ':00'
+
+  // Cadastro manual (admin/barbeiro): grava o horário pedido mesmo com choque de agenda.
+  // WhatsApp/rodízio continuam no RPC atômico, que recusa conflito.
+  if (allowOverlap) {
+    let valor = payload.valor ?? null
+    if (valor == null) {
+      const { data: svc } = await supabase
+        .from('servicos')
+        .select('preco')
+        .eq('id', payload.servico_id)
+        .maybeSingle()
+      valor = svc?.preco ?? null
+    }
+    const { data, error } = await supabase
+      .from('agendamentos')
+      .insert({
+        cliente_id: payload.cliente_id,
+        barbeiro_id: payload.barbeiro_id || null,
+        servico_id: payload.servico_id,
+        data: payload.data,
+        horario,
+        status: payload.status || 'pendente',
+        valor,
+      })
+      .select('*, barbeiros(nome), servicos(nome), clientes(nome, telefone)')
+      .single()
+    if (error) throw new Error(`Erro ao criar agendamento: ${error.message}`)
+    return data
   }
 
   const useRotation = !payload.barbeiro_id
@@ -290,7 +406,7 @@ export async function createAppointment(appointment: any) {
     p_cliente_id: payload.cliente_id,
     p_servico_id: payload.servico_id,
     p_data: payload.data,
-    p_horario: String(payload.horario).slice(0, 5) + ':00',
+    p_horario: horario,
     p_barbeiro_id: payload.barbeiro_id || null,
     p_status: payload.status || 'pendente',
     p_valor: payload.valor ?? null,
@@ -456,16 +572,126 @@ async function invokeWhatsAppInstance(
 
 /** Status / QR da instância UAZAPI via Edge Function whatsapp-instance */
 export async function getWhatsAppInstanceStatus(): Promise<WhatsAppInstanceResult> {
+  if (isDemoMode) return statusWhatsAppLab()
   return invokeWhatsAppInstance({ action: 'status' })
 }
 
 /** Gera QR code (POST /instance/connect sem phone) */
 export async function connectWhatsAppInstance(phone?: string): Promise<WhatsAppInstanceResult> {
+  if (isDemoMode) {
+    try {
+      return connectWhatsAppLab()
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Falha ao gerar QR local neste computador.',
+      }
+    }
+  }
   return invokeWhatsAppInstance({ action: 'connect', phone })
 }
 
 export async function disconnectWhatsAppInstance(): Promise<WhatsAppInstanceResult> {
+  if (isDemoMode) return disconnectWhatsAppLab()
   return invokeWhatsAppInstance({ action: 'disconnect' })
+}
+
+/** Somente laboratório local: marca o QR como lido neste computador, sem UAZAPI/produção. */
+export async function simulateWhatsAppQrScan(): Promise<WhatsAppInstanceResult> {
+  if (isDemoMode) return simulateWhatsAppLabScan()
+  return invokeWhatsAppInstance({ action: 'simulate_scan' })
+}
+
+// =====================
+// WhatsApp Áudio (Gemini + ElevenLabs)
+// =====================
+export type WhatsAppAudioConfig = {
+  ok?: boolean
+  audio_whatsapp_ativo: boolean
+  audio_whatsapp_mode: string
+  gemini_model: string
+  elevenlabs_model: string
+  elevenlabs_voice_id: string
+  has_gemini_key: boolean
+  has_elevenlabs_key: boolean
+  gemini_api_key?: string
+  elevenlabs_api_key?: string
+}
+
+export async function getWhatsAppAudioConfig(): Promise<WhatsAppAudioConfig> {
+  if (isDemoMode) {
+    return audioConfigFromSettings(loadAudioSettings())
+  }
+  const { data, error } = await supabase.functions.invoke('whatsapp-audio-config', {
+    method: 'GET',
+  })
+  if (error) throw new Error(error.message || 'Erro ao carregar configurações de áudio')
+  return data
+}
+
+export async function saveWhatsAppAudioConfig(payload: {
+  audio_whatsapp_ativo: boolean
+  audio_whatsapp_mode: string
+  gemini_api_key?: string
+  elevenlabs_api_key?: string
+  elevenlabs_voice_id?: string
+  gemini_model?: string
+  elevenlabs_model?: string
+}): Promise<{ ok: boolean; message?: string }> {
+  if (isDemoMode) {
+    saveAudioSettings({
+      audio_whatsapp_ativo: payload.audio_whatsapp_ativo,
+      audio_whatsapp_mode: payload.audio_whatsapp_mode,
+      gemini_api_key: payload.gemini_api_key,
+      elevenlabs_api_key: payload.elevenlabs_api_key,
+      elevenlabs_voice_id: payload.elevenlabs_voice_id,
+      gemini_model: payload.gemini_model,
+      elevenlabs_model: payload.elevenlabs_model,
+    })
+    return { ok: true, message: 'Configurações de áudio salvas localmente.' }
+  }
+  const { data, error } = await supabase.functions.invoke('whatsapp-audio-config', {
+    body: { action: 'save', ...payload },
+  })
+  if (error) throw new Error(error.message || 'Erro ao salvar configurações de áudio')
+  if (data?.ok === false) throw new Error(data.error || 'Erro ao salvar configurações de áudio')
+  return data
+}
+
+export async function testGeminiAudio(payload?: {
+  gemini_api_key?: string
+  gemini_model?: string
+}): Promise<{ ok: boolean; message?: string; error?: string }> {
+  if (isDemoMode) {
+    const stored = loadAudioSettings()
+    return testGeminiWithKey(
+      payload?.gemini_api_key || stored.gemini_api_key,
+      payload?.gemini_model || stored.gemini_model,
+    )
+  }
+  const { data, error } = await supabase.functions.invoke('whatsapp-audio-config', {
+    body: { action: 'test_gemini', ...payload },
+  })
+  if (error) return { ok: false, error: error.message }
+  return data
+}
+
+export async function testElevenLabsAudio(payload?: {
+  elevenlabs_api_key?: string
+  elevenlabs_voice_id?: string
+}): Promise<{ ok: boolean; message?: string; voiceName?: string; error?: string }> {
+  if (isDemoMode) {
+    const stored = loadAudioSettings()
+    return testElevenLabsWithKey(
+      payload?.elevenlabs_api_key || stored.elevenlabs_api_key,
+      payload?.elevenlabs_voice_id || stored.elevenlabs_voice_id,
+    )
+  }
+  const { data, error } = await supabase.functions.invoke('whatsapp-audio-config', {
+    body: { action: 'test_elevenlabs', ...payload },
+  })
+  if (error) return { ok: false, error: error.message }
+  return data
 }
 
 export async function updateAppointmentStatus(id: string, status: string): Promise<Appointment> {
@@ -480,6 +706,45 @@ export async function updateAppointmentStatus(id: string, status: string): Promi
     .single()
   if (error) throw new Error(`Erro ao atualizar status do agendamento: ${error.message}`)
   return data as Appointment
+}
+
+export async function updateAppointmentComanda(
+  id: string,
+  serviceIds: string[],
+): Promise<Appointment> {
+  const unique = serviceIds.map((item) => String(item || '').trim()).filter(Boolean)
+  if (!unique.length) throw new Error('Selecione ao menos um serviço')
+
+  const { data: catalog, error: errCatalog } = await supabase
+    .from('servicos')
+    .select('id, nome, preco, duracao_minutos')
+  if (errCatalog) throw new Error(`Erro ao carregar serviços: ${errCatalog.message}`)
+
+  const byId = new Map((catalog || []).map((svc) => [String(svc.id), svc]))
+  const items = unique.map((svcId) => {
+    const svc = byId.get(svcId)
+    if (!svc) throw new Error('Serviço inválido na comanda')
+    return {
+      id: String(svc.id),
+      nome: String(svc.nome),
+      preco: Number(svc.preco) || 0,
+      duracao_minutos: Number(svc.duracao_minutos) || 0,
+    }
+  })
+  const valor = items.reduce((sum, item) => sum + item.preco, 0)
+
+  const { data, error } = await supabase
+    .from('agendamentos')
+    .update({
+      servico_id: items[0].id,
+      valor,
+      comanda_itens: items,
+    })
+    .eq('id', id)
+    .select('*, barbeiros(nome), servicos(nome, duracao_minutos, preco), clientes(nome, email)')
+    .single()
+  if (error) throw new Error(`Erro ao atualizar serviços do atendimento: ${error.message}`)
+  return { ...(data as Appointment), comanda_itens: items, valor }
 }
 
 export async function deleteAppointment(id: string) {
@@ -504,7 +769,7 @@ export async function getAgendaBarbeiro(barbeiroId: string) {
     .order('data', { ascending: true })
     .order('horario', { ascending: true })
   if (error) throw new Error(`Erro ao buscar agenda: ${error.message}`)
-  return data ?? []
+  return (data ?? []).filter((item) => item.barbeiro_id === barbeiroId)
 }
 
 // =====================
@@ -824,7 +1089,11 @@ export async function createPagamento(pagamento: {
 
   const { data, error } = await supabase
     .from('pagamentos')
-    .insert({ ...pagamento, status: pagamento.status || 'Pago' })
+    .insert({
+      ...pagamento,
+      forma_pagamento: normalizeFormaPagamento(pagamento.forma_pagamento),
+      status: pagamento.status || 'Pago',
+    })
     .select()
     .single()
   if (error) throw new Error(`Erro ao criar pagamento: ${error.message}`)
@@ -933,30 +1202,42 @@ export async function deletePagamento(id: string) {
 }
 
 export async function getPagamentosDoDia() {
-  const hoje = new Date()
-  hoje.setHours(0, 0, 0, 0)
   const { data, error } = await supabase
     .from('pagamentos')
     .select('*, agendamentos(*)')
-    .gte('created_at', hoje.toISOString())
     .eq('status', 'Pago')
     .order('created_at', { ascending: false })
   if (error) throw new Error(`Erro ao buscar pagamentos do dia: ${error.message}`)
-  return data ?? []
+  return (data ?? []).filter((p) => isCreatedToday(p.created_at as string | null))
 }
 
 export async function getResumoFinanceiro() {
   const { data, error } = await supabase
     .from('pagamentos')
-    .select('valor, forma_pagamento, status')
+    .select('id, valor, forma_pagamento, status, created_at, agendamento_id')
     .eq('status', 'Pago')
   if (error) throw new Error(`Erro ao buscar resumo financeiro: ${error.message}`)
-  const total = data?.reduce((acc, p) => acc + Number(p.valor), 0) ?? 0
+
+  const pagos = data ?? []
+  const deHoje = pagos.filter((p) => isCreatedToday(p.created_at))
+  const total = pagos.reduce((acc, p) => acc + Number(p.valor || 0), 0)
+
   const porForma: Record<string, number> = {}
-  data?.forEach(p => {
-    porForma[p.forma_pagamento] = (porForma[p.forma_pagamento] || 0) + Number(p.valor)
-  })
-  return { total, porForma, quantidade: data?.length ?? 0 }
+  for (const p of deHoje) {
+    const forma = normalizeFormaPagamento(p.forma_pagamento)
+    if (!forma) continue
+    porForma[forma] = (porForma[forma] || 0) + Number(p.valor || 0)
+  }
+
+  const agendamentosHoje = new Set(
+    deHoje.map((p) => p.agendamento_id || p.id).filter(Boolean),
+  )
+
+  return {
+    total,
+    porForma,
+    quantidade: agendamentosHoje.size,
+  }
 }
 
 // =====================
@@ -1470,7 +1751,7 @@ export async function createBarbeiroBloqueio(params: {
     .insert({
       barbeiro_id: params.barbeiro_id,
       inicio: params.inicio,
-      fim: params.fim ?? null,
+      fim: params.fim && String(params.fim).trim() ? params.fim : null,
       motivo: params.motivo || null,
     })
     .select()

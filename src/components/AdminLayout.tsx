@@ -1,7 +1,8 @@
-import { AppShell, Box, Burger, Group, Text } from '@mantine/core'
+import { Alert, AppShell, Box, Burger, Group, Text } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
 import { Outlet } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
+import { isDemoMode } from '../services/supabaseClient'
 import { AdminSidebar } from './AdminSidebar'
 import { BrandLogo } from './BrandLogo'
 
@@ -40,6 +41,11 @@ export function AdminLayout() {
       </AppShell.Navbar>
 
       <AppShell.Main>
+        {isDemoMode && (
+          <Alert color="gold" variant="light" mb="md" title={t('login.demoModeTitle')}>
+            {t('login.demoBanner')}
+          </Alert>
+        )}
         <Outlet />
       </AppShell.Main>
     </AppShell>

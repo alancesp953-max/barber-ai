@@ -49,14 +49,235 @@ import { logDiva, logDivaError } from '../_shared/debug-diva.ts'
 import { loadMimoConfig, mimoChat, type ChatMessage } from '../_shared/mimo.ts'
 import { resolveUazConfig } from '../_shared/resolve-uaz.ts'
 import {
+  GEMINI_DEFAULT_MODEL,
+  geminiGenerateWithRetry,
+  resolveGeminiModel,
+} from '../_shared/gemini.ts'
+import {
   checkSlotAvailability,
   createAppointmentAtomic,
   fetchAvailableSlots,
   filterPastSlots,
   listBookableBarbers,
-  todaySaoPaulo,
 } from '../_shared/slots.ts'
 import { humanReply, normalizePhone, sendPresence } from '../_shared/uazapi.ts'
+
+/** Hoje no calendário de Fortaleza (UTC-3 o ano inteiro). */
+function todayFortaleza(): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Fortaleza',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date())
+}
+
+// ===================== AUDIO (Gemini 3.6 Flash + ElevenLabs) =====================
+
+const ELEVENLABS_DEFAULT_VOICE_ID = '21m00Tcm4TlvDq8ikWAM'
+const ELEVENLABS_DEFAULT_MODEL = 'eleven_multilingual_v2'
+const FREE_ELEVENLABS_VOICES = new Set([ELEVENLABS_DEFAULT_VOICE_ID, 'pNInz6obpgDQGcFmaJgB'])
+
+function resolveElevenLabsVoiceId(voiceId?: string | null) {
+  const used = String(voiceId || '').trim()
+  if (FREE_ELEVENLABS_VOICES.has(used)) return used
+  return ELEVENLABS_DEFAULT_VOICE_ID
+}
+
+function resolveElevenLabsModel(_model?: string | null) {
+  return ELEVENLABS_DEFAULT_MODEL
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ''
+  const chunk = 0x8000
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
+  }
+  return btoa(binary)
+}
+
+function extractAudioUrl(msg: UazMessage): string {
+  const m = msg.message
+  if (m?.audio?.url) return String(m.audio.url)
+  if (m?.audio?.direct) return String(m.audio.direct)
+  if (m?.audio?.link) return String(m.audio.link)
+  if (m?.audio?.download) return String(m.audio.download)
+  if (msg.content && typeof msg.content === 'object') {
+    const audio = msg.content.audio
+    if (audio?.url) return String(audio.url)
+    if (audio?.direct) return String(audio.direct)
+  }
+  if (msg.audio?.url) return String(msg.audio.url)
+  if (msg.audio?.direct) return String(msg.audio.direct)
+  return ''
+}
+
+function isAudioMessage(msg: UazMessage): boolean {
+  const mt = String(msg.messageType || msg.type || '').toLowerCase()
+  if (mt === 'audio' || mt === 'ptt' || mt === 'voice') return true
+  if (extractAudioUrl(msg)) return true
+  const c = msg.content
+  if (c && typeof c === 'object' && c.audio) return true
+  if (msg.message?.audio) return true
+  return false
+}
+
+async function downloadAudio(url: string): Promise<Uint8Array> {
+  const res = await fetch(url, { headers: { Accept: '*/*' } })
+  if (!res.ok) throw new Error(`Audio download HTTP ${res.status}`)
+  return new Uint8Array(await res.arrayBuffer())
+}
+
+async function transcribeWithGemini(
+  audioBytes: Uint8Array,
+  apiKey: string,
+  model: string,
+): Promise<string> {
+  if (!apiKey) return ''
+  const result = await geminiGenerateWithRetry(apiKey, model, {
+    contents: [
+      {
+        parts: [
+          { inlineData: { mimeType: 'audio/ogg', data: bytesToBase64(audioBytes) } },
+          { text: 'Transcreva este áudio em português brasileiro. Retorne SOMENTE o texto, sem explicações.' },
+        ],
+      },
+    ],
+  })
+  if (!result.ok) throw new Error(result.error)
+  return result.json.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || ''
+}
+
+async function speakWithElevenLabs(
+  text: string,
+  apiKey: string,
+  voiceId: string,
+  model: string,
+): Promise<Uint8Array> {
+  if (!apiKey || !text) return new Uint8Array()
+  const usedVoice = resolveElevenLabsVoiceId(voiceId)
+  const usedModel = resolveElevenLabsModel(model)
+  const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${usedVoice}`, {
+    method: 'POST',
+    headers: {
+      'xi-api-key': apiKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      text: text.slice(0, 500),
+      model_id: usedModel,
+      voice_settings: { stability: 0.35, similarity_boost: 0.65, style: 0.5 },
+    }),
+  })
+  if (!res.ok) {
+    const err = await res.text().catch(() => '')
+    throw new Error(`ElevenLabs TTS HTTP ${res.status}: ${err.slice(0, 200)}`)
+  }
+  return new Uint8Array(await res.arrayBuffer())
+}
+
+async function sendAudioMessage(
+  phone: string,
+  audioBytes: Uint8Array,
+  uaz: { baseUrl: string; token: string },
+): Promise<boolean> {
+  const baseUrl = String(uaz.baseUrl || '').replace(/\/$/, '')
+  const token = String(uaz.token || '').trim()
+  const number = normalizePhone(phone)
+  try {
+    const res = await fetch(`${baseUrl}/send/audio`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json', token },
+      body: JSON.stringify({
+        number,
+        audio: bytesToBase64(audioBytes),
+        mime: 'audio/ogg',
+        readchat: true,
+        readmessages: true,
+      }),
+    })
+    if (res.ok) return true
+    const txt = await res.text().catch(() => '')
+    console.warn('[UAZ-AUDIO] send failed', res.status, txt.slice(0, 300))
+    return false
+  } catch (e) {
+    console.error('[UAZ-AUDIO] send error', e instanceof Error ? e.message : String(e))
+    return false
+  }
+}
+
+type AudioConfig = {
+  ativo: boolean
+  mode: string
+  gemini_api_key: string
+  elevenlabs_api_key: string
+  elevenlabs_voice_id: string
+  gemini_model: string
+  elevenlabs_model: string
+}
+
+async function loadAudioConfig(db: ReturnType<typeof getServiceClient>): Promise<AudioConfig> {
+  try {
+    const { data } = await db
+      .from('whatsapp_secrets')
+      .select(
+        'audio_whatsapp_ativo,audio_whatsapp_mode,gemini_api_key,elevenlabs_api_key,elevenlabs_voice_id,gemini_model,elevenlabs_model',
+      )
+      .eq('id', 1)
+      .maybeSingle()
+    return {
+      ativo: data?.audio_whatsapp_ativo === true,
+      mode: String(data?.audio_whatsapp_mode || 'audio_se_cliente_mandar'),
+      gemini_api_key: String(data?.gemini_api_key || ''),
+      elevenlabs_api_key: String(data?.elevenlabs_api_key || ''),
+      elevenlabs_voice_id: resolveElevenLabsVoiceId(data?.elevenlabs_voice_id),
+      gemini_model: resolveGeminiModel(data?.gemini_model),
+      elevenlabs_model: resolveElevenLabsModel(data?.elevenlabs_model),
+    }
+  } catch {
+    return {
+      ativo: false,
+      mode: 'audio_se_cliente_mandar',
+      gemini_api_key: '',
+      elevenlabs_api_key: '',
+      elevenlabs_voice_id: ELEVENLABS_DEFAULT_VOICE_ID,
+      gemini_model: GEMINI_DEFAULT_MODEL,
+      elevenlabs_model: ELEVENLABS_DEFAULT_MODEL,
+    }
+  }
+}
+
+async function maybeSpeakReply(
+  phone: string,
+  answer: string,
+  uazCfg: { baseUrl: string; token: string },
+  audioConfig: AudioConfig,
+  clientSentAudio: boolean,
+) {
+  const shouldSend =
+    audioConfig.ativo &&
+    Boolean(audioConfig.elevenlabs_api_key) &&
+    (audioConfig.mode === 'sempre' || (audioConfig.mode === 'audio_se_cliente_mandar' && clientSentAudio))
+  if (!shouldSend) return
+  try {
+    const audioBytes = await speakWithElevenLabs(
+      answer,
+      audioConfig.elevenlabs_api_key,
+      audioConfig.elevenlabs_voice_id,
+      audioConfig.elevenlabs_model,
+    )
+    if (audioBytes.length > 0) {
+      await sendAudioMessage(phone, audioBytes, uazCfg)
+      console.log('[AUDIO-OUTBOUND] enviado', { phone: phone.slice(-4), mode: audioConfig.mode })
+    }
+  } catch (e) {
+    console.error('[AUDIO-OUTBOUND] falhou', {
+      phone: phone.slice(-4),
+      error: e instanceof Error ? e.message : String(e),
+    })
+  }
+}
 
 type UazMessage = {
   messageid?: string
@@ -69,13 +290,20 @@ type UazMessage = {
   senderName?: string
   sender_pn?: string
   messageType?: string
+  type?: string
   text?: string
-  content?: string | { text?: string; conversation?: string }
+  audio?: { url?: string; direct?: string; link?: string; download?: string }
+  content?: string | {
+    text?: string
+    conversation?: string
+    audio?: { url?: string; direct?: string }
+  }
   message?: {
     conversation?: string
     extendedTextMessage?: { text?: string }
     buttonsResponseMessage?: { selectedButtonId?: string; selectedDisplayText?: string }
     listResponseMessage?: { title?: string; singleSelectReply?: { selectedRowId?: string } }
+    audio?: { url?: string; direct?: string; link?: string; download?: string }
   }
   buttonOrListid?: string
   [key: string]: unknown
@@ -529,7 +757,7 @@ async function listAppointments(
   phone: string,
 ): Promise<string> {
   const client = await findOrCreateClientByPhone(db, phone)
-  const today = todaySaoPaulo()
+  const today = todayFortaleza()
 
   const { data } = await db
     .from('agendamentos')
@@ -566,7 +794,7 @@ async function startCancel(
   phone: string,
 ): Promise<string> {
   const client = await findOrCreateClientByPhone(db, phone)
-  const today = todaySaoPaulo()
+  const today = todayFortaleza()
 
   const { data } = await db
     .from('agendamentos')
@@ -653,7 +881,7 @@ async function proceedAfterService(
   context: Record<string, unknown>,
   service: { id: string; nome: string; preco: number; duracao: number },
 ): Promise<string> {
-  const dateHint = typeof context.data === 'string' ? String(context.data) : todaySaoPaulo()
+  const dateHint = typeof context.data === 'string' ? String(context.data) : todayFortaleza()
   const list = await listBookableBarbers(db, dateHint)
 
   if (!list.length) {
@@ -794,7 +1022,7 @@ async function handleChooseDate(
     return 'Não entendi a data. Manda no formato *15/08* ou *15/08/2026*.'
   }
 
-  const today = todaySaoPaulo()
+  const today = todayFortaleza()
   if (data < today) {
     return 'Essa data já passou. Me passa outra, por favor?'
   }
@@ -1088,7 +1316,9 @@ async function processWithMimo(
 
   const offHoursNotice = shopHoursStatusNotice(shopPhase, shopOpenHm)
   const bookingLocked = isBookingStep(session.step)
+  const hojeFortaleza = todayFortaleza()
   const system = systemPromptBarber() +
+    `\nDATA DINÂMICA: hoje no fuso America/Fortaleza é ${hojeFortaleza}. "Amanhã" é o dia seguinte a essa data. Use este fuso para hoje, amanhã e dias da semana.` +
     (bookingLocked
       ? `\nPASSO TRAVADO: ${session.step}. Não peça o nome. Não mude de assunto. Continue este passo.`
       : '') +
@@ -1716,6 +1946,7 @@ Deno.serve(async (req) => {
     }
 
     const results: { phone: string; ok: boolean; note?: string }[] = []
+    const audioConfig = await loadAudioConfig(db)
 
     for (const msg of messages) {
       if (shouldIgnore(msg)) {
@@ -1754,7 +1985,30 @@ Deno.serve(async (req) => {
           console.info('whatsapp-webhook: reply to instance owner (self-test or same number)', phone)
         }
 
-        const text = extractText(msg)
+        const clientSentAudio = isAudioMessage(msg)
+        let text = extractText(msg)
+        if (audioConfig.ativo && clientSentAudio && audioConfig.gemini_api_key) {
+          const audioUrl = extractAudioUrl(msg)
+          if (audioUrl) {
+            try {
+              const audioBytes = await downloadAudio(audioUrl)
+              console.log('[AUDIO-INBOUND] baixado', { phone: phone.slice(-4), bytes: audioBytes.length })
+              const transcript = await transcribeWithGemini(
+                audioBytes,
+                audioConfig.gemini_api_key,
+                audioConfig.gemini_model,
+              )
+              console.log('[AUDIO-INBOUND] transcript', { phone: phone.slice(-4), transcript })
+              if (transcript) text = text ? `${text}\n${transcript}` : transcript
+            } catch (e) {
+              console.error('[AUDIO-INBOUND] transcribe falhou', {
+                phone: phone.slice(-4),
+                error: e instanceof Error ? e.message : String(e),
+              })
+            }
+          }
+        }
+
         const uazCfg = await beginTyping(phone, db, 15000)
         if (!uazCfg) {
           results.push({ phone, ok: false, note: 'uaz_unavailable' })
@@ -1771,6 +2025,7 @@ Deno.serve(async (req) => {
           const leadName = await getLeadDisplayName(db, phone)
           const answer = await processMessage(db, phone, 'oi')
           await reply(phone, answer, db, uazCfg, { senderName: leadName, userText: 'oi' })
+          await maybeSpeakReply(phone, answer, uazCfg, audioConfig, clientSentAudio)
           if (mid) {
             await db.from('whatsapp_processed_messages').insert({ messageid: mid }).then(() => null, () => null)
           }
@@ -1781,6 +2036,7 @@ Deno.serve(async (req) => {
         const leadName = await getLeadDisplayName(db, phone)
         const answer = await processMessage(db, phone, text)
         await reply(phone, answer, db, uazCfg, { senderName: leadName, userText: text })
+        await maybeSpeakReply(phone, answer, uazCfg, audioConfig, clientSentAudio)
         if (mid) {
           await db.from('whatsapp_processed_messages').insert({ messageid: mid })
         }
