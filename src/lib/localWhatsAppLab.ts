@@ -155,7 +155,7 @@ export function appendWhatsAppLabMessage(message: Omit<LabChatMessage, 'id' | 'a
     transcript: message.transcript,
     audioUrl: message.audioUrl,
   }
-  const next = saveWhatsAppLab({
+  saveWhatsAppLab({
     ...current,
     messages: [...current.messages, entry].slice(-40),
   })

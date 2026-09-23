@@ -116,7 +116,7 @@ function rangesOverlap(a0: number, a1: number, b0: number, b1: number) {
 }
 
 function workWindow(
-  ymd: string,
+  _ymd: string,
   shopRange: { open: string; close: string } | null,
   hours: DayHours | null | undefined,
   hasCustomHours: boolean,

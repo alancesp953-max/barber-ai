@@ -111,7 +111,7 @@ export function resolveElevenLabsVoiceId(voiceId?: string | null) {
   return ELEVENLABS_DEFAULT_VOICE_ID
 }
 
-export function resolveElevenLabsModel(model?: string | null) {
+export function resolveElevenLabsModel(_model?: string | null) {
   return ELEVENLABS_DEFAULT_MODEL
 }
 

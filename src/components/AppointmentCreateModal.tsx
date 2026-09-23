@@ -20,7 +20,7 @@ import {
   notifyAppointmentWhatsApp,
 } from '../lib/api'
 import { formatCurrency } from '../lib/format'
-import type { Service } from '../types/database'
+import type { Client, Service } from '../types/database'
 
 const inputStyles = {
   input: { background: '#0d0d0d', borderColor: 'rgba(197,160,89,0.2)', color: '#f5f5f5' },
@@ -200,7 +200,7 @@ export function AppointmentCreateModal({
     void getClients()
       .then((rows) =>
         setCatalog(
-          (rows || []).map((row) => ({
+          (rows || []).map((row: Client) => ({
             id: String(row.id),
             nome: String(row.nome || ''),
             telefone: row.telefone ?? null,

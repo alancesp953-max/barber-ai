@@ -87,10 +87,11 @@ export function LocalAudioMessageLab() {
         return
       }
       setMessages(result.messages)
+      const note = 'note' in result ? result.note : undefined
       setFeedback({
-        tipo: result.note ? 'erro' : 'sucesso',
-        texto: result.note
-          ? `Gemini transcreveu: "${result.transcript}". ElevenLabs: ${result.note}`
+        tipo: note ? 'erro' : 'sucesso',
+        texto: note
+          ? `Gemini transcreveu: "${result.transcript}". ElevenLabs: ${note}`
           : `Gemini transcreveu: "${result.transcript}". A voz do ElevenLabs deve tocar abaixo.`,
       })
     } catch (err) {

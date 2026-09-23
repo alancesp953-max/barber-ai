@@ -720,7 +720,10 @@ export async function updateAppointmentComanda(
     .select('id, nome, preco, duracao_minutos')
   if (errCatalog) throw new Error(`Erro ao carregar serviços: ${errCatalog.message}`)
 
-  const byId = new Map((catalog || []).map((svc) => [String(svc.id), svc]))
+  type ServicoCatalogo = { id: string; nome: string; preco: number; duracao_minutos: number }
+  const byId = new Map<string, ServicoCatalogo>(
+    ((catalog || []) as ServicoCatalogo[]).map((svc) => [String(svc.id), svc]),
+  )
   const items = unique.map((svcId) => {
     const svc = byId.get(svcId)
     if (!svc) throw new Error('Serviço inválido na comanda')
@@ -769,7 +772,7 @@ export async function getAgendaBarbeiro(barbeiroId: string) {
     .order('data', { ascending: true })
     .order('horario', { ascending: true })
   if (error) throw new Error(`Erro ao buscar agenda: ${error.message}`)
-  return (data ?? []).filter((item) => item.barbeiro_id === barbeiroId)
+  return (data ?? []).filter((item: { barbeiro_id?: string | null }) => item.barbeiro_id === barbeiroId)
 }
 
 // =====================
@@ -1066,7 +1069,10 @@ export async function createPagamento(pagamento: {
     .from('agendamento_servicos')
     .select('preco')
     .eq('agendamento_id', pagamento.agendamento_id)
-  const itemsTotal = (items || []).reduce((s, i) => s + Number(i.preco || 0), 0)
+  const itemsTotal = (items || []).reduce(
+    (s: number, i: { preco?: number | null }) => s + Number(i.preco || 0),
+    0,
+  )
   const servicoPreco = Number(
     (appt as { servicos?: { preco?: number } | null }).servicos?.preco ?? 0,
   )
@@ -1079,7 +1085,10 @@ export async function createPagamento(pagamento: {
     .select('valor')
     .eq('agendamento_id', pagamento.agendamento_id)
     .eq('status', 'Pago')
-  const jaPago = (pagosPrev || []).reduce((s, p) => s + Number(p.valor || 0), 0)
+  const jaPago = (pagosPrev || []).reduce(
+    (s: number, p: { valor?: number | null }) => s + Number(p.valor || 0),
+    0,
+  )
   const restante = Math.round((totalComanda - jaPago) * 100) / 100
   if (pagamento.valor > restante + 0.009) {
     throw new Error(
@@ -1157,7 +1166,7 @@ export async function getAgendamentosPendentesPagamento() {
   }
 
   return (appts || [])
-    .map((a) => {
+    .map((a: any) => {
       const itemsTotal = itemsByAppt.get(a.id) || 0
       const total =
         itemsTotal > 0
@@ -1172,7 +1181,7 @@ export async function getAgendamentosPendentesPagamento() {
         restante,
       }
     })
-    .filter((a) => a.restante > 0.009)
+    .filter((a: { restante: number }) => a.restante > 0.009)
 }
 
 export async function getPagamentosDoAgendamento(agendamentoId: string) {
@@ -1208,7 +1217,7 @@ export async function getPagamentosDoDia() {
     .eq('status', 'Pago')
     .order('created_at', { ascending: false })
   if (error) throw new Error(`Erro ao buscar pagamentos do dia: ${error.message}`)
-  return (data ?? []).filter((p) => isCreatedToday(p.created_at as string | null))
+  return (data ?? []).filter((p: { created_at?: string | null }) => isCreatedToday(p.created_at ?? null))
 }
 
 export async function getResumoFinanceiro() {
@@ -1219,8 +1228,8 @@ export async function getResumoFinanceiro() {
   if (error) throw new Error(`Erro ao buscar resumo financeiro: ${error.message}`)
 
   const pagos = data ?? []
-  const deHoje = pagos.filter((p) => isCreatedToday(p.created_at))
-  const total = pagos.reduce((acc, p) => acc + Number(p.valor || 0), 0)
+  const deHoje = pagos.filter((p: { created_at?: string | null }) => isCreatedToday(p.created_at ?? null))
+  const total = pagos.reduce((acc: number, p: { valor?: number | null }) => acc + Number(p.valor || 0), 0)
 
   const porForma: Record<string, number> = {}
   for (const p of deHoje) {
@@ -1230,7 +1239,7 @@ export async function getResumoFinanceiro() {
   }
 
   const agendamentosHoje = new Set(
-    deHoje.map((p) => p.agendamento_id || p.id).filter(Boolean),
+    deHoje.map((p: { agendamento_id?: string | null; id?: string }) => p.agendamento_id || p.id).filter(Boolean),
   )
 
   return {
@@ -1496,9 +1505,9 @@ export async function getResumoComissoes(params: {
     const servicosComValor = (servicos ?? []).map((s: any) => {
       const precoServico = Array.isArray(s.servicos) ? s.servicos[0]?.preco : s.servicos?.preco
       return Number(s.valor || precoServico || 0)
-    }).filter((v) => v > 0)
+    }).filter((v: number) => v > 0)
     const totalServicos = servicosComValor.length
-    const valorServicos = servicosComValor.reduce((acc, v) => acc + v, 0)
+    const valorServicos = servicosComValor.reduce((acc: number, v: number) => acc + v, 0)
     const comissaoServicos = valorServicos * ((barbeiro.percentual_servico || 0) / 100)
     const { data: vendas, error: errVendas } = await supabase
       .from('movimentacoes_estoque')
@@ -1509,13 +1518,13 @@ export async function getResumoComissoes(params: {
       .lte('created_at', `${dataFim}T23:59:59`)
     if (errVendas) throw new Error(`Erro ao buscar vendas: ${errVendas.message}`)
     const totalVendas = vendas?.length ?? 0
-    const valorVendas = vendas?.reduce((acc, v) => {
+    const valorVendas = vendas?.reduce((acc: number, v: any) => {
       const produto = joinOne<{ preco_venda: number }>(
         v.produtos as { preco_venda: number } | { preco_venda: number }[] | null,
       )
       return acc + (Number(produto?.preco_venda || 0) * v.quantidade)
     }, 0) ?? 0
-    const comissaoVendas = vendas?.reduce((acc, v) => {
+    const comissaoVendas = vendas?.reduce((acc: number, v: any) => {
       const produto = joinOne<{ preco_venda: number }>(
         v.produtos as { preco_venda: number } | { preco_venda: number }[] | null,
       )
@@ -1558,7 +1567,7 @@ export async function getRelatorioComissoes(params: {
     .lte('data', dataFim)
     .order('data', { ascending: false })
   if (errServicos) throw new Error(`Erro ao buscar serviços: ${errServicos.message}`)
-  const detalheServicos: DetalheServicoComissao[] = (servicos ?? []).map(s => {
+  const detalheServicos: DetalheServicoComissao[] = (servicos ?? []).map((s: any) => {
     const servico = joinOne<{ nome: string; preco: number }>(
       s.servicos as { nome: string; preco: number } | { nome: string; preco: number }[] | null,
     )
@@ -1580,7 +1589,7 @@ export async function getRelatorioComissoes(params: {
     .lte('created_at', `${dataFim}T23:59:59`)
     .order('created_at', { ascending: false })
   if (errVendas) throw new Error(`Erro ao buscar vendas: ${errVendas.message}`)
-  const detalheVendas: DetalheVendaComissao[] = (vendas ?? []).map(v => {
+  const detalheVendas: DetalheVendaComissao[] = (vendas ?? []).map((v: any) => {
     const produto = joinOne<{ nome: string; preco_venda: number }>(
       v.produtos as { nome: string; preco_venda: number } | { nome: string; preco_venda: number }[] | null,
     )
@@ -1799,7 +1808,10 @@ async function recalcAppointmentTotal(agendamentoId: string) {
     .from('agendamento_servicos')
     .select('preco, servico_id')
     .eq('agendamento_id', agendamentoId)
-  const total = (items || []).reduce((s, i) => s + Number(i.preco || 0), 0)
+  const total = (items || []).reduce(
+    (s: number, i: { preco?: number | null }) => s + Number(i.preco || 0),
+    0,
+  )
   const primary = items?.[0]?.servico_id || null
   await supabase
     .from('agendamentos')
