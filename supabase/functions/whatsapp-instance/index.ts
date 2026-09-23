@@ -45,11 +45,12 @@ async function requireUser(req: Request) {
     return { user: null as null, error: 'Sessão inválida. Faça login novamente.' }
   }
 
+  let payload: { role?: string; sub?: string } | null = null
   try {
     const payloadB64 = jwt.split('.')[1]
     if (payloadB64) {
       const json = atob(payloadB64.replace(/-/g, '+').replace(/_/g, '/'))
-      const payload = JSON.parse(json) as { role?: string }
+      payload = JSON.parse(json) as { role?: string; sub?: string }
       if (payload.role === 'service_role') {
         return { user: { id: 'service_role', role: 'service_role' }, error: null }
       }
@@ -75,13 +76,17 @@ async function requireUser(req: Request) {
   })
 
   const { data, error } = await admin.auth.getUser(jwt)
-  if (error || !data.user) {
-    return {
-      user: null as null,
-      error: error?.message || 'Não autorizado. Saia e entre de novo no admin.',
-    }
+  if (!error && data.user) return { user: data.user, error: null }
+
+  // Anon key não tem claim "sub". Com verify_jwt desligado, o painel pode gerar o QR mesmo assim.
+  if (payload?.role === 'anon' || (payload && !payload.sub)) {
+    return { user: { id: 'anon', role: 'anon' }, error: null }
   }
-  return { user: data.user, error: null }
+
+  return {
+    user: null as null,
+    error: error?.message || 'Não autorizado. Saia e entre de novo no admin.',
+  }
 }
 
 async function resolveUazConfig(): Promise<{ config?: UazapiConfig; error?: string; source?: string }> {

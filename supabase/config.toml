@@ -7,7 +7,7 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.whatsapp-instance]
-verify_jwt = true
+verify_jwt = false
 
 [functions.appointment-remind]
 verify_jwt = false

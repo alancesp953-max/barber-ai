@@ -529,6 +529,27 @@ function supabaseFunctionsCredentials(): { url: string; key: string } | null {
   return { url, key }
 }
 
+function jwtPayload(token: string): { sub?: string; role?: string; iss?: string } | null {
+  const part = token.split('.')[1]
+  if (!part) return null
+  try {
+    const json = atob(part.replace(/-/g, '+').replace(/_/g, '/'))
+    return JSON.parse(json) as { sub?: string; role?: string; iss?: string }
+  } catch {
+    return null
+  }
+}
+
+/** JWT de usuário do Supabase. Token do Firebase ou da demo não serve no Bearer da Edge Function. */
+function supabaseUserAccessToken(token: string | null | undefined): string | null {
+  const value = String(token || '').trim()
+  if (!value) return null
+  const payload = jwtPayload(value)
+  const iss = String(payload?.iss || '')
+  if (!payload?.sub || payload.role === 'anon' || iss.includes('securetoken.google.com')) return null
+  return value
+}
+
 async function invokeWhatsAppInstance(
   body: { action: string; phone?: string },
 ): Promise<WhatsAppInstanceResult> {
@@ -539,14 +560,18 @@ async function invokeWhatsAppInstance(
     return statusWhatsAppLab()
   }
 
+  const { data: sessionData } = await supabase.auth.getSession()
+  const accessToken = supabaseUserAccessToken(sessionData?.session?.access_token)
+  const anonKey = creds.key
+
   let response: Response
   try {
     response = await fetch(`${creds.url}/functions/v1/whatsapp-instance`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${creds.key}`,
-        apikey: creds.key,
+        Authorization: `Bearer ${accessToken || anonKey}`,
+        apikey: anonKey,
       },
       body: JSON.stringify(body),
     })
@@ -555,10 +580,10 @@ async function invokeWhatsAppInstance(
   }
 
   const text = await response.text()
-  let data: WhatsAppInstanceResult | null = null
+  let data: (WhatsAppInstanceResult & { message?: string }) | null = null
   if (text) {
     try {
-      data = JSON.parse(text) as WhatsAppInstanceResult
+      data = JSON.parse(text) as WhatsAppInstanceResult & { message?: string }
     } catch {
       return { ok: false, error: text.slice(0, 400) || 'Resposta inválida da Edge Function' }
     }
@@ -567,7 +592,9 @@ async function invokeWhatsAppInstance(
   if (!response.ok) {
     return {
       ok: false,
-      error: String(data?.error || text.slice(0, 400) || `Edge Function HTTP ${response.status}`),
+      error: String(
+        data?.error || data?.message || text.slice(0, 400) || `Edge Function HTTP ${response.status}`,
+      ),
       details: data?.details ?? data,
     }
   }

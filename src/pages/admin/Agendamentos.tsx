@@ -232,11 +232,11 @@ export default function Agendamentos() {
   const [showForm, setShowForm] = useState(false)
   const [checkinAppointment, setCheckinAppointment] = useState<Appointment | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [viewMode, setViewMode] = useState<'grade' | 'calendario'>('grade')
+  const [viewMode, setViewMode] = useState<'grade' | 'calendario'>('calendario')
   const [kanbanDate, setKanbanDate] = useState(todayYmd())
 
   const [currentMonth, setCurrentMonth] = useState(new Date())
-  const [selectedDate, setSelectedDate] = useState<string | null>(null)
+  const [selectedDate, setSelectedDate] = useState<string | null>(todayYmd())
 
   const [clientName, setClientName] = useState('')
   const [clientEmail, setClientEmail] = useState('')
@@ -301,28 +301,27 @@ export default function Agendamentos() {
     return appointments.filter((appt) => appt.data === selectedDate)
   }, [appointments, selectedDate])
 
+  function selectAgendaDay(dateStr: string) {
+    setSelectedDate(dateStr)
+    setKanbanDate(dateStr)
+    const [year, month] = dateStr.split('-').map(Number)
+    if (year && month) setCurrentMonth(new Date(year, month - 1, 1))
+  }
+
   function handleDayClick(dateStr: string) {
-    if (selectedDate === dateStr) {
-      setSelectedDate(null)
-    } else {
-      setSelectedDate(dateStr)
-    }
+    selectAgendaDay(dateStr)
   }
 
   function prevMonth() {
     setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))
-    setSelectedDate(null)
   }
 
   function nextMonth() {
     setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))
-    setSelectedDate(null)
   }
 
   function goToToday() {
-    const hoje = new Date()
-    setCurrentMonth(new Date(hoje.getFullYear(), hoje.getMonth(), 1))
-    setSelectedDate(null)
+    selectAgendaDay(todayYmd())
   }
 
   const handleCreate = async (e: React.FormEvent) => {
@@ -565,10 +564,14 @@ export default function Agendamentos() {
         <>
           <SegmentedControl
             value={viewMode}
-            onChange={(v) => setViewMode(v as 'grade' | 'calendario')}
+            onChange={(v) => {
+              const next = v as 'grade' | 'calendario'
+              setViewMode(next)
+              if (next === 'calendario') selectAgendaDay(kanbanDate)
+            }}
             data={[
-              { label: 'Grade por barbeiro', value: 'grade' },
-              { label: 'Calendário', value: 'calendario' },
+              { label: 'Visão Calendário', value: 'calendario' },
+              { label: 'Grade por Barbeiro', value: 'grade' },
             ]}
             color="gold"
           />
@@ -630,6 +633,17 @@ export default function Agendamentos() {
                 </Button>
               </Group>
             )}
+
+            <Card withBorder padding="md" radius="lg">
+              <AgendaKanban
+                date={kanbanDate}
+                onDateChange={selectAgendaDay}
+                appointments={appointments}
+                barbers={barbers}
+                onOpenAppointment={setCheckinAppointment}
+                onCheckout={goCheckout}
+              />
+            </Card>
           </Stack>
           )}
 
