@@ -387,7 +387,7 @@ export const ATTENDANT_SYSTEM_PROMPT = `Você é o atendente virtual da barbeari
 
 const ATTENDANT_CONTEXT = `${ATTENDANT_SYSTEM_PROMPT}
 
-Barbeiros da casa: Carlos, Rafael e Lucas. Funcionamos de terça a sábado, das 9h às 19h.
+Barbeiros da casa: Marcos Correia, Jeova Aguiar, Bruno Fernandes e Daniel. Funcionamos das 08:30 às 19:30.
 Responda só com o texto da mensagem de voz, no máximo três frases curtas. Sem markdown, sem listas, sem aspas e sem dizer que é teste ou laboratório. Se não souber o nome do cliente, não invente.`
 
 type ChatTurn = { from: 'cliente' | 'bot'; text: string }

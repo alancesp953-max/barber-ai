@@ -15,7 +15,7 @@ export const DEMO_BARBER_USER = {
   id: 'demo-user-barbeiro',
   email: 'barbeiro@demo.local',
   app_metadata: { provider: 'demo', role: 'barber' },
-  user_metadata: { full_name: 'Carlos Mendes', name: 'Carlos Mendes' },
+  user_metadata: { full_name: 'Marcos Correia', name: 'Marcos Correia' },
   aud: 'authenticated',
   created_at: '2026-01-01T12:00:00.000Z',
 }
