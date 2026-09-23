@@ -1,0 +1,140 @@
+[33mcommit 502d2ea41d6e82fe86cfca4bf504b06f30dca302[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mfeature/painel-unificado-diva-audio[m[33m, [m[1;31morigin/feature/painel-unificado-diva-audio[m[33m)[m
+Author: alancesp953-max <alancesp953@gmail.com>
+Date:   Wed Sep 23 13:08:08 2026 -0300
+
+    fix: compilação validada com sucesso e tipos corrigidos
+
+ src/components/AppointmentCreateModal.tsx |  4 [32m+[m[31m--[m
+ src/components/LocalAudioMessageLab.tsx   |  7 [32m+++[m[31m--[m
+ src/lib/api.ts                            | 46 [32m+++++++++++++++++++[m[31m------------[m
+ src/lib/audioSettings.ts                  |  2 [32m+[m[31m-[m
+ src/lib/availability.ts                   |  2 [32m+[m[31m-[m
+ src/lib/localWhatsAppLab.ts               |  2 [32m+[m[31m-[m
+ src/pages/admin/Financeiro.tsx            |  4 [32m+[m[31m--[m
+ 7 files changed, 40 insertions(+), 27 deletions(-)
+
+[33mcommit dbb5be3f77653d5210a1d441dd0d74d27ea3d983[m
+Author: alancesp953-max <alancesp953@gmail.com>
+Date:   Wed Sep 23 12:33:12 2026 -0300
+
+    feat: unifica painel com modulo de audio diva, gemini, elevenlabs e timezone fortaleza
+    
+    Co-authored-by: Cursor <cursoragent@cursor.com>
+
+ .env.example                                       |   11 [32m+[m
+ .gitignore                                         |    2 [32m+[m
+ DIVA_BEHAVIOR.md                                   |   64 [32m+[m
+ deno.lock                                          |  115 [32m+[m
+ package-lock.json                                  | 5093 [32m++++++++++++++++[m[31m----[m
+ package.json                                       |   10 [32m+[m[31m-[m
+ scripts/seed-agendamento-teste-marcos.mjs          |   87 [32m+[m
+ scripts/seed-divina-firestore.mjs                  |  229 [32m+[m
+ scripts/test-diva-local-webhook.mjs                |   62 [32m+[m
+ server/agent/divaLocal.mjs                         |  233 [32m+[m
+ server/index.mjs                                   |   94 [32m+[m
+ server/lib/firebaseAdmin.mjs                       |   67 [32m+[m
+ server/lib/firestoreShop.mjs                       |   84 [32m+[m
+ server/lib/time.mjs                                |   70 [32m+[m
+ server/lib/whatsappLock.mjs                        |   21 [32m+[m
+ server/tools/divaTools.mjs                         |  259 [32m+[m
+ serviceAccountKey.json.example                     |   13 [32m+[m
+ src/components/AdminLayout.tsx                     |    8 [32m+[m[31m-[m
+ src/components/AppointmentCreateModal.tsx          |  379 [32m++[m
+ src/components/BarberActiveBlocksList.tsx          |  126 [32m+[m
+ src/components/BarberBlocksManager.tsx             |  127 [32m+[m[31m-[m
+ src/components/BarberDailyBreak.tsx                |  125 [32m+[m
+ src/components/LocalAudioMessageLab.tsx            |  325 [32m++[m
+ src/i18n/en.json                                   |   11 [32m+[m[31m-[m
+ src/i18n/pt-BR.json                                |    7 [32m+[m[31m-[m
+ src/integrations/supabase/client.ts                |    2 [32m+[m
+ src/lib/api.ts                                     |  311 [32m+[m[31m-[m
+ src/lib/audioSettings.ts                           |  528 [32m++[m
+ src/lib/availability.ts                            |  248 [32m+[m
+ src/lib/barberBlocksDisplay.ts                     |  140 [32m+[m
+ src/lib/comanda.ts                                 |   58 [32m+[m
+ src/lib/demoAuth.ts                                |   90 [32m+[m
+ src/lib/divaBehavior.ts                            |    7 [32m+[m
+ src/lib/firebase.ts                                |   59 [32m+[m
+ src/lib/firebaseAuth.ts                            |  126 [32m+[m
+ src/lib/firestoreShop.ts                           |  126 [32m+[m
+ src/lib/localDivaAudio.ts                          |  193 [32m+[m
+ src/lib/localMessageLab.ts                         |  119 [32m+[m
+ src/lib/localQr.ts                                 |  184 [32m+[m
+ src/lib/localWhatsAppLab.ts                        |  173 [32m+[m
+ src/lib/micRecorder.ts                             |  111 [32m+[m
+ src/lib/mockAvailability.ts                        |  136 [32m+[m
+ src/lib/mockDb.ts                                  |  487 [32m++[m
+ src/lib/mockSupabase.ts                            |  628 [32m+++[m
+ src/pages/Login.tsx                                |  134 [32m+[m[31m-[m
+ src/pages/Signup.tsx                               |    7 [32m+[m[31m-[m
+ src/pages/admin/Configuracoes.tsx                  |  392 [32m+[m[31m-[m
+ src/pages/barber/Agenda.tsx                        |  164 [32m+[m[31m-[m
+ src/routeTree.gen.ts                               |  330 [32m+[m[31m-[m
+ src/routes/__root.tsx                              |    2 [32m+[m[31m-[m
+ src/routes/barber.tsx                              |    9 [32m+[m[31m-[m
+ src/routes/barber/dashboard.tsx                    |    8 [32m+[m[31m-[m
+ src/services/supabaseClient.ts                     |   55 [32m+[m[31m-[m
+ src/types/database.ts                              |   12 [32m+[m
+ src/vite-env.d.ts                                  |   11 [32m+[m
+ supabase/audio_whatsapp.sql                        |   15 [32m+[m
+ supabase/functions/_shared/gemini.ts               |   85 [32m+[m
+ supabase/functions/_shared/slots_test.ts           |  224 [32m+[m
+ .../appointment-cancel-notify/config.toml          |    2 [32m+[m
+ .../functions/appointment-cancel-notify/index.ts   |  258 [32m+[m
+ supabase/functions/whatsapp-audio-config/index.ts  |  208 [32m+[m
+ supabase/functions/whatsapp-webhook/index.ts       |  270 [32m+[m[31m-[m
+ supabase/functions/whatsapp-webhook/test-ola.json  |    1 [32m+[m
+ .../migrations/20260901_cancelamento_whatsapp.sql  |  133 [32m+[m
+ supabase/migrations/20260901_fuso_fortaleza.sql    |   26 [32m+[m
+ vite.config.ts                                     |   12 [32m+[m
+ 66 files changed, 12293 insertions(+), 1413 deletions(-)
+
+[33mcommit 924c25de89d2a5e2bf9525c729238c22f0064d90[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmain[m[33m)[m
+Author: Adriano-Martins27 <110014895+Adriano-Martins27@users.noreply.github.com>
+Date:   Thu Sep 17 17:26:21 2026 -0300
+
+    fix: evita loop de agenda com rascunho data/horario preso na sessao
+    
+    Co-authored-by: Cursor <cursoragent@cursor.com>
+
+ supabase/functions/_shared/barber-tools.ts   |  23 [32m+++++[m[31m-[m
+ supabase/functions/_shared/db.ts             | 105 [32m+++++++++++++++++++++++++[m[31m--[m
+ supabase/functions/whatsapp-webhook/index.ts |  80 [32m++++++++++++++++++[m[31m--[m
+ 3 files changed, 193 insertions(+), 15 deletions(-)
+
+[33mcommit 4dbbfd3a8ba82533d79f3f53e533f85174367585[m
+Author: Adriano-Martins27 <110014895+Adriano-Martins27@users.noreply.github.com>
+Date:   Mon Sep 7 04:08:24 2026 -0300
+
+    fix: Diva distingue madrugada de expediente encerrado
+    
+    Co-authored-by: Cursor <cursoragent@cursor.com>
+
+ supabase/functions/_shared/barber-tools.ts   |  4 [32m++[m[31m--[m
+ supabase/functions/_shared/db.ts             | 35 [32m+++++++++++++++++++++++++[m[31m---[m
+ supabase/functions/whatsapp-webhook/index.ts | 34 [32m++++++++++++++++++[m[31m---------[m
+ 3 files changed, 57 insertions(+), 16 deletions(-)
+
+[33mcommit 2425bbe2c754c1098a78096f8e50dc5036687460[m
+Author: Adriano-Martins27 <110014895+Adriano-Martins27@users.noreply.github.com>
+Date:   Mon Sep 7 03:41:20 2026 -0300
+
+    feat: grade por barbeiro, check-out, split pagamento e comanda multi-servico
+    
+    Co-authored-by: Cursor <cursoragent@cursor.com>
+
+ src/components/AgendaKanban.tsx                    | 191 [32m++++++++++++[m
+ src/components/CheckinModal.tsx                    | 177 [32m+++++++++[m[31m--[m
+ src/i18n/pt-BR.json                                |   3 [32m+[m[31m-[m
+ src/lib/api.ts                                     | 327 [32m+++++++++++++++++++[m[31m--[m
+ src/pages/admin/Agendamentos.tsx                   | 120 [32m++++++[m[31m--[m
+ src/pages/admin/Barbers.tsx                        |  58 [32m+++[m[31m-[m
+ src/pages/admin/Financeiro.tsx                     | 223 [32m++++++++++[m[31m----[m
+ src/pages/barber/Agenda.tsx                        |  18 [32m+[m[31m-[m
+ src/routes/admin/financeiro.tsx                    |  19 [32m+[m[31m-[m
+ src/types/database.ts                              |   2 [32m+[m[31m-[m
+ supabase/functions/_shared/slots.ts                |  17 [32m+[m[31m-[m
+ .../20260907_agendamento_servicos_split.sql        |  42 [32m+++[m
+ .../migrations/20260907_barber_photos_storage.sql  |  37 [32m+++[m
+ .../20260907_horarios_check_constraint.sql         |  15 [32m+[m
+ 14 files changed, 1098 insertions(+), 151 deletions(-)

@@ -5,7 +5,6 @@ import {
   Button,
   Card,
   Group,
-  Image,
   Loader,
   NativeSelect,
   NumberInput,
@@ -627,40 +626,44 @@ export default function Configuracoes() {
           </Group>
 
           {showQr && (
-            <Stack align="center" gap="sm">
-              <Text size="sm" c="dimmed">
-                {isDemoMode
-                  ? 'QR de laboratório gerado neste navegador. Não emparelha o WhatsApp de produção.'
-                  : 'Abra o WhatsApp → Aparelhos conectados → Conectar um aparelho e escaneie:'}
-              </Text>
-              <Box p="md" bg="white" style={{ borderRadius: 12 }}>
-                <Image
+            <div style={{ textAlign: 'center' }}>
+              <p style={{ color: '#cfcfcf', fontSize: 14, marginBottom: 12 }}>
+                Abra o WhatsApp → Aparelhos conectados → Conectar um aparelho e escaneie:
+              </p>
+              <div
+                style={{
+                  display: 'inline-block',
+                  padding: 16,
+                  background: '#fff',
+                  borderRadius: 12,
+                }}
+              >
+                <img
                   src={
                     qrcode!.startsWith('data:') || qrcode!.startsWith('http')
                       ? qrcode!
                       : `data:image/png;base64,${qrcode}`
                   }
                   alt="QR Code WhatsApp UAZAPI"
-                  w={260}
-                  h={260}
+                  style={{ width: 260, height: 260, display: 'block' }}
                 />
-              </Box>
-              <Text size="xs" c="dimmed">
+              </div>
+              <p style={{ color: '#888', fontSize: 12, marginTop: 10 }}>
                 Atualiza sozinho a cada 3s. Quando conectar, esta área some.
-              </Text>
-            </Stack>
+              </p>
+            </div>
           )}
 
           {!connected && paircode && (
-            <Text c="gold" mt="sm">
+            <p style={{ color: '#D4AF37', fontSize: 16, marginTop: 12 }}>
               Código de pareamento: <strong>{paircode}</strong>
-            </Text>
+            </p>
           )}
 
           {!connected && !showQr && !paircode && !waError && (
-            <Text size="sm" c="dimmed">
+            <p style={{ color: '#666', fontSize: 13, margin: 0 }}>
               Clique em <strong>Gerar / renovar QR code</strong> para conectar o WhatsApp.
-            </Text>
+            </p>
           )}
 
           {isDemoMode && (
