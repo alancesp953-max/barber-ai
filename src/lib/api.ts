@@ -522,42 +522,56 @@ export type WhatsAppInstanceResult = {
   details?: unknown
 }
 
+function supabaseFunctionsCredentials(): { url: string; key: string } | null {
+  const url = String(import.meta.env.VITE_SUPABASE_URL ?? '').trim().replace(/\/$/, '')
+  const key = String(import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim()
+  if (!url || !key || url.includes('your-project') || key === 'your-anon-key') return null
+  return { url, key }
+}
+
 async function invokeWhatsAppInstance(
   body: { action: string; phone?: string },
 ): Promise<WhatsAppInstanceResult> {
-  const { data, error } = await supabase.functions.invoke('whatsapp-instance', { body })
+  const creds = supabaseFunctionsCredentials()
+  if (!creds) {
+    if (body.action === 'connect') return connectWhatsAppLab()
+    if (body.action === 'disconnect') return disconnectWhatsAppLab()
+    return statusWhatsAppLab()
+  }
 
-  if (error) {
-    let detail = error.message || 'Edge Function returned a non-2xx status code'
+  let response: Response
+  try {
+    response = await fetch(`${creds.url}/functions/v1/whatsapp-instance`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${creds.key}`,
+        apikey: creds.key,
+      },
+      body: JSON.stringify(body),
+    })
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Falha ao consultar a UAZAPI' }
+  }
+
+  const text = await response.text()
+  let data: WhatsAppInstanceResult | null = null
+  if (text) {
     try {
-      const ctx = (error as { context?: Response }).context
-      if (ctx) {
-        const clone = ctx.clone?.() ?? ctx
-        const text = await clone.text()
-        if (text) {
-          try {
-            const j = JSON.parse(text) as { error?: string; message?: string; details?: unknown }
-            detail = j.error || j.message || text
-            return {
-              ok: false,
-              error: detail,
-              details: j.details ?? j,
-            }
-          } catch {
-            detail = text.slice(0, 400)
-          }
-        }
-      }
+      data = JSON.parse(text) as WhatsAppInstanceResult
     } catch {
-      /* ignore parse failures */
+      return { ok: false, error: text.slice(0, 400) || 'Resposta inválida da Edge Function' }
     }
-    return { ok: false, error: detail }
   }
 
-  if (!data) {
-    return { ok: false, error: 'Resposta vazia da Edge Function' }
+  if (!response.ok) {
+    return {
+      ok: false,
+      error: String(data?.error || text.slice(0, 400) || `Edge Function HTTP ${response.status}`),
+      details: data?.details ?? data,
+    }
   }
-
+  if (!data) return { ok: false, error: 'Resposta vazia da Edge Function' }
   if (data.ok === false || data.error) {
     return {
       ok: false,
@@ -566,33 +580,20 @@ async function invokeWhatsAppInstance(
       data,
     }
   }
-
-  return data as WhatsAppInstanceResult
+  return data
 }
 
 /** Status / QR da instância UAZAPI via Edge Function whatsapp-instance */
 export async function getWhatsAppInstanceStatus(): Promise<WhatsAppInstanceResult> {
-  if (isDemoMode) return statusWhatsAppLab()
   return invokeWhatsAppInstance({ action: 'status' })
 }
 
 /** Gera QR code (POST /instance/connect sem phone) */
 export async function connectWhatsAppInstance(phone?: string): Promise<WhatsAppInstanceResult> {
-  if (isDemoMode) {
-    try {
-      return connectWhatsAppLab()
-    } catch (err) {
-      return {
-        ok: false,
-        error: err instanceof Error ? err.message : 'Falha ao gerar QR local neste computador.',
-      }
-    }
-  }
   return invokeWhatsAppInstance({ action: 'connect', phone })
 }
 
 export async function disconnectWhatsAppInstance(): Promise<WhatsAppInstanceResult> {
-  if (isDemoMode) return disconnectWhatsAppLab()
   return invokeWhatsAppInstance({ action: 'disconnect' })
 }
 
