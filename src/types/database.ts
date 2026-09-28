@@ -63,6 +63,9 @@ export interface Barber {
   breakStart?: string
   breakEnd?: string
   daysOff?: string[]
+  intervalo_ativo?: boolean | null
+  intervalo_inicio?: string | null
+  intervalo_fim?: string | null
 }
 
 export type CreateBarberInput = {
@@ -111,6 +114,8 @@ export interface Client {
   email?: string | null
   notes?: string
   totalAppointments?: number
+  data_nascimento?: string
+  whatsapp_opt_in?: boolean
   created_at?: string
   createdAt?: string
 }
@@ -153,6 +158,7 @@ export interface Appointment {
   origin?: AppointmentOrigin
   conversationId?: string
   notes?: string
+  comanda_itens?: any
   created_at?: string
   createdAt?: string
   barbeiros?: Pick<Barber, 'nome'> | { nome: string } | null

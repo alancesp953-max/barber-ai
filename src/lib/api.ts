@@ -280,6 +280,10 @@ export async function getBarber(id: string, tenantIdParam?: string): Promise<Bar
     especialidades: data.especialidades || '',
     avaliacao: data.avaliacao ?? 5,
     foto_url: data.foto_url || data.photoUrl || null,
+    workingDays: Array.isArray(data.workingDays) ? data.workingDays : [1, 2, 3, 4, 5, 6],
+    intervalo_ativo: data.intervalo_ativo === true,
+    intervalo_inicio: data.intervalo_inicio || null,
+    intervalo_fim: data.intervalo_fim || null,
     ativo: data.ativo ?? true,
     active: data.active ?? true,
     created_at: data.created_at || new Date().toISOString(),
@@ -443,7 +447,7 @@ export async function getAgendaBarbeiro(barberId: string, tenantIdParam?: string
 export async function getServices(tenantIdParam?: string): Promise<Service[]> {
   const tId = await resolveTenantId(tenantIdParam)
   const snap = await getDocs(collection(db, 'tenants', tId, 'services'))
-  return snap.docs.map((d) => {
+  const services: Service[] = snap.docs.map((d) => {
     const data = d.data()
     return {
       id: d.id,
@@ -463,8 +467,7 @@ export async function getServices(tenantIdParam?: string): Promise<Service[]> {
     } as unknown as Service
   })
 
-  // Sincroniza em background com o backend para o WhatsApp e IA lerem os serviços reais
-  syncTenantDataToBackend(tId, undefined, services as any).catch(() => {})
+  syncTenantDataToBackend(tId, undefined, services).catch(() => {})
 
   return services
 }
@@ -529,7 +532,7 @@ export async function getClients(tenantIdParam?: string): Promise<Client[]> {
 }
 
 export async function findOrCreateClient(
-  input: { nome: string; email?: string; telefone?: string } | string,
+  input: { id?: string; nome: string; email?: string; telefone?: string } | string,
   telefone?: string | null,
   email?: string | null,
   tenantIdParam?: string,
@@ -543,6 +546,12 @@ export async function findOrCreateClient(
     nome = input.nome || ''
     tel = input.telefone || tel
     mail = input.email || mail
+    if (input.id) {
+      const existing = await getDoc(doc(db, 'tenants', tId, 'clients', input.id))
+      if (existing.exists()) {
+        return { id: existing.id, ...existing.data() } as Client
+      }
+    }
   } else {
     nome = input || ''
   }
@@ -684,6 +693,7 @@ export async function createAppointment(
     valor?: number
     status?: string
     notes?: string
+    allowOverlap?: boolean
   },
   tenantIdParam?: string,
 ): Promise<Appointment> {
@@ -1362,6 +1372,156 @@ export async function getPlatformExpenses(): Promise<PlatformExpense[]> {
 export async function createPlatformExpense(data: Omit<PlatformExpense, 'id'>): Promise<PlatformExpense> {
   const ref = await addDoc(collection(db, 'platform_expenses'), data)
   return { id: ref.id, ...data }
+}
+
+export type BarberBlock = {
+  id: string
+  barbeiro_id: string
+  inicio: string
+  fim?: string | null
+  motivo?: string | null
+  created_at?: string
+}
+
+export type CampaignRow = {
+  id: string
+  created_at?: string
+  status: string
+  total_destinatarios: number
+  total_enviados: number
+  total_erros: number
+  mensagem: string
+}
+
+export async function getBarbeiroBloqueios(barbeiroId: string, tenantIdParam?: string): Promise<BarberBlock[]> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const snap = await getDocs(
+    query(collection(db, 'tenants', tId, 'barberBlocks'), where('barbeiro_id', '==', barbeiroId)),
+  )
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as BarberBlock)
+}
+
+export async function createBarbeiroBloqueio(
+  input: { barbeiro_id: string; inicio: string; fim?: string | null; motivo?: string },
+  tenantIdParam?: string,
+): Promise<BarberBlock> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const payload = {
+    barbeiro_id: input.barbeiro_id,
+    inicio: input.inicio,
+    fim: input.fim ?? null,
+    motivo: input.motivo || '',
+    created_at: new Date().toISOString(),
+  }
+  const ref = await addDoc(collection(db, 'tenants', tId, 'barberBlocks'), payload)
+  return { id: ref.id, ...payload }
+}
+
+export async function deleteBarbeiroBloqueio(id: string, tenantIdParam?: string): Promise<void> {
+  const tId = await resolveTenantId(tenantIdParam)
+  await deleteDoc(doc(db, 'tenants', tId, 'barberBlocks', id))
+}
+
+export async function saveBarberDailyBreak(
+  barbeiroId: string,
+  input: { intervalo_ativo: boolean; intervalo_inicio: string; intervalo_fim: string },
+  tenantIdParam?: string,
+): Promise<void> {
+  const tId = await resolveTenantId(tenantIdParam)
+  await updateDoc(doc(db, 'tenants', tId, 'barbers', barbeiroId), {
+    intervalo_ativo: input.intervalo_ativo,
+    intervalo_inicio: input.intervalo_inicio,
+    intervalo_fim: input.intervalo_fim,
+    updated_at: new Date().toISOString(),
+  })
+}
+
+export async function getBarbeiroHorarios(
+  barbeiroId: string,
+  tenantIdParam?: string,
+): Promise<Array<{ dia_semana: number; fechado: boolean }>> {
+  const barber = await getBarber(barbeiroId, tenantIdParam)
+  const open = new Set(barber?.workingDays || [1, 2, 3, 4, 5, 6])
+  return [0, 1, 2, 3, 4, 5, 6].map((dia) => ({ dia_semana: dia, fechado: !open.has(dia) }))
+}
+
+export async function saveBarbeiroDiasAtendimento(
+  barbeiroId: string,
+  openDays: number[],
+  tenantIdParam?: string,
+): Promise<void> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const unique = [...new Set(openDays)]
+  await updateDoc(doc(db, 'tenants', tId, 'barbers', barbeiroId), {
+    workingDays: unique,
+    updated_at: new Date().toISOString(),
+  })
+}
+
+export async function getCampaigns(tenantIdParam?: string): Promise<CampaignRow[]> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const snap = await getDocs(collection(db, 'tenants', tId, 'campaigns'))
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }) as CampaignRow)
+    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+}
+
+export async function sendWhatsAppCampaign(
+  input: { mensagem: string; cliente_ids: string[] },
+  tenantIdParam?: string,
+): Promise<{ ok: boolean; error?: string; enviados?: number; erros?: number; total?: number }> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const total = input.cliente_ids.length
+  let enviados = 0
+  let erros = 0
+  let error: string | undefined
+  try {
+    const res = await fetch('/api/whatsapp/campaign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tenantId: tId, mensagem: input.mensagem, cliente_ids: input.cliente_ids }),
+    })
+    if (res.ok) {
+      const data = await res.json()
+      enviados = Number(data.enviados ?? total)
+      erros = Number(data.erros ?? 0)
+    } else {
+      erros = total
+      error = 'Falha no envio da campanha'
+    }
+  } catch {
+    erros = total
+    error = 'Servidor de WhatsApp indisponível'
+  }
+  await addDoc(collection(db, 'tenants', tId, 'campaigns'), {
+    mensagem: input.mensagem,
+    status: enviados > 0 ? 'enviada' : 'erro',
+    total_destinatarios: total,
+    total_enviados: enviados,
+    total_erros: erros,
+    cliente_ids: input.cliente_ids,
+    created_at: new Date().toISOString(),
+  })
+  return { ok: !error, error, enviados, erros, total }
+}
+
+export async function notifyAppointmentWhatsApp(input: {
+  phone: string
+  clientName: string
+  serviceName?: string
+  barberName?: string
+  date: string
+  time: string
+}): Promise<void> {
+  try {
+    await fetch('/api/whatsapp/notify-appointment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    })
+  } catch {
+    // Aviso ao cliente é best-effort; o agendamento já foi gravado.
+  }
 }
 
 export async function getPlatformLogs(): Promise<AuditLog[]> {

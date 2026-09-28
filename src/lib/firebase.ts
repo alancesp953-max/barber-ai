@@ -17,3 +17,15 @@ export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfi
 export const auth = getAuth(app)
 export const db = getFirestore(app)
 export const storage = getStorage(app)
+
+export function isFirebaseConfigured(): boolean {
+  return Boolean(firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.appId)
+}
+
+export async function getFirebaseDb() {
+  return db
+}
+
+export async function getFirebaseAuth() {
+  return auth
+}

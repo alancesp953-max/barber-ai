@@ -66,7 +66,7 @@ export function BarberBlocksManager({ barbeiroId, barbeiroNome, inputStyles }: P
       getBarbeiroBloqueios(barbeiroId),
       getBarber(barbeiroId),
     ])
-    if (barber.id !== barbeiroId) return
+    if (!barber || barber.id !== barbeiroId) return
     setBloqueios(rows.filter((row) => row.barbeiro_id === barbeiroId))
     const configured = readConfiguredDailyBreak(barber)
     setDailyBreak(

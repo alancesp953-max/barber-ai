@@ -34,7 +34,7 @@ export function BarberDailyBreak({ barbeiroId, inputStyles, onSaved }: Props) {
     void (async () => {
       try {
         const barber = await getBarber(barbeiroId)
-        if (cancelled || barber.id !== barbeiroId) return
+        if (cancelled || !barber || barber.id !== barbeiroId) return
         const configured = readConfiguredDailyBreak(barber)
         setAtivo(Boolean(configured))
         setInicio(configured?.inicio || parseBreakHm(barber.intervalo_inicio) || '')

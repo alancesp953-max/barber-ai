@@ -15,6 +15,11 @@ import type { Appointment, AppointmentStatus, Barber } from '../types/database'
 import { formatCurrency } from '../lib/format'
 
 const statusColors: Record<AppointmentStatus, string> = {
+  scheduled: 'blue',
+  confirmed: 'gold',
+  completed: 'teal',
+  cancelled: 'red',
+  no_show: 'gray',
   pendente: 'blue',
   confirmado: 'gold',
   concluido: 'teal',
@@ -22,6 +27,11 @@ const statusColors: Record<AppointmentStatus, string> = {
 }
 
 const statusLabel: Record<AppointmentStatus, string> = {
+  scheduled: 'Agendado',
+  confirmed: 'Confirmado',
+  completed: 'Concluído',
+  cancelled: 'Cancelado',
+  no_show: 'Não compareceu',
   pendente: 'Pendente',
   confirmado: 'Confirmado',
   concluido: 'Concluído',

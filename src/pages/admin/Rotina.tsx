@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react'
 import {
-  Calendar as CalendarIcon,
   Clock,
   Coffee,
   Plus,
@@ -12,7 +11,6 @@ import {
   User,
   Save,
   CalendarDays,
-  Sparkles,
   Info,
 } from 'lucide-react'
 import { PageHeader } from '../../components/PageHeader'
@@ -32,7 +30,6 @@ const WEEK_DAYS = [
 export default function Rotina() {
   const [barbers, setBarbers] = useState<Barber[]>([])
   const [selectedBarberId, setSelectedBarberId] = useState<string>('')
-  const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
@@ -57,7 +54,6 @@ export default function Rotina() {
   // Carrega Barbeiros
   const loadBarbersData = async () => {
     try {
-      setLoading(true)
       const list = await getBarbers()
       setBarbers(list)
       if (list.length > 0) {
@@ -66,8 +62,6 @@ export default function Rotina() {
       }
     } catch (err: any) {
       setErrorMsg('Falha ao carregar lista de barbeiros: ' + err.message)
-    } finally {
-      setLoading(false)
     }
   }
 
@@ -203,8 +197,6 @@ export default function Rotina() {
     'Novembro',
     'Dezembro',
   ]
-
-  const selectedBarber = barbers.find((b) => b.id === selectedBarberId)
 
   return (
     <div className="space-y-6 pb-12">
