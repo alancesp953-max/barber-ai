@@ -16,6 +16,8 @@ async function post(path, body) {
 const health = await (await fetch(`${BASE}/health`)).json()
 assert.equal(health.ok, true)
 assert.equal(health.whatsappOficial, 'bloqueado')
+assert.equal(health.behavior, 'DIVA_BEHAVIOR.md')
+assert.equal(health.agendamentoDireto, true)
 console.log('health', health)
 
 const greeting = await post('/test/webhook', {
@@ -36,12 +38,15 @@ const named = await post('/test/webhook', {
   text: 'Quero cortar o cabelo amanhã às 10h',
 })
 assert.match(named.reply, /João/)
+assert.equal(named.gravou, false)
 assert.equal(named.outbound.blocked, true)
+assert.doesNotMatch(named.reply, /confirma\?/i)
+assert.match(named.reply, /barbeiro/i)
+assert.doesNotMatch(named.reply, /avalia|estrela|nota/i)
 const toolNames = named.tools.map((item) => item.name)
 assert.ok(toolNames.includes('listar_servicos'))
-assert.ok(toolNames.includes('consultar_disponibilidade'))
-assert.ok(toolNames.includes('obter_proximo_barbeiro_rodizio'))
-console.log('consulta com nome:', named.reply)
+assert.equal(toolNames.includes('criar_agendamento'), false)
+console.log('falta barbeiro, sem confirmação redundante:', named.reply)
 
 const sunday = await post('/test/webhook', {
   sessionId: 'unit_domingo',

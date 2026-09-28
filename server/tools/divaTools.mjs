@@ -7,10 +7,13 @@ import {
   priceOf,
 } from '../lib/firestoreShop.mjs'
 import {
+  appointmentReleaseMin,
+  fitsExpediente,
   generateDaySlots,
   hmToMin,
   isPastSlotToday,
   isSunday,
+  minToHm,
   rangesOverlap,
   SHOP_CLOSE,
   SHOP_OPEN,
@@ -34,7 +37,18 @@ function barberBreak(barber) {
 function expedienteOf(barber) {
   const inicio = String(barber?.expediente?.inicio || SHOP_OPEN).slice(0, 5)
   const fim = String(barber?.expediente?.fim || SHOP_CLOSE).slice(0, 5)
-  return { inicio, fim }
+  const open = Math.max(hmToMin(inicio), hmToMin(SHOP_OPEN))
+  const close = Math.min(hmToMin(fim), hmToMin(SHOP_CLOSE))
+  if (close <= open) return { inicio: SHOP_OPEN, fim: SHOP_CLOSE }
+  return { inicio: minToHm(open), fim: minToHm(close) }
+}
+
+function occupiedUntilMin(row, durationByService) {
+  const start = hmToMin(String(row.horario).slice(0, 5))
+  const stored = Number(row.duracao_minutos ?? row.duracaoMinutos)
+  const catalog = durationByService.get(String(row.servico_id || row.servicoId))
+  const minutes = stored > 0 ? stored : Number(catalog) > 0 ? Number(catalog) : 30
+  return start + minutes
 }
 
 function appointmentBusy(row) {
@@ -70,14 +84,10 @@ export async function ocupacaoNoHorario(ymd, barbeiroId, horario, durationMin = 
   const servicos = await listCollection('servicos')
   const durationByService = new Map(servicos.map((svc) => [String(svc.id), durationOf(svc)]))
   const start = hmToMin(horario)
-  const end = start + durationMin
+  const end = appointmentReleaseMin(horario, durationMin)
   return agendamentos
     .filter((row) => String(row.data) === ymd && appointmentBusy(row) && barberIdOf(row) === String(barbeiroId))
-    .filter((row) => {
-      const a0 = hmToMin(String(row.horario).slice(0, 5))
-      const a1 = a0 + (durationByService.get(String(row.servico_id || row.servicoId)) || 30)
-      return rangesOverlap(start, end, a0, a1)
-    })
+    .filter((row) => rangesOverlap(start, end, hmToMin(String(row.horario).slice(0, 5)), occupiedUntilMin(row, durationByService)))
     .map((row) => ({
       id: row.id,
       clienteNome: occupantOf(row),
@@ -86,7 +96,16 @@ export async function ocupacaoNoHorario(ymd, barbeiroId, horario, durationMin = 
     }))
 }
 
-export async function consultar_disponibilidade(data, barbeiroId, durationMin) {
+function candidateStarts(openHm, closeHm, duration, extraMins) {
+  const starts = new Set(generateDaySlots(openHm, closeHm, duration))
+  for (const minute of extraMins) {
+    const hm = minToHm(minute)
+    if (fitsExpediente(hm, duration, openHm, closeHm)) starts.add(hm)
+  }
+  return [...starts].sort()
+}
+
+export async function consultar_disponibilidade(data, barbeiroId, durationMin, horarioPedido) {
   const ymd = String(data || '').slice(0, 10)
   if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
     return { ok: false, motivo: 'data_invalida', horarios: [], barbeirosLivres: [] }
@@ -114,7 +133,11 @@ export async function consultar_disponibilidade(data, barbeiroId, durationMin) {
 
   const durationByService = new Map(servicos.map((svc) => [String(svc.id), durationOf(svc)]))
   const dayAppointments = agendamentos.filter((row) => String(row.data) === ymd && appointmentBusy(row))
-  const duration = Math.max(Number(durationMin) || 25, 15)
+  const duration = Math.max(Number(durationMin) || 0, 1)
+  const pedidoMin =
+    horarioPedido && /^\d{2}:\d{2}$/.test(String(horarioPedido).slice(0, 5))
+      ? hmToMin(String(horarioPedido).slice(0, 5))
+      : null
   const union = new Set()
   const livresPorHorario = {}
 
@@ -122,16 +145,17 @@ export async function consultar_disponibilidade(data, barbeiroId, durationMin) {
     const hours = expedienteOf(barber)
     const br = barberBreak(barber)
     const own = dayAppointments.filter((row) => barberIdOf(row) === String(barber.id))
-    for (const hm of generateDaySlots(hours.inicio, hours.fim, duration)) {
+    const releaseMins = own.map((row) => occupiedUntilMin(row, durationByService))
+    const extras = pedidoMin == null ? releaseMins : [...releaseMins, pedidoMin]
+    for (const hm of candidateStarts(hours.inicio, hours.fim, duration, extras)) {
       if (isPastSlotToday(ymd, hm)) continue
       const start = hmToMin(hm)
-      const end = start + duration
+      const end = appointmentReleaseMin(hm, duration)
+      if (!fitsExpediente(hm, duration, hours.inicio, hours.fim)) continue
       if (br && rangesOverlap(start, end, hmToMin(br.inicio), hmToMin(br.fim))) continue
-      const clash = own.some((row) => {
-        const a0 = hmToMin(String(row.horario).slice(0, 5))
-        const a1 = a0 + (durationByService.get(String(row.servico_id || row.servicoId)) || 30)
-        return rangesOverlap(start, end, a0, a1)
-      })
+      const clash = own.some((row) =>
+        rangesOverlap(start, end, hmToMin(String(row.horario).slice(0, 5)), occupiedUntilMin(row, durationByService)),
+      )
       if (clash) continue
       union.add(hm)
       if (!livresPorHorario[hm]) livresPorHorario[hm] = []
@@ -162,7 +186,7 @@ export async function obter_proximo_barbeiro_rodizio(opts = {}) {
   const ymd = opts.data ? String(opts.data).slice(0, 10) : ''
   const horario = opts.horario ? String(opts.horario).slice(0, 5) : ''
   if (ymd && horario) {
-    const slots = await consultar_disponibilidade(ymd, null, opts.durationMin)
+    const slots = await consultar_disponibilidade(ymd, null, opts.durationMin, horario)
     const livres = [...(slots.barbeirosLivres?.[horario] || [])].sort((a, b) => {
       const load = (a.agendaDoDia || 0) - (b.agendaDoDia || 0)
       if (load !== 0) return load
@@ -219,14 +243,22 @@ export async function criar_agendamento(dados = {}) {
 
   let barbeiroId = dados.barbeiroId ? String(dados.barbeiroId) : ''
   if (!barbeiroId) {
-    const next = await obter_proximo_barbeiro_rodizio({ data: ymd, horario })
+    const next = await obter_proximo_barbeiro_rodizio({
+      data: ymd,
+      horario,
+      durationMin: service.duracaoMinutos,
+    })
     if (!next.ok || !next.barbeiro) {
       return { ok: false, error: 'Nenhum barbeiro livre nesse horário (rodízio).' }
     }
     barbeiroId = String(next.barbeiro.id)
   }
 
-  const avail = await consultar_disponibilidade(ymd, barbeiroId, service.duracaoMinutos)
+  if (!fitsExpediente(horario, service.duracaoMinutos)) {
+    return { ok: false, error: 'Fora do expediente. A casa atende de segunda a sábado, das 08:30 às 19:30.' }
+  }
+
+  const avail = await consultar_disponibilidade(ymd, barbeiroId, service.duracaoMinutos, horario)
   const livres = avail.barbeirosLivres?.[horario] || []
   if (!livres.some((row) => row.id === barbeiroId)) {
     return { ok: false, error: 'Horário indisponível na escala deste barbeiro.' }
@@ -244,6 +276,7 @@ export async function criar_agendamento(dados = {}) {
     cliente_telefone: dados.telefone || null,
     status,
     valor: service.preco,
+    duracao_minutos: service.duracaoMinutos,
     origem: 'diva_local',
     created_at: new Date().toISOString(),
   })

@@ -61,10 +61,24 @@ export function isPastSlotToday(ymd, hm, now = new Date()) {
   return hm <= `${hour}:${get('minute')}`
 }
 
+/** Fim exclusivo do atendimento: início + duração, sem buffer. */
+export function appointmentReleaseMin(startHm, durationMin) {
+  return hmToMin(startHm) + Math.max(Number(durationMin) || 0, 1)
+}
+
+export function fitsExpediente(startHm, durationMin, openHm = SHOP_OPEN, closeHm = SHOP_CLOSE) {
+  const start = hmToMin(startHm)
+  const end = appointmentReleaseMin(startHm, durationMin)
+  const open = Math.max(hmToMin(openHm), hmToMin(SHOP_OPEN))
+  const close = Math.min(hmToMin(closeHm), hmToMin(SHOP_CLOSE))
+  return start >= open && end <= close
+}
+
 export function generateDaySlots(openHm = SHOP_OPEN, closeHm = SHOP_CLOSE, blockMin = 25, step = 15) {
   const out = []
-  const open = hmToMin(openHm)
-  const close = hmToMin(closeHm)
+  const open = Math.max(hmToMin(openHm), hmToMin(SHOP_OPEN))
+  const close = Math.min(hmToMin(closeHm), hmToMin(SHOP_CLOSE))
+  if (close <= open) return out
   for (let t = open; t + blockMin <= close; t += step) out.push(minToHm(t))
   return out
 }

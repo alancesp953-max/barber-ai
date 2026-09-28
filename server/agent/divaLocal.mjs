@@ -1,3 +1,4 @@
+import { divaSystemPrompt } from './divaPrompt.mjs'
 import {
   consultar_disponibilidade,
   criar_agendamento,
@@ -6,8 +7,10 @@ import {
   obter_proximo_barbeiro_rodizio,
 } from '../tools/divaTools.mjs'
 import { listCollection } from '../lib/firestoreShop.mjs'
-import { isSunday, shiftYmd, todayYmd } from '../lib/time.mjs'
+import { fitsExpediente, isSunday, shiftYmd, todayYmd } from '../lib/time.mjs'
 import { assertLocalIsolation } from '../lib/whatsappLock.mjs'
+
+export const DIVA_SYSTEM_PROMPT = divaSystemPrompt()
 
 export const NEW_CLIENT_GREETING =
   'Olá! Seja bem-vindo à Divina Barbearia da Varjota. Como posso te chamar?'
@@ -22,8 +25,10 @@ function fold(text) {
 }
 
 function sessionOf(key) {
-  if (!sessions.has(key)) sessions.set(key, { nome: '', history: [] })
-  return sessions.get(key)
+  if (!sessions.has(key)) sessions.set(key, { nome: '', history: [], pedido: {} })
+  const session = sessions.get(key)
+  if (!session.pedido) session.pedido = {}
+  return session
 }
 
 function requestedDate(text) {
@@ -40,6 +45,12 @@ function requestedDate(text) {
   return shiftYmd(today, delta)
 }
 
+function dateWasStated(text) {
+  const blob = fold(text)
+  if (/\b(hoje|amanha)\b/.test(blob)) return true
+  return ['domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado'].some((name) => blob.includes(name))
+}
+
 function requestedTime(text) {
   const blob = fold(text)
   const hm = blob.match(/\b(\d{1,2}):(\d{2})\b/)
@@ -48,12 +59,54 @@ function requestedTime(text) {
     const m = Number(hm[2])
     if (h <= 23 && m <= 59) return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
   }
+  const compact = blob.match(/\b(\d{1,2})\s*h\s*(\d{2})\b/)
+  if (compact) {
+    const h = Number(compact[1])
+    const m = Number(compact[2])
+    if (h <= 23 && m <= 59) return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+  }
   const hour = blob.match(/\b(?:as|às)?\s*(\d{1,2})\s*h(?:oras)?\b/) || blob.match(/\b(\d{1,2})\s*h\b/)
   if (hour) {
     const h = Number(hour[1])
     if (h <= 23) return `${String(h).padStart(2, '0')}:00`
   }
   return null
+}
+
+function wantsAnyBarber(text) {
+  return /\b(qualquer|tanto faz|sem preferencia|quem estiver livre|nao tenho preferencia)\b/.test(fold(text))
+}
+
+function applyPedido(session, patch) {
+  const pedido = session.pedido
+  let touched = false
+  if (patch.service && pedido.servicoId !== patch.service.id) {
+    pedido.servicoId = patch.service.id
+    touched = true
+  }
+  if (patch.dateStated && patch.date && pedido.data !== patch.date) {
+    pedido.data = patch.date
+    touched = true
+  }
+  if (patch.horario && pedido.horario !== patch.horario) {
+    pedido.horario = patch.horario
+    touched = true
+  }
+  if (patch.anyBarber && pedido.barbeiroId !== 'rodizio') {
+    pedido.barbeiroId = 'rodizio'
+    touched = true
+  } else if (patch.preferred && pedido.barbeiroId !== String(patch.preferred.id)) {
+    pedido.barbeiroId = String(patch.preferred.id)
+    touched = true
+  }
+  if (touched) pedido.agendado = false
+  return { pedido, touched }
+}
+
+function askMissing(nome, missing) {
+  if (missing.length === 1) return `${nome}, para agendar preciso saber ${missing[0]}.`
+  const last = missing[missing.length - 1]
+  return `${nome}, para agendar preciso saber ${missing.slice(0, -1).join(', ')} e ${last}.`
 }
 
 function matchService(text, servicos) {
@@ -95,50 +148,96 @@ function weekdayLabel(ymd) {
   }).format(new Date(`${ymd}T12:00:00.000Z`))
 }
 
+function finish(session, text, reply, extra) {
+  session.history.push({ from: 'cliente', text }, { from: 'bot', text: reply })
+  return { reply, ...extra }
+}
+
 export async function handleDivaMessage(input) {
   const outbound = assertLocalIsolation()
   const text = String(input.text || '').trim()
   const session = sessionOf(String(input.sessionId || input.telefone || 'teste_local'))
   if (input.nome) session.nome = String(input.nome).trim()
   const nome = session.nome
-
   const tools = []
+  const base = { tools, outbound, behavior: 'DIVA_BEHAVIOR.md' }
+
   if (!nome) {
-    const reply = NEW_CLIENT_GREETING
-    session.history.push({ from: 'cliente', text }, { from: 'bot', text: reply })
-    return { reply, tools, outbound, gravou: false, sessionId: input.sessionId || null }
+    return finish(session, text, NEW_CLIENT_GREETING, { ...base, gravou: false, sessionId: input.sessionId || null })
   }
 
   const servicosRes = await listar_servicos()
   tools.push({ name: 'listar_servicos', result: servicosRes })
-  const service = matchService(text, servicosRes.servicos) || servicosRes.servicos.find((row) => row.id === 'corte-de-cabelo')
-  const date = requestedDate(text)
-  const horario = requestedTime(text)
+  const mentionedService = matchService(text, servicosRes.servicos)
+  const dateStated = dateWasStated(text)
+  const mentionedDate = dateStated ? requestedDate(text) : null
 
-  if (isSunday(date) || /\bdomingo\b/.test(fold(text))) {
+  if ((mentionedDate && isSunday(mentionedDate)) || /\bdomingo\b/.test(fold(text))) {
     const reply = `${nome}, domingo a Divina Barbearia da Varjota não abre. Posso olhar segunda a sábado, das 08:30 às 19:30.`
-    session.history.push({ from: 'cliente', text }, { from: 'bot', text: reply })
-    return { reply, tools, outbound, gravou: false }
+    return finish(session, text, reply, { ...base, gravou: false })
   }
 
   const barbeiros = (await listCollection('barbeiros')).filter((row) => row.ativo !== false)
-  const wantsAny = /\bqualquer\b/.test(fold(text))
-  const preferred = wantsAny ? null : matchBarber(text, barbeiros)
-  const duration = service?.duracaoMinutos || 25
-  const avail = await consultar_disponibilidade(date, preferred?.id, duration)
+  const { pedido, touched } = applyPedido(session, {
+    service: mentionedService,
+    dateStated,
+    date: mentionedDate,
+    horario: requestedTime(text),
+    anyBarber: wantsAnyBarber(text),
+    preferred: wantsAnyBarber(text) ? null : matchBarber(text, barbeiros),
+  })
+
+  const service = servicosRes.servicos.find((row) => row.id === pedido.servicoId) || null
+  const date = pedido.data || null
+  const horario = pedido.horario || null
+  const anyBarber = pedido.barbeiroId === 'rodizio'
+  const preferred = !anyBarber && pedido.barbeiroId
+    ? barbeiros.find((row) => String(row.id) === String(pedido.barbeiroId)) || null
+    : null
+  const complete = Boolean(service && date && horario && (preferred || anyBarber))
+
+  if (pedido.agendado && !touched) {
+    const reply = `${nome}, seu horário já está confirmado. Se quiser remarcar ou cancelar, é só dizer.`
+    return finish(session, text, reply, { ...base, gravou: false })
+  }
+
+  if (!complete) {
+    const missing = []
+    if (!service) missing.push('o serviço')
+    if (!preferred && !anyBarber) missing.push('o barbeiro')
+    if (!date) missing.push('a data')
+    if (!horario) missing.push('o horário')
+    let reply = askMissing(nome, missing)
+    if (service && date && !horario) {
+      const avail = await consultar_disponibilidade(date, preferred?.id || null, service.duracaoMinutos)
+      tools.push({
+        name: 'consultar_disponibilidade',
+        args: { data: date, barbeiroId: preferred?.id || null },
+        result: avail,
+      })
+      const sample = avail.horarios.slice(0, 6).join(', ')
+      if (sample) reply += ` Em ${weekdayLabel(date)} tenho ${sample}.`
+    }
+    reply += ' Expediente de segunda a sábado, das 08:30 às 19:30.'
+    return finish(session, text, reply, { ...base, gravou: false })
+  }
+
+  const duration = service.duracaoMinutos
+  if (!fitsExpediente(horario, duration)) {
+    const reply = `${nome}, ${horario} não cabe no expediente. Atendemos de segunda a sábado, das 08:30 às 19:30, e ${service.nome} leva ${duration} minutos.`
+    return finish(session, text, reply, { ...base, gravou: false })
+  }
+
+  const avail = await consultar_disponibilidade(date, preferred?.id || null, duration, horario)
   tools.push({
     name: 'consultar_disponibilidade',
-    args: { data: date, barbeiroId: preferred?.id || null },
+    args: { data: date, barbeiroId: preferred?.id || null, horario },
     result: avail,
   })
 
   let barbeiro = preferred
   if (!barbeiro) {
-    const next = await obter_proximo_barbeiro_rodizio({
-      data: date,
-      horario: horario || undefined,
-      durationMin: duration,
-    })
+    const next = await obter_proximo_barbeiro_rodizio({ data: date, horario, durationMin: duration })
     tools.push({ name: 'obter_proximo_barbeiro_rodizio', result: next })
     barbeiro = next.barbeiro
   } else {
@@ -149,68 +248,52 @@ export async function handleDivaMessage(input) {
     })
   }
 
-  if (horario && preferred && !avail.horarios.includes(horario)) {
-    const ocupantes = await ocupacaoNoHorario(date, preferred.id, horario, duration)
-    const house = await consultar_disponibilidade(date, null, duration)
-    const outros = (house.barbeirosLivres?.[horario] || []).filter((row) => row.id !== String(preferred.id))
-    const proximoDele = avail.horarios.find((hm) => hm > horario) || avail.horarios[0]
-    const ocupadoPor = ocupantes[0]?.clienteNome || 'outro cliente'
-    const partes = [
-      `${nome}, ${preferred.nome} já está com ${ocupadoPor} às ${horario} em ${weekdayLabel(date)}.`,
-    ]
-    if (proximoDele) partes.push(`O próximo horário livre dele é ${proximoDele}.`)
-    if (outros[0]) partes.push(`Se quiser manter ${horario}, ${outros[0].nome} está livre.`)
-    partes.push('Expediente das 08:30 às 19:30, sem domingo.')
-    const reply = partes.join(' ')
-    session.history.push({ from: 'cliente', text }, { from: 'bot', text: reply })
-    return {
-      reply,
-      tools,
-      outbound,
-      gravou: false,
-      colisao: { barbeiro: preferred.nome, ocupadoPor, horario, proximoDele, outros },
-    }
-  }
-
-  if (horario && avail.horarios.includes(horario)) {
-    const wantsBook = Boolean(input.gravar) || /\b(confirma|pode marcar|pode agendar|fecha|fechado)\b/.test(fold(text))
-    if (wantsBook) {
-      const created = await criar_agendamento({
-        clienteNome: nome,
-        telefone: input.telefone,
-        data: date,
-        horario,
-        servicoId: service?.id,
-        barbeiroId: barbeiro?.id,
-        status: 'confirmado_teste',
+  const livres = avail.barbeirosLivres?.[horario] || []
+  const livre = Boolean(barbeiro && livres.some((row) => row.id === String(barbeiro.id)))
+  if (!livre) {
+    if (preferred) {
+      const ocupantes = await ocupacaoNoHorario(date, preferred.id, horario, duration)
+      const house = await consultar_disponibilidade(date, null, duration, horario)
+      const outros = (house.barbeirosLivres?.[horario] || []).filter((row) => row.id !== String(preferred.id))
+      const proximoDele = avail.horarios.find((hm) => hm > horario) || avail.horarios[0]
+      const ocupadoPor = ocupantes[0]?.clienteNome || 'outro cliente'
+      const partes = [
+        `${nome}, ${preferred.nome} não está livre às ${horario} em ${weekdayLabel(date)}.`,
+      ]
+      if (ocupantes[0]) partes[0] = `${nome}, ${preferred.nome} já está com ${ocupadoPor} às ${horario} em ${weekdayLabel(date)}.`
+      if (proximoDele) partes.push(`O próximo horário livre dele é ${proximoDele}.`)
+      if (outros[0]) partes.push(`Se quiser manter ${horario}, ${outros[0].nome} está livre.`)
+      partes.push('Expediente das 08:30 às 19:30, sem domingo.')
+      return finish(session, text, partes.join(' '), {
+        ...base,
+        gravou: false,
+        colisao: { barbeiro: preferred.nome, ocupadoPor, horario, proximoDele, outros },
       })
-      tools.push({ name: 'criar_agendamento', result: created })
-      if (created.ok) {
-        const reply = `${nome}, neste teste o horário de ${weekdayLabel(date)} às ${horario} com ${created.agendamento.barbeiro.nome} para ${service.nome} (R$ ${service.preco.toFixed(2)}) está reservado como ${created.agendamento.status}. Nada foi enviado no WhatsApp oficial.`
-        session.history.push({ from: 'cliente', text }, { from: 'bot', text: reply })
-        return { reply, tools, outbound, gravou: true, agendamento: created.agendamento }
-      }
-      const reply = `${nome}, não consegui gravar: ${created.error}`
-      session.history.push({ from: 'cliente', text }, { from: 'bot', text: reply })
-      return { reply, tools, outbound, gravou: false }
     }
-    const profissional = barbeiro?.nome || 'o próximo da fila'
-    const reply = `${nome}, ${weekdayLabel(date)} às ${horario} está livre com ${profissional} para ${service.nome}, R$ ${Number(service.preco).toFixed(2)}, ${service.duracaoMinutos} minutos. Neste teste nada foi gravado em produção. Quer que eu confirme?`
-    session.history.push({ from: 'cliente', text }, { from: 'bot', text: reply })
-    return { reply, tools, outbound, gravou: false, slot: { data: date, horario, barbeiro, servico: service } }
-  }
-
-  if (horario && !avail.horarios.includes(horario)) {
-    const alt = avail.horarios.slice(0, 5).join(', ') || 'nenhum horário livre neste recorte'
+    const alt = avail.horarios.filter((hm) => hm !== horario).slice(0, 5).join(', ') || 'nenhum horário livre neste dia'
     const reply = `${nome}, ${horario} em ${weekdayLabel(date)} não está livre. Alternativas: ${alt}. Expediente das 08:30 às 19:30, sem domingo.`
-    session.history.push({ from: 'cliente', text }, { from: 'bot', text: reply })
-    return { reply, tools, outbound, gravou: false }
+    return finish(session, text, reply, { ...base, gravou: false })
   }
 
-  const sample = avail.horarios.slice(0, 6).join(', ') || 'sem vagas neste dia'
-  const reply = `${nome}, para ${service?.nome || 'o serviço'} em ${weekdayLabel(date)} tenho ${sample}. Qual horário prefere?`
-  session.history.push({ from: 'cliente', text }, { from: 'bot', text: reply })
-  return { reply, tools, outbound, gravou: false }
+  const created = await criar_agendamento({
+    clienteNome: nome,
+    telefone: input.telefone,
+    data: date,
+    horario,
+    servicoId: service.id,
+    barbeiroId: barbeiro.id,
+    status: 'confirmado',
+  })
+  tools.push({ name: 'criar_agendamento', result: created })
+  if (!created.ok) {
+    const reply = `${nome}, não consegui gravar: ${created.error}`
+    return finish(session, text, reply, { ...base, gravou: false })
+  }
+
+  pedido.agendado = true
+  const profissional = created.agendamento.barbeiro?.nome || barbeiro.nome
+  const reply = `${nome}, agendamento confirmado na Divina Barbearia Varjota: ${service.nome} com ${profissional}, ${weekdayLabel(date)} às ${horario}, R$ ${Number(service.preco).toFixed(2)}.`
+  return finish(session, text, reply, { ...base, gravou: true, agendamento: created.agendamento })
 }
 
 export function extractUazapiInbound(payload = {}) {

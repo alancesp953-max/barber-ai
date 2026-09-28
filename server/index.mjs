@@ -7,7 +7,7 @@ import {
   listar_servicos,
   obter_proximo_barbeiro_rodizio,
 } from './tools/divaTools.mjs'
-import { extractUazapiInbound, handleDivaMessage } from './agent/divaLocal.mjs'
+import { DIVA_SYSTEM_PROMPT, extractUazapiInbound, handleDivaMessage } from './agent/divaLocal.mjs'
 
 const PORT = Number(process.env.DIVA_LOCAL_PORT || 8787)
 
@@ -24,6 +24,9 @@ app.get('/health', (_req, res) => {
     firebase: getFirebaseMode(),
     whatsappOficial: 'bloqueado',
     timezone: 'America/Fortaleza',
+    behavior: 'DIVA_BEHAVIOR.md',
+    agendamentoDireto: DIVA_SYSTEM_PROMPT.includes('AGENDAMENTO DIRETO'),
+    expediente: 'segunda a sábado, 08:30 às 19:30',
   })
 })
 
@@ -41,7 +44,6 @@ app.post('/webhook/uazapi', async (req, res) => {
       nome: inbound.nome,
       telefone: inbound.telefone,
       sessionId: inbound.telefone || 'uazapi_local',
-      gravar: false,
     })
     return res.json({
       ok: true,
@@ -64,7 +66,6 @@ app.post('/test/webhook', async (req, res) => {
       nome: body.nome,
       telefone: body.telefone || '5585999999999',
       sessionId: body.sessionId || body.telefone || 'teste_local',
-      gravar: Boolean(body.gravar),
     })
     return res.json({ ok: true, ...result })
   } catch (err) {
