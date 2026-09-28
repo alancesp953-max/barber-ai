@@ -1,30 +1,10 @@
-import {
-  Alert,
-  Badge,
-  Button,
-  Group,
-  Modal,
-  NativeSelect,
-  Stack,
-  Text,
-  Title,
-  ActionIcon,
-} from '@mantine/core'
-import { Trash2 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { X } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate } from '@tanstack/react-router'
 
-import {
-  addServicoAoAgendamento,
-  ensureAgendamentoServicos,
-  getServices,
-  removeServicoDoAgendamento,
-  updateAppointmentStatus,
-  type AgendamentoServicoItem,
-} from '../lib/api'
+import { updateAppointmentStatus } from '../lib/api'
 import { formatCurrency, formatDateTime } from '../lib/format'
-import type { Appointment, AppointmentStatus, Service } from '../types/database'
+import type { Appointment, AppointmentStatus } from '../types/database'
 
 interface CheckinModalProps {
   appointment: Appointment | null
@@ -33,57 +13,51 @@ interface CheckinModalProps {
   onUpdated?: (appointment: Appointment) => void
 }
 
-const statusColor: Record<AppointmentStatus, string> = {
-  pendente: 'blue',
-  confirmado: 'gold',
-  concluido: 'teal',
-  cancelado: 'red',
+const statusColors: Record<string, string> = {
+  pendente: 'bg-blue-500/10 text-blue-400',
+  confirmado: 'bg-barber-gold/10 text-barber-gold',
+  concluido: 'bg-emerald-500/10 text-emerald-400',
+  cancelado: 'bg-red-500/10 text-red-400',
+  scheduled: 'bg-blue-500/10 text-blue-400',
+  confirmed: 'bg-barber-gold/10 text-barber-gold',
+  completed: 'bg-emerald-500/10 text-emerald-400',
+  cancelled: 'bg-red-500/10 text-red-400',
+  no_show: 'bg-gray-500/10 text-gray-400',
 }
 
 export function CheckinModal({ appointment, open, onClose, onUpdated }: CheckinModalProps) {
   const { t } = useTranslation()
-  const navigate = useNavigate()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [items, setItems] = useState<AgendamentoServicoItem[]>([])
-  const [services, setServices] = useState<Service[]>([])
-  const [addServiceId, setAddServiceId] = useState('')
 
   useEffect(() => {
     if (!open) {
       setError(null)
       setLoading(false)
-      setItems([])
-      setAddServiceId('')
-      return
     }
-    if (!appointment) return
-    void (async () => {
-      try {
-        const [list, svcs] = await Promise.all([
-          ensureAgendamentoServicos(appointment.id),
-          getServices(),
-        ])
-        setItems(list)
-        setServices(svcs)
-      } catch (e) {
-        setError(e instanceof Error ? e.message : t('checkin.error'))
-      }
-    })()
-  }, [open, appointment, t])
+  }, [open])
 
-  const total = useMemo(
-    () => items.reduce((s, i) => s + Number(i.preco || 0), 0),
-    [items],
-  )
+  useEffect(() => {
+    if (!open) return
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !loading) onClose()
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [open, loading, onClose])
+
+  if (!open || !appointment) return null
 
   async function handleStatusChange(status: AppointmentStatus) {
     if (!appointment) return
+
     setLoading(true)
     setError(null)
     try {
-      const updated = await updateAppointmentStatus(appointment.id, status)
-      onUpdated?.(updated)
+      await updateAppointmentStatus(appointment.id, status)
+      onUpdated?.({ ...appointment, status })
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : t('checkin.error'))
@@ -92,199 +66,130 @@ export function CheckinModal({ appointment, open, onClose, onUpdated }: CheckinM
     }
   }
 
-  async function handleCheckout() {
-    if (!appointment) return
-    onClose()
-    navigate({
-      to: '/admin/financeiro',
-      search: { agendamentoId: appointment.id },
-    })
-  }
-
-  async function handleAddService() {
-    if (!appointment || !addServiceId) return
-    setLoading(true)
-    setError(null)
-    try {
-      await addServicoAoAgendamento(appointment.id, addServiceId)
-      setItems(await ensureAgendamentoServicos(appointment.id))
-      setAddServiceId('')
-      onUpdated?.(appointment)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erro ao adicionar serviço')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  async function handleRemoveItem(itemId: string) {
-    if (!appointment) return
-    if (items.length <= 1) {
-      setError('A comanda precisa ter pelo menos um serviço')
-      return
-    }
-    setLoading(true)
-    setError(null)
-    try {
-      await removeServicoDoAgendamento(itemId, appointment.id)
-      setItems(await ensureAgendamentoServicos(appointment.id))
-      onUpdated?.(appointment)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erro ao remover serviço')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  if (!appointment) return null
-
   const canConfirm = appointment.status === 'pendente'
-  const canCheckout =
-    appointment.status === 'pendente' || appointment.status === 'confirmado'
+  const canComplete = appointment.status === 'confirmado'
   const canCancel = appointment.status === 'pendente' || appointment.status === 'confirmado'
 
   return (
-    <Modal
-      opened={open}
-      onClose={() => !loading && onClose()}
-      title={
-        <div>
-          <Title order={3} c="gold" style={{ fontFamily: 'Syne, DM Sans, sans-serif' }}>
-            {t('checkin.title')}
-          </Title>
-          <Text size="sm" c="dimmed">
-            {t('checkin.subtitle')}
-          </Text>
-        </div>
-      }
-      centered
-      radius="lg"
-      styles={{
-        content: { background: '#1A1A1A', border: '1px solid rgba(197,160,89,0.3)' },
-        header: { background: '#1A1A1A' },
-        body: { background: '#1A1A1A' },
-      }}
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+      onClick={() => !loading && onClose()}
+      role="presentation"
     >
-      <Stack gap="md">
-        <div>
-          <Text fw={600} size="lg">
-            {appointment.clientes?.nome ?? '—'}
-          </Text>
-          <Text size="sm" c="dimmed">
-            {appointment.clientes?.email ?? '—'}
-          </Text>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="checkin-modal-title"
+        className="w-full max-w-md rounded-2xl border border-barber-gold/30 bg-barber-gray shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between border-b border-barber-gold/20 px-6 py-4">
+          <div>
+            <h2 id="checkin-modal-title" className="font-serif text-xl font-bold text-barber-gold">
+              {t('checkin.title')}
+            </h2>
+            <p className="mt-1 text-sm text-barber-white/60">{t('checkin.subtitle')}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={loading}
+            className="rounded-lg p-1 text-barber-white/60 transition hover:bg-barber-white/10 hover:text-barber-white disabled:opacity-50"
+            aria-label={t('checkin.close')}
+          >
+            <X className="h-5 w-5" />
+          </button>
         </div>
 
-        <Stack gap="xs">
-          <Group justify="space-between">
-            <Text size="sm" c="dimmed">
-              {t('checkin.barber')}
-            </Text>
-            <Text size="sm">{appointment.barbeiros?.nome ?? '—'}</Text>
-          </Group>
-          <Group justify="space-between">
-            <Text size="sm" c="dimmed">
-              {t('checkin.dateTime')}
-            </Text>
-            <Text size="sm">{formatDateTime(appointment.data, appointment.horario)}</Text>
-          </Group>
-          <Group justify="space-between">
-            <Text size="sm" c="dimmed">
-              {t('checkin.status')}
-            </Text>
-            <Badge color={statusColor[appointment.status]} variant="light">
-              {t(`status.${appointment.status}`)}
-            </Badge>
-          </Group>
-        </Stack>
+        <div className="space-y-4 px-6 py-5">
+          <div>
+            <p className="text-lg font-semibold text-barber-white">
+              {appointment.clientes?.nome ?? '—'}
+            </p>
+            <p className="text-sm text-barber-white/50">{appointment.clientes?.email ?? '—'}</p>
+          </div>
 
-        <Stack gap="xs">
-          <Text size="sm" fw={600} c="gold">
-            Serviços da comanda
-          </Text>
-          {items.map((item) => (
-            <Group key={item.id} justify="space-between" wrap="nowrap">
-              <Text size="sm" style={{ flex: 1 }}>
-                {item.servicos?.nome || 'Serviço'}
-              </Text>
-              <Text size="sm" c="gold">
-                {formatCurrency(Number(item.preco))}
-              </Text>
-              <ActionIcon
-                variant="subtle"
-                color="red"
-                disabled={loading || items.length <= 1}
-                onClick={() => void handleRemoveItem(item.id)}
-              >
-                <Trash2 size={14} />
-              </ActionIcon>
-            </Group>
-          ))}
-          <Group align="flex-end" grow>
-            <NativeSelect
-              label="Adicionar serviço"
-              value={addServiceId}
-              onChange={(e) => setAddServiceId(e.currentTarget.value)}
-              data={[
-                { value: '', label: 'Selecione…' },
-                ...services.map((s) => ({
-                  value: s.id,
-                  label: `${s.nome} — ${formatCurrency(Number(s.preco))}`,
-                })),
-              ]}
-            />
-            <Button
-              color="gold"
-              c="#0A0A0A"
-              disabled={!addServiceId || loading}
-              onClick={() => void handleAddService()}
-            >
-              Incluir
-            </Button>
-          </Group>
-          <Group justify="space-between">
-            <Text size="sm" c="dimmed">
-              Total
-            </Text>
-            <Text size="sm" fw={700} c="gold">
-              {formatCurrency(total || Number(appointment.servicos?.preco ?? 0))}
-            </Text>
-          </Group>
-        </Stack>
+          <dl className="grid gap-3 text-sm">
+            <div className="flex justify-between gap-4">
+              <dt className="text-barber-white/60">{t('checkin.service')}</dt>
+              <dd className="text-right text-barber-white">{appointment.servicos?.nome ?? '—'}</dd>
+            </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-barber-white/60">{t('checkin.barber')}</dt>
+              <dd className="text-right text-barber-white">{appointment.barbeiros?.nome ?? '—'}</dd>
+            </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-barber-white/60">{t('checkin.dateTime')}</dt>
+              <dd className="text-right text-barber-white">
+                {formatDateTime(appointment.data, appointment.horario)}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-barber-white/60">{t('checkin.price')}</dt>
+              <dd className="text-right font-semibold text-barber-gold">
+                {formatCurrency(Number(appointment.servicos?.preco ?? 0))}
+              </dd>
+            </div>
+            <div className="flex items-center justify-between gap-4">
+              <dt className="text-barber-white/60">{t('checkin.status')}</dt>
+              <dd>
+                <span
+                  className={`inline-block rounded-full px-2 py-0.5 text-xs capitalize ${statusColors[appointment.status]}`}
+                >
+                  {t(`status.${appointment.status}`)}
+                </span>
+              </dd>
+            </div>
+          </dl>
 
-        {error && (
-          <Alert color="red" variant="light">
-            {error}
-          </Alert>
-        )}
-
-        <Group gap="sm">
-          {canConfirm && (
-            <Button
-              flex={1}
-              color="gold"
-              c="#0A0A0A"
-              loading={loading}
-              onClick={() => handleStatusChange('confirmado')}
-            >
-              {t('checkin.confirmPresence')}
-            </Button>
+          {error && (
+            <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+              {error}
+            </p>
           )}
-          {canCheckout && (
-            <Button flex={1} color="teal" loading={loading} onClick={handleCheckout}>
-              Check-out
-            </Button>
+        </div>
+
+        <div className="flex flex-wrap gap-2 border-t border-barber-gold/20 px-6 py-4">
+          {canConfirm && (
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => handleStatusChange('confirmado')}
+              className="flex-1 rounded-lg bg-barber-gold px-4 py-2 text-sm font-semibold text-barber-black hover:bg-barber-gold/90 disabled:opacity-50"
+            >
+              {loading ? t('checkin.processing') : t('checkin.confirmPresence')}
+            </button>
+          )}
+          {canComplete && (
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => handleStatusChange('concluido')}
+              className="flex-1 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
+            >
+              {loading ? t('checkin.processing') : t('checkin.completeService')}
+            </button>
           )}
           {canCancel && (
-            <Button variant="outline" color="red" loading={loading} onClick={() => handleStatusChange('cancelado')}>
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => handleStatusChange('cancelado')}
+              className="rounded-lg border border-red-500/40 px-4 py-2 text-sm text-red-400 hover:bg-red-500/10 disabled:opacity-50"
+            >
               {t('checkin.cancelAppointment')}
-            </Button>
+            </button>
           )}
-          <Button variant="default" disabled={loading} onClick={onClose}>
+          <button
+            type="button"
+            disabled={loading}
+            onClick={onClose}
+            className="rounded-lg border border-barber-gray px-4 py-2 text-sm text-barber-white/70 hover:bg-barber-black/40 disabled:opacity-50"
+          >
             {t('checkin.close')}
-          </Button>
-        </Group>
-      </Stack>
-    </Modal>
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }

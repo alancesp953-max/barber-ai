@@ -1,18 +1,22 @@
-import i18n from 'i18next'
-import { initReactI18next } from 'react-i18next'
-import ptBRTranslation from './i18n/pt-BR.json'
+import i18n from 'i18next';
+import { initReactI18next } from 'react-i18next';
+import enTranslation from './i18n/en.json';
+import ptBRTranslation from './i18n/pt-BR.json';
 
 i18n.use(initReactI18next).init({
   resources: {
-    'pt-BR': {
-      translation: ptBRTranslation,
+    en: {
+      translation: enTranslation
     },
+    'pt-BR': {
+      translation: ptBRTranslation
+    }
   },
   lng: 'pt-BR',
-  fallbackLng: 'pt-BR',
+  fallbackLng: 'en',
   interpolation: {
-    escapeValue: false,
-  },
-})
+    escapeValue: false
+  }
+});
 
-export default i18n
+export default i18n;

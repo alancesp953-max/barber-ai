@@ -1,0 +1,67 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Funções auxiliares de segurança
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isSuperAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.email == 'admin@barb.com' ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'superadmin'
+      );
+    }
+    
+    function isTenantMember(tenantId) {
+      return isAuthenticated() && (
+        isSuperAdmin() ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.tenantId == tenantId
+      );
+    }
+
+    // Regras para perfil de usuários
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isSuperAdmin());
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && (request.auth.uid == userId || isSuperAdmin());
+      allow delete: if isSuperAdmin();
+    }
+
+    // Regras para Barbearias (Tenants)
+    match /tenants/{tenantId} {
+      // Superadmin tem controle total; membros do tenant podem ler os dados de sua barbearia
+      allow read: if isTenantMember(tenantId);
+      allow create: if isAuthenticated();
+      allow update, delete: if isSuperAdmin();
+
+      // Subcoleções isoladas por tenantId
+      match /{subcollection}/{docId} {
+        allow read, write: if isTenantMember(tenantId);
+      }
+      
+      // Subcoleções de mensagens e conversas
+      match /conversations/{convId}/messages/{msgId} {
+        allow read, write: if isTenantMember(tenantId);
+      }
+    }
+
+    // Regras exclusivas da Plataforma SaaS (Apenas Superadmin)
+    match /platform_billing/{billingId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /platform_expenses/{expenseId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /platform_logs/{logId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /platform_api_usage/{usageId} {
+      allow read, write: if isSuperAdmin();
+    }
+  }
+}

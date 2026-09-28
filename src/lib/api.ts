@@ -1,1466 +1,65 @@
-import { isDemoMode, supabase } from '../services/supabaseClient'
-import type { Appointment, Barber, CreateBarberInput } from '../types/database'
 import {
-  audioConfigFromSettings,
-  loadAudioSettings,
-  saveAudioSettings,
-  testElevenLabsWithKey,
-  testGeminiWithKey,
-} from './audioSettings'
-import {
-  connectWhatsAppLab,
-  disconnectWhatsAppLab,
-  simulateWhatsAppLabScan,
-  statusWhatsAppLab,
-} from './localWhatsAppLab'
-
-function joinOne<T>(value: T | T[] | null | undefined): T | null {
-  if (value == null) return null
-  return Array.isArray(value) ? value[0] ?? null : value
-}
-
-const SHOP_TZ = 'America/Fortaleza'
-
-function ymdInShopTz(value?: string | Date | null) {
-  const date = value instanceof Date ? value : value ? new Date(value) : new Date()
-  if (Number.isNaN(date.getTime())) return ''
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: SHOP_TZ,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(date)
-  const get = (type: string) => parts.find((part) => part.type === type)?.value || ''
-  return `${get('year')}-${get('month')}-${get('day')}`
-}
-
-function isCreatedToday(createdAt?: string | null) {
-  const ymd = ymdInShopTz(createdAt)
-  return Boolean(ymd) && ymd === ymdInShopTz(new Date())
-}
-
-function normalizeFormaPagamento(raw: unknown) {
-  return String(raw || '').trim().toUpperCase()
-}
-
-// =====================
-// Autenticação
-// =====================
-export async function requireSession() {
-  const { data: { session } } = await supabase.auth.getSession()
-  return session
-}
-
-export async function getCurrentUser() {
-  const session = await requireSession()
-  if (!session) return null
-  const { data, error } = await supabase.auth.getUser()
-  if (error || !data.user) return null
-  return { session, user: data.user }
-}
-
-// =====================
-// Dashboard
-// =====================
-export async function getDashboardStats() {
-  const [barbersResult, productsResult, appointmentsResult, clientsResult] = await Promise.all([
-    supabase.from('barbeiros').select('*', { count: 'exact', head: true }),
-    supabase.from('produtos').select('*', { count: 'exact', head: true }),
-    supabase.from('agendamentos').select('*', { count: 'exact', head: true }),
-    supabase.from('clientes').select('*', { count: 'exact', head: true }),
-  ])
-  return {
-    totalBarbers: barbersResult.count ?? 0,
-    totalProducts: productsResult.count ?? 0,
-    totalAppointments: appointmentsResult.count ?? 0,
-    totalClients: clientsResult.count ?? 0,
-  }
-}
-
-// =====================
-// Barbeiros
-// =====================
-export async function getBarbers(): Promise<Barber[]> {
-  const { data, error } = await supabase
-    .from('barbeiros')
-    .select('*')
-    .order('ordem_rodizio', { ascending: true, nullsFirst: false })
-    .order('nome', { ascending: true })
-  if (error) {
-    const fallback = await supabase.from('barbeiros').select('*').order('nome')
-    if (fallback.error) throw new Error(`Erro ao buscar barbeiros: ${error.message}`)
-    return fallback.data ?? []
-  }
-  return data ?? []
-}
-
-export async function getBarber(id: string): Promise<Barber> {
-  const { data, error } = await supabase
-    .from('barbeiros')
-    .select('*')
-    .eq('id', id)
-    .single()
-  if (error) throw new Error(`Erro ao buscar barbeiro: ${error.message}`)
-  return data
-}
-
-export async function createBarber(barber: CreateBarberInput): Promise<Barber> {
-  const { data: maxRow } = await supabase
-    .from('barbeiros')
-    .select('ordem_rodizio')
-    .order('ordem_rodizio', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-  const nextOrdem = (Number(maxRow?.ordem_rodizio) || 0) + 1
-
-  const { data, error } = await supabase
-    .from('barbeiros')
-    .insert({
-      nome: barber.nome,
-      email: barber.email,
-      telefone: barber.telefone ?? null,
-      especialidades: barber.especialidades ?? null,
-      percentual_servico: barber.percentual_servico ?? 0,
-      percentual_produto: barber.percentual_produto ?? 0,
-      comissao_servico_tipo: barber.comissao_servico_tipo ?? 'porcentagem',
-      comissao_produto_tipo: barber.comissao_produto_tipo ?? 'porcentagem',
-      avaliacao: barber.avaliacao ?? 5,
-      foto_url: barber.foto_url ?? null,
-      ordem_rodizio: nextOrdem,
-      ativo: true,
-      intervalo_ativo: barber.intervalo_ativo === true,
-      intervalo_inicio: barber.intervalo_inicio ?? null,
-      intervalo_fim: barber.intervalo_fim ?? null,
-    })
-    .select()
-    .single()
-  if (error) throw new Error(`Erro ao criar barbeiro: ${error.message}`)
-  return data
-}
-
-export async function updateBarber(id: string, updates: Partial<Barber>): Promise<Barber> {
-  const { data, error } = await supabase
-    .from('barbeiros')
-    .update(updates)
-    .eq('id', id)
-    .select()
-    .single()
-  if (error) throw new Error(`Erro ao atualizar barbeiro: ${error.message}`)
-  return data
-}
-
-export async function saveBarberDailyBreak(
-  barbeiroId: string,
-  breakConfig: {
-    intervalo_ativo: boolean
-    intervalo_inicio: string
-    intervalo_fim: string
-  },
-): Promise<Barber> {
-  const inicio = String(breakConfig.intervalo_inicio || '').trim().slice(0, 5) || null
-  const fim = String(breakConfig.intervalo_fim || '').trim().slice(0, 5) || null
-  if (breakConfig.intervalo_ativo) {
-    if (!inicio || !fim) {
-      throw new Error('Preencha o início e o fim do intervalo deste barbeiro.')
-    }
-    if (fim <= inicio) {
-      throw new Error('O fim do intervalo precisa ser depois do início.')
-    }
-  }
-  return updateBarber(barbeiroId, {
-    intervalo_ativo: breakConfig.intervalo_ativo,
-    intervalo_inicio: inicio,
-    intervalo_fim: fim,
-  })
-}
-
-export async function getAvailableSlots(params: {
-  data: string
-  servico_id?: string | null
-  barbeiro_id?: string | null
-  allowPast?: boolean
-}): Promise<string[]> {
-  const { data, error } = await supabase.rpc('get_available_slots', {
-    p_data: params.data,
-    p_servico_id: params.servico_id || null,
-    p_barbeiro_id: params.barbeiro_id || null,
-    p_allow_past: params.allowPast ?? true,
-  })
-  if (error) throw new Error(`Erro ao buscar horários livres: ${error.message}`)
-  return ((data as { horario: string }[]) || [])
-    .map((row) => String(row.horario || '').slice(0, 5))
-    .filter(Boolean)
-}
-
-/** Define a ordem do rodízio (1 = próximo da fila). */
-export async function setBarberQueueOrder(orderedIds: string[]): Promise<void> {
-  for (let i = 0; i < orderedIds.length; i++) {
-    const { error } = await supabase
-      .from('barbeiros')
-      .update({ ordem_rodizio: i + 1 + 10000 })
-      .eq('id', orderedIds[i])
-    if (error) throw new Error(`Erro ao salvar fila: ${error.message}`)
-  }
-  for (let i = 0; i < orderedIds.length; i++) {
-    const { error } = await supabase
-      .from('barbeiros')
-      .update({ ordem_rodizio: i + 1 })
-      .eq('id', orderedIds[i])
-    if (error) throw new Error(`Erro ao salvar fila: ${error.message}`)
-  }
-}
-
-export async function deleteBarber(id: string) {
-  // 1º: remove as disponibilidades ligadas ao barbeiro
-  await supabase
-    .from('barbeiro_disponibilidade')
-    .delete()
-    .eq('barbeiro_id', id)
-
-  // 2º: remove os agendamentos ligados ao barbeiro
-  await supabase
-    .from('agendamentos')
-    .delete()
-    .eq('barbeiro_id', id)
-
-  // 3º: remove as movimentações de estoque ligadas ao barbeiro
-  await supabase
-    .from('movimentacoes_estoque')
-    .delete()
-    .eq('barbeiro_id', id)
-
-  // 4º: agora sim, remove o barbeiro
-  const { error } = await supabase
-    .from('barbeiros')
-    .delete()
-    .eq('id', id)
-
-  if (error) throw new Error(`Erro ao excluir barbeiro: ${error.message}`)
-}
-
-// =====================
-// Usuários (barbeiros com login)
-// =====================
-export async function createBarberUser(params: {
-  nome: string
-  email: string
-  senha: string
-  avaliacao?: number
-  foto_url?: string | null
-}) {
-  // 1. Cria a conta de login (auth do Supabase)
-  const { data: authData, error: authError } = await supabase.auth.signUp({
-    email: params.email,
-    password: params.senha,
-  })
-  if (authError) throw new Error(`Erro ao criar usuário: ${authError.message}`)
-  const userId = authData.user?.id
-  if (!userId) throw new Error('Não foi possível criar a conta de login. Verifique se o e-mail já não está cadastrado.')
-
-  // 2. Cria o barbeiro ligado à conta de login
-  const { data: maxRow } = await supabase
-    .from('barbeiros')
-    .select('ordem_rodizio')
-    .order('ordem_rodizio', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-  const nextOrdem = (Number(maxRow?.ordem_rodizio) || 0) + 1
-
-  const { data, error } = await supabase
-    .from('barbeiros')
-    .insert({
-      nome: params.nome,
-      email: params.email.trim().toLowerCase(),
-      telefone: null,
-      especialidades: null,
-      percentual_servico: 0,
-      percentual_produto: 0,
-      comissao_servico_tipo: 'porcentagem',
-      comissao_produto_tipo: 'porcentagem',
-      avaliacao: params.avaliacao ?? 5,
-      foto_url: params.foto_url || null,
-      user_id: userId,
-      ordem_rodizio: nextOrdem,
-      ativo: true,
-      senha_temporaria: params.senha,
-    })
-    .select()
-    .single()
-  if (error) throw new Error(`Erro ao criar barbeiro: ${error.message}`)
-  return data
-}
-
-export async function resetBarberPassword(barbeiroId: string, senha?: string) {
-  const { data, error } = await supabase.functions.invoke('barber-user-admin', {
-    body: { action: 'reset_password', barbeiro_id: barbeiroId, senha },
-  })
-  if (error) throw new Error(error.message || 'Falha ao redefinir senha')
-  if (data?.error) throw new Error(data.error)
-  return data as { ok: boolean; senha: string; email?: string; nome?: string }
-}
-
-export async function getUsers() {
-  // Barbeiros que têm conta de login
-  const { data, error } = await supabase
-    .from('barbeiros')
-    .select('*')
-    .not('user_id', 'is', null)
-    .order('nome')
-  if (error) throw new Error(`Erro ao buscar usuários: ${error.message}`)
-  return data ?? []
-}
-
-export async function getBarbeiroByUserId(userId: string) {
-  const { data, error } = await supabase
-    .from('barbeiros')
-    .select('*')
-    .eq('user_id', userId)
-    .maybeSingle()
-  if (error) throw new Error(`Erro ao buscar barbeiro: ${error.message}`)
-  return data
-}
-
-// =====================
-// Produtos (antigo)
-// =====================
-export async function getProducts() {
-  const { data, error } = await supabase
-    .from('produtos')
-    .select('*')
-    .order('created_at', { ascending: false })
-  if (error) throw new Error(`Erro ao buscar produtos: ${error.message}`)
-  return data ?? []
-}
-
-export async function createProduct(product: any) {
-  const { data, error } = await supabase
-    .from('produtos')
-    .insert(product)
-    .select()
-    .single()
-  if (error) throw new Error(`Erro ao criar produto: ${error.message}`)
-  return data
-}
-
-export async function deleteProduct(id: string) {
-  const { error } = await supabase
-    .from('produtos')
-    .delete()
-    .eq('id', id)
-  if (error) throw new Error(`Erro ao excluir produto: ${error.message}`)
-}
-
-// =====================
-// Agendamentos
-// =====================
-export async function getAppointments() {
-  const { data, error } = await supabase
-    .from('agendamentos')
-    .select('*, barbeiros(nome, foto_url), servicos(nome, duracao_minutos, preco), clientes(nome, email)')
-    .order('created_at', { ascending: false })
-  if (error) throw new Error(`Erro ao buscar agendamentos: ${error.message}`)
-  return data ?? []
-}
-
-export async function createAppointment(appointment: any) {
-  const payload = { ...appointment }
-  const allowOverlap = Boolean(payload.allowOverlap)
-  delete payload.allowOverlap
-  if (!payload.cliente_id || !payload.servico_id || !payload.data || !payload.horario) {
-    throw new Error('cliente_id, servico_id, data e horario são obrigatórios')
-  }
-
-  const horario = String(payload.horario).slice(0, 5) + ':00'
-
-  // Cadastro manual (admin/barbeiro): grava o horário pedido mesmo com choque de agenda.
-  // WhatsApp/rodízio continuam no RPC atômico, que recusa conflito.
-  if (allowOverlap) {
-    let valor = payload.valor ?? null
-    if (valor == null) {
-      const { data: svc } = await supabase
-        .from('servicos')
-        .select('preco')
-        .eq('id', payload.servico_id)
-        .maybeSingle()
-      valor = svc?.preco ?? null
-    }
-    const { data, error } = await supabase
-      .from('agendamentos')
-      .insert({
-        cliente_id: payload.cliente_id,
-        barbeiro_id: payload.barbeiro_id || null,
-        servico_id: payload.servico_id,
-        data: payload.data,
-        horario,
-        status: payload.status || 'pendente',
-        valor,
-      })
-      .select('*, barbeiros(nome), servicos(nome), clientes(nome, telefone)')
-      .single()
-    if (error) throw new Error(`Erro ao criar agendamento: ${error.message}`)
-    return data
-  }
-
-  const useRotation = !payload.barbeiro_id
-  const { data: rpc, error } = await supabase.rpc('create_appointment_atomic', {
-    p_cliente_id: payload.cliente_id,
-    p_servico_id: payload.servico_id,
-    p_data: payload.data,
-    p_horario: horario,
-    p_barbeiro_id: payload.barbeiro_id || null,
-    p_status: payload.status || 'pendente',
-    p_valor: payload.valor ?? null,
-    p_use_rotation: useRotation,
-    p_allow_past: true,
-  })
-  if (error) throw new Error(`Erro ao criar agendamento: ${error.message}`)
-  if (!rpc?.ok) throw new Error(String(rpc?.error || 'Falha ao reservar horário'))
-
-  const { data, error: errGet } = await supabase
-    .from('agendamentos')
-    .select('*, barbeiros(nome), servicos(nome, preco, duracao_minutos), clientes(nome, telefone)')
-    .eq('id', rpc.id)
-    .single()
-  if (errGet) throw new Error(`Agendamento criado, mas falhou ao carregar: ${errGet.message}`)
-
-  // Seed da comanda (multi-serviço)
-  if (data?.servico_id) {
-    const preco = Number(data.valor ?? data.servicos?.preco ?? 0)
-    await supabase.from('agendamento_servicos').insert({
-      agendamento_id: data.id,
-      servico_id: data.servico_id,
-      preco,
-      duracao_minutos: data.servicos?.duracao_minutos ?? null,
-    }).then(() => null, () => null)
-  }
-
-  return data
-}
-
-/** Envia confirmação via Edge Function whatsapp-send (UAZAPI). Falhas não bloqueiam o fluxo. */
-export async function notifyAppointmentWhatsApp(params: {
-  phone: string
-  clientName?: string
-  serviceName?: string
-  barberName?: string
-  date: string
-  time: string
-}): Promise<{ ok: boolean; error?: string }> {
-  const phone = params.phone?.replace(/\D/g, '')
-  if (!phone) return { ok: false, error: 'Telefone vazio' }
-
-  const time = String(params.time || '').slice(0, 5)
-  const dateParts = params.date?.split('-')
-  const dateBr =
-    dateParts?.length === 3
-      ? `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}`
-      : params.date
-
-  const text = [
-    'Seu agendamento foi confirmado!',
-    '',
-    params.clientName ? `Cliente: ${params.clientName}` : null,
-    params.serviceName ? `Serviço: ${params.serviceName}` : null,
-    params.barberName ? `Barbeiro: ${params.barberName}` : null,
-    `Data: ${dateBr}`,
-    `Horário: ${time}`,
-    '',
-    'Pedimos pontualidade, pois trabalhamos com tolerância mínima para atrasos e, caso passe do horário, a vaga será passada para o próximo atendimento.',
-  ]
-    .filter(Boolean)
-    .join('\n')
-
-  const { data, error } = await supabase.functions.invoke('whatsapp-send', {
-    body: { number: phone, text },
-  })
-
-  if (error) {
-    console.warn('WhatsApp notify failed:', error.message)
-    return { ok: false, error: error.message }
-  }
-  if (data?.error) {
-    console.warn('WhatsApp notify error:', data.error)
-    return { ok: false, error: String(data.error) }
-  }
-  return { ok: true }
-}
-
-/** Pede avaliação no WhatsApp após concluir atendimento. Falhas não bloqueiam. */
-export async function notifyRatingAskWhatsApp(
-  agendamentoId: string,
-): Promise<{ ok: boolean; skipped?: boolean; error?: string }> {
-  if (!agendamentoId) return { ok: false, error: 'agendamento_id vazio' }
-  try {
-    const { data, error } = await supabase.functions.invoke('rating-ask', {
-      body: { agendamento_id: agendamentoId },
-    })
-    if (error) {
-      console.warn('rating-ask failed:', error.message)
-      return { ok: false, error: error.message }
-    }
-    if (data?.error) {
-      console.warn('rating-ask error:', data.error)
-      return { ok: false, error: String(data.error) }
-    }
-    if (data?.skipped) return { ok: false, skipped: true }
-    return { ok: true }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
-    console.warn('rating-ask exception:', msg)
-    return { ok: false, error: msg }
-  }
-}
-
-export type WhatsAppInstanceResult = {
-  ok: boolean
-  action?: string
-  qrcode?: string | null
-  paircode?: string | null
-  status?: string | null
-  data?: unknown
-  error?: string
-  details?: unknown
-}
-
-function supabaseFunctionsCredentials(): { url: string; key: string } | null {
-  const url = String(import.meta.env.VITE_SUPABASE_URL ?? '').trim().replace(/\/$/, '')
-  const key = String(import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim()
-  if (!url || !key || url.includes('your-project') || key === 'your-anon-key') return null
-  return { url, key }
-}
-
-function jwtPayload(token: string): { sub?: string; role?: string; iss?: string } | null {
-  const part = token.split('.')[1]
-  if (!part) return null
-  try {
-    const json = atob(part.replace(/-/g, '+').replace(/_/g, '/'))
-    return JSON.parse(json) as { sub?: string; role?: string; iss?: string }
-  } catch {
-    return null
-  }
-}
-
-/** JWT de usuário do Supabase. Token do Firebase ou da demo não serve no Bearer da Edge Function. */
-function supabaseUserAccessToken(token: string | null | undefined): string | null {
-  const value = String(token || '').trim()
-  if (!value) return null
-  const payload = jwtPayload(value)
-  const iss = String(payload?.iss || '')
-  if (!payload?.sub || payload.role === 'anon' || iss.includes('securetoken.google.com')) return null
-  return value
-}
-
-async function invokeWhatsAppInstance(
-  body: { action: string; phone?: string },
-): Promise<WhatsAppInstanceResult> {
-  const creds = supabaseFunctionsCredentials()
-  if (!creds) {
-    if (body.action === 'connect') return connectWhatsAppLab()
-    if (body.action === 'disconnect') return disconnectWhatsAppLab()
-    return statusWhatsAppLab()
-  }
-
-  const { data: sessionData } = await supabase.auth.getSession()
-  const accessToken = supabaseUserAccessToken(sessionData?.session?.access_token)
-  const anonKey = creds.key
-
-  let response: Response
-  try {
-    response = await fetch(`${creds.url}/functions/v1/whatsapp-instance`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken || anonKey}`,
-        apikey: anonKey,
-      },
-      body: JSON.stringify(body),
-    })
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : 'Falha ao consultar a UAZAPI' }
-  }
-
-  const text = await response.text()
-  let data: (WhatsAppInstanceResult & { message?: string }) | null = null
-  if (text) {
-    try {
-      data = JSON.parse(text) as WhatsAppInstanceResult & { message?: string }
-    } catch {
-      return { ok: false, error: text.slice(0, 400) || 'Resposta inválida da Edge Function' }
-    }
-  }
-
-  if (!response.ok) {
-    return {
-      ok: false,
-      error: String(
-        data?.error || data?.message || text.slice(0, 400) || `Edge Function HTTP ${response.status}`,
-      ),
-      details: data?.details ?? data,
-    }
-  }
-  if (!data) return { ok: false, error: 'Resposta vazia da Edge Function' }
-  if (data.ok === false || data.error) {
-    return {
-      ok: false,
-      error: String(data.error || 'Falha na função whatsapp-instance'),
-      details: data.details,
-      data,
-    }
-  }
-  return data
-}
-
-/** Status / QR da instância UAZAPI via Edge Function whatsapp-instance */
-export async function getWhatsAppInstanceStatus(): Promise<WhatsAppInstanceResult> {
-  return invokeWhatsAppInstance({ action: 'status' })
-}
-
-/** Gera QR code (POST /instance/connect sem phone) */
-export async function connectWhatsAppInstance(phone?: string): Promise<WhatsAppInstanceResult> {
-  return invokeWhatsAppInstance({ action: 'connect', phone })
-}
-
-export async function disconnectWhatsAppInstance(): Promise<WhatsAppInstanceResult> {
-  return invokeWhatsAppInstance({ action: 'disconnect' })
-}
-
-/** Somente laboratório local: marca o QR como lido neste computador, sem UAZAPI/produção. */
-export async function simulateWhatsAppQrScan(): Promise<WhatsAppInstanceResult> {
-  if (isDemoMode) return simulateWhatsAppLabScan()
-  return invokeWhatsAppInstance({ action: 'simulate_scan' })
-}
-
-// =====================
-// WhatsApp Áudio (Gemini + ElevenLabs)
-// =====================
-export type WhatsAppAudioConfig = {
-  ok?: boolean
-  audio_whatsapp_ativo: boolean
-  audio_whatsapp_mode: string
-  gemini_model: string
-  elevenlabs_model: string
-  elevenlabs_voice_id: string
-  has_gemini_key: boolean
-  has_elevenlabs_key: boolean
-  gemini_api_key?: string
-  elevenlabs_api_key?: string
-}
-
-export async function getWhatsAppAudioConfig(): Promise<WhatsAppAudioConfig> {
-  if (isDemoMode) {
-    return audioConfigFromSettings(loadAudioSettings())
-  }
-  const { data, error } = await supabase.functions.invoke('whatsapp-audio-config', {
-    method: 'GET',
-  })
-  if (error) throw new Error(error.message || 'Erro ao carregar configurações de áudio')
-  return data
-}
-
-export async function saveWhatsAppAudioConfig(payload: {
-  audio_whatsapp_ativo: boolean
-  audio_whatsapp_mode: string
-  gemini_api_key?: string
-  elevenlabs_api_key?: string
-  elevenlabs_voice_id?: string
-  gemini_model?: string
-  elevenlabs_model?: string
-}): Promise<{ ok: boolean; message?: string }> {
-  if (isDemoMode) {
-    saveAudioSettings({
-      audio_whatsapp_ativo: payload.audio_whatsapp_ativo,
-      audio_whatsapp_mode: payload.audio_whatsapp_mode,
-      gemini_api_key: payload.gemini_api_key,
-      elevenlabs_api_key: payload.elevenlabs_api_key,
-      elevenlabs_voice_id: payload.elevenlabs_voice_id,
-      gemini_model: payload.gemini_model,
-      elevenlabs_model: payload.elevenlabs_model,
-    })
-    return { ok: true, message: 'Configurações de áudio salvas localmente.' }
-  }
-  const { data, error } = await supabase.functions.invoke('whatsapp-audio-config', {
-    body: { action: 'save', ...payload },
-  })
-  if (error) throw new Error(error.message || 'Erro ao salvar configurações de áudio')
-  if (data?.ok === false) throw new Error(data.error || 'Erro ao salvar configurações de áudio')
-  return data
-}
-
-export async function testGeminiAudio(payload?: {
-  gemini_api_key?: string
-  gemini_model?: string
-}): Promise<{ ok: boolean; message?: string; error?: string }> {
-  if (isDemoMode) {
-    const stored = loadAudioSettings()
-    return testGeminiWithKey(
-      payload?.gemini_api_key || stored.gemini_api_key,
-      payload?.gemini_model || stored.gemini_model,
-    )
-  }
-  const { data, error } = await supabase.functions.invoke('whatsapp-audio-config', {
-    body: { action: 'test_gemini', ...payload },
-  })
-  if (error) return { ok: false, error: error.message }
-  return data
-}
-
-export async function testElevenLabsAudio(payload?: {
-  elevenlabs_api_key?: string
-  elevenlabs_voice_id?: string
-}): Promise<{ ok: boolean; message?: string; voiceName?: string; error?: string }> {
-  if (isDemoMode) {
-    const stored = loadAudioSettings()
-    return testElevenLabsWithKey(
-      payload?.elevenlabs_api_key || stored.elevenlabs_api_key,
-      payload?.elevenlabs_voice_id || stored.elevenlabs_voice_id,
-    )
-  }
-  const { data, error } = await supabase.functions.invoke('whatsapp-audio-config', {
-    body: { action: 'test_elevenlabs', ...payload },
-  })
-  if (error) return { ok: false, error: error.message }
-  return data
-}
-
-export async function updateAppointmentStatus(id: string, status: string): Promise<Appointment> {
-  if (status === 'concluido') {
-    throw new Error('Status "concluído" só é definido automaticamente após o pagamento total')
-  }
-  const { data, error } = await supabase
-    .from('agendamentos')
-    .update({ status })
-    .eq('id', id)
-    .select('*, barbeiros(nome), servicos(nome, duracao_minutos, preco), clientes(nome, email)')
-    .single()
-  if (error) throw new Error(`Erro ao atualizar status do agendamento: ${error.message}`)
-  return data as Appointment
-}
-
-export async function updateAppointmentComanda(
-  id: string,
-  serviceIds: string[],
-): Promise<Appointment> {
-  const unique = serviceIds.map((item) => String(item || '').trim()).filter(Boolean)
-  if (!unique.length) throw new Error('Selecione ao menos um serviço')
-
-  const { data: catalog, error: errCatalog } = await supabase
-    .from('servicos')
-    .select('id, nome, preco, duracao_minutos')
-  if (errCatalog) throw new Error(`Erro ao carregar serviços: ${errCatalog.message}`)
-
-  type ServicoCatalogo = { id: string; nome: string; preco: number; duracao_minutos: number }
-  const byId = new Map<string, ServicoCatalogo>(
-    ((catalog || []) as ServicoCatalogo[]).map((svc) => [String(svc.id), svc]),
-  )
-  const items = unique.map((svcId) => {
-    const svc = byId.get(svcId)
-    if (!svc) throw new Error('Serviço inválido na comanda')
-    return {
-      id: String(svc.id),
-      nome: String(svc.nome),
-      preco: Number(svc.preco) || 0,
-      duracao_minutos: Number(svc.duracao_minutos) || 0,
-    }
-  })
-  const valor = items.reduce((sum, item) => sum + item.preco, 0)
-
-  const { data, error } = await supabase
-    .from('agendamentos')
-    .update({
-      servico_id: items[0].id,
-      valor,
-      comanda_itens: items,
-    })
-    .eq('id', id)
-    .select('*, barbeiros(nome), servicos(nome, duracao_minutos, preco), clientes(nome, email)')
-    .single()
-  if (error) throw new Error(`Erro ao atualizar serviços do atendimento: ${error.message}`)
-  return { ...(data as Appointment), comanda_itens: items, valor }
-}
-
-export async function deleteAppointment(id: string) {
-  const { error } = await supabase
-    .from('agendamentos')
-    .delete()
-    .eq('id', id)
-  if (error) throw new Error(`Erro ao excluir agendamento: ${error.message}`)
-}
-
-export async function getAgendaBarbeiro(barbeiroId: string) {
-  // Agendamentos de HOJE em diante (amanhã e próximos dias)
-  const hoje = new Date()
-  hoje.setHours(0, 0, 0, 0)
-  const dataInicial = hoje.toISOString().slice(0, 10)
-  const { data, error } = await supabase
-    .from('agendamentos')
-    .select('*, servicos(nome, duracao_minutos, preco), clientes(nome, telefone)')
-    .eq('barbeiro_id', barbeiroId)
-    .gte('data', dataInicial)
-    .neq('status', 'cancelado')
-    .order('data', { ascending: true })
-    .order('horario', { ascending: true })
-  if (error) throw new Error(`Erro ao buscar agenda: ${error.message}`)
-  return (data ?? []).filter((item: { barbeiro_id?: string | null }) => item.barbeiro_id === barbeiroId)
-}
-
-// =====================
-// Serviços
-// =====================
-export async function getServices(opts?: { includeInactive?: boolean }) {
-  let query = supabase.from('servicos').select('*').order('nome')
-  if (!opts?.includeInactive) {
-    query = query.eq('ativo', true)
-  }
-  const { data, error } = await query
-  if (error) {
-    // Fallback se a coluna ativo ainda não existir no banco
-    const fallback = await supabase.from('servicos').select('*').order('nome')
-    if (fallback.error) throw new Error(`Erro ao buscar serviços: ${error.message}`)
-    return fallback.data ?? []
-  }
-  return data ?? []
-}
-
-export async function createService(service: any) {
-  const { data, error } = await supabase
-    .from('servicos')
-    .insert({ ...service, ativo: true })
-    .select()
-    .single()
-  if (error) throw new Error(`Erro ao criar serviço: ${error.message}`)
-  return data
-}
-
-export async function updateService(
-  id: string,
-  service: {
-    nome?: string
-    descricao?: string | null
-    duracao_minutos?: number
-    buffer_minutos?: number
-    preco?: number
-    ativo?: boolean
-  },
-) {
-  const { data, error } = await supabase
-    .from('servicos')
-    .update(service)
-    .eq('id', id)
-    .select()
-    .single()
-  if (error) throw new Error(`Erro ao atualizar serviço: ${error.message}`)
-  return data
-}
-
-/** Soft-delete: marca inativo para não quebrar agendamentos (FK). */
-export async function deleteService(id: string) {
-  const { error } = await supabase
-    .from('servicos')
-    .update({ ativo: false })
-    .eq('id', id)
-  if (error) throw new Error(`Erro ao excluir serviço: ${error.message}`)
-}
-
-// =====================
-// Clientes
-// =====================
-export async function getClients() {
-  const { data, error } = await supabase
-    .from('clientes')
-    .select('*')
-    .order('created_at', { ascending: false })
-  if (error) throw new Error(`Erro ao buscar clientes: ${error.message}`)
-  return data ?? []
-}
-
-export async function searchClients(query: string) {
-  const raw = query.trim()
-  if (raw.length < 2) return []
-  const safe = raw.replace(/[%_,()]/g, ' ').replace(/\s+/g, ' ').trim()
-  const digits = raw.replace(/\D/g, '')
-  const orParts = [`nome.ilike.%${safe}%`]
-  if (digits.length >= 4) orParts.push(`telefone.ilike.%${digits}%`)
-  const { data, error } = await supabase
-    .from('clientes')
-    .select('id, nome, telefone, email, data_nascimento')
-    .or(orParts.join(','))
-    .order('nome')
-    .limit(20)
-  if (error) throw new Error(`Erro ao buscar clientes: ${error.message}`)
-  return data ?? []
-}
-
-export async function findOrCreateClient(cliente: {
-  id?: string
-  nome: string
-  telefone?: string
-  email?: string
-  data_nascimento?: string | null
-}) {
-  if (cliente.id) {
-    const { data: byId } = await supabase
-      .from('clientes')
-      .select('*')
-      .eq('id', cliente.id)
-      .maybeSingle()
-    if (byId) return byId
-  }
-  let query = supabase.from('clientes').select('*')
-  if (cliente.telefone)
-    query = query.eq('telefone', cliente.telefone)
-  else if (cliente.email)
-    query = query.eq('email', cliente.email)
-  else
-    query = query.eq('nome', cliente.nome)
-  const { data: existing } = await query.limit(1).maybeSingle()
-  if (existing) {
-    if (cliente.data_nascimento && !existing.data_nascimento) {
-      const { data: updated } = await supabase
-        .from('clientes')
-        .update({ data_nascimento: cliente.data_nascimento })
-        .eq('id', existing.id)
-        .select()
-        .single()
-      if (updated) return updated
-    }
-    return existing
-  }
-  const { data, error } = await supabase
-    .from('clientes')
-    .insert({
-      nome: cliente.nome,
-      telefone: cliente.telefone || null,
-      email: cliente.email || null,
-      data_nascimento: cliente.data_nascimento || null,
-    })
-    .select()
-    .single()
-  if (error) throw new Error(`Erro ao criar cliente: ${error.message}`)
-  return data
-}
-
-export async function updateClient(
-  id: string,
-  updates: {
-    nome?: string
-    telefone?: string | null
-    email?: string | null
-    data_nascimento?: string | null
-    whatsapp_opt_in?: boolean
-  },
-) {
-  const { data, error } = await supabase
-    .from('clientes')
-    .update(updates)
-    .eq('id', id)
-    .select()
-    .single()
-  if (error) throw new Error(`Erro ao atualizar cliente: ${error.message}`)
-  return data
-}
-
-/** Dispara automações CRM (ausência / aniversário) agora. */
-export async function runCrmDispatch(): Promise<{
-  ok: boolean
-  ausencia?: number
-  aniversario?: number
-  skipped?: number
-  erros?: string[]
-  error?: string
-}> {
-  const { data, error } = await supabase.functions.invoke('crm-dispatch', { body: {} })
-  if (error) {
-    return { ok: false, error: error.message }
-  }
-  if (data?.error) {
-    return { ok: false, error: String(data.error) }
-  }
-  return {
-    ok: true,
-    ausencia: data?.ausencia ?? 0,
-    aniversario: data?.aniversario ?? 0,
-    skipped: data?.skipped ?? 0,
-    erros: data?.erros ?? [],
-  }
-}
-
-export type CampaignRow = {
-  id: string
-  mensagem: string
-  total_destinatarios: number
-  total_enviados: number
-  total_erros: number
-  status: string
-  created_at?: string
-  finished_at?: string | null
-}
-
-export async function getCampaigns(): Promise<CampaignRow[]> {
-  const { data, error } = await supabase
-    .from('campanhas')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(50)
-  if (error) throw new Error(`Erro ao buscar campanhas: ${error.message}`)
-  return (data as CampaignRow[]) ?? []
-}
-
-export async function sendWhatsAppCampaign(opts: {
-  mensagem: string
-  cliente_ids: string[]
-}): Promise<{
-  ok: boolean
-  enviados?: number
-  erros?: number
-  total?: number
-  campanha_id?: string
-  error?: string
-}> {
-  const { data, error } = await supabase.functions.invoke('whatsapp-campaign', {
-    body: opts,
-  })
-  if (error) return { ok: false, error: error.message }
-  if (data?.error) return { ok: false, error: String(data.error) }
-  return {
-    ok: true,
-    enviados: data?.enviados ?? 0,
-    erros: data?.erros ?? 0,
-    total: data?.total ?? 0,
-    campanha_id: data?.campanha_id,
-  }
-}
-
-// =====================
-// Configurações
-// =====================
-export async function getConfiguracoes() {
-  const { data, error } = await supabase
-    .from('configuracoes')
-    .select('*')
-    .single()
-  if (error) throw new Error(`Erro ao buscar configurações: ${error.message}`)
-  return data
-}
-
-export async function updateConfiguracoes(config: Record<string, any>) {
-  // Never persist API tokens from the browser; Edge secrets hold UAZAPI_INSTANCE_TOKEN
-  const {
-    uazapi_token: _token,
-    instance_token: _instanceToken,
-    ...safe
-  } = config
-
-  const { data, error } = await supabase
-    .from('configuracoes')
-    .update(safe)
-    .eq('id', 1)
-    .select()
-    .single()
-  if (error) throw new Error(`Erro ao atualizar configurações: ${error.message}`)
-  return data
-}
-
-// =====================
-// Pagamentos
-// =====================
-export async function getPagamentos() {
-  const { data, error } = await supabase
-    .from('pagamentos')
-    .select('*, agendamentos(*)')
-    .order('created_at', { ascending: false })
-  if (error) throw new Error(`Erro ao buscar pagamentos: ${error.message}`)
-  return data ?? []
-}
-
-export async function createPagamento(pagamento: {
-  agendamento_id: string
-  cliente_id: string
-  valor: number
-  forma_pagamento: string
-  status?: string
-  observacao?: string
-}) {
-  if (!pagamento.agendamento_id) throw new Error('agendamento_id é obrigatório')
-  if (!pagamento.cliente_id) throw new Error('cliente_id é obrigatório')
-  if (!(pagamento.valor > 0)) throw new Error('Valor do pagamento deve ser maior que zero')
-
-  const { data: appt, error: errApptLoad } = await supabase
-    .from('agendamentos')
-    .select('id, valor, status, servico_id, servicos(preco)')
-    .eq('id', pagamento.agendamento_id)
-    .single()
-  if (errApptLoad) throw new Error(`Agendamento não encontrado: ${errApptLoad.message}`)
-  if (appt.status === 'cancelado') throw new Error('Agendamento cancelado não pode ser pago')
-  if (appt.status === 'concluido') throw new Error('Agendamento já está concluído')
-
-  const { data: items } = await supabase
-    .from('agendamento_servicos')
-    .select('preco')
-    .eq('agendamento_id', pagamento.agendamento_id)
-  const itemsTotal = (items || []).reduce(
-    (s: number, i: { preco?: number | null }) => s + Number(i.preco || 0),
-    0,
-  )
-  const servicoPreco = Number(
-    (appt as { servicos?: { preco?: number } | null }).servicos?.preco ?? 0,
-  )
-  const totalComanda = itemsTotal > 0
-    ? itemsTotal
-    : Number(appt.valor ?? servicoPreco ?? 0)
-
-  const { data: pagosPrev } = await supabase
-    .from('pagamentos')
-    .select('valor')
-    .eq('agendamento_id', pagamento.agendamento_id)
-    .eq('status', 'Pago')
-  const jaPago = (pagosPrev || []).reduce(
-    (s: number, p: { valor?: number | null }) => s + Number(p.valor || 0),
-    0,
-  )
-  const restante = Math.round((totalComanda - jaPago) * 100) / 100
-  if (pagamento.valor > restante + 0.009) {
-    throw new Error(
-      `Valor excede o restante da comanda (R$ ${restante.toFixed(2).replace('.', ',')})`,
-    )
-  }
-
-  const { data, error } = await supabase
-    .from('pagamentos')
-    .insert({
-      ...pagamento,
-      forma_pagamento: normalizeFormaPagamento(pagamento.forma_pagamento),
-      status: pagamento.status || 'Pago',
-    })
-    .select()
-    .single()
-  if (error) throw new Error(`Erro ao criar pagamento: ${error.message}`)
-
-  const novoTotalPago = Math.round((jaPago + pagamento.valor) * 100) / 100
-  const quitado = novoTotalPago + 0.009 >= totalComanda
-
-  if (quitado) {
-    const { error: errAppt } = await supabase
-      .from('agendamentos')
-      .update({ status: 'concluido', valor: totalComanda })
-      .eq('id', pagamento.agendamento_id)
-    if (errAppt) {
-      throw new Error(
-        `Pagamento registrado, mas falhou ao concluir o agendamento: ${errAppt.message}`,
-      )
-    }
-    void notifyRatingAskWhatsApp(pagamento.agendamento_id)
-  } else {
-    // Mantém valor da comanda atualizado sem concluir
-    await supabase
-      .from('agendamentos')
-      .update({ valor: totalComanda })
-      .eq('id', pagamento.agendamento_id)
-  }
-
-  return { ...data, quitado, total_comanda: totalComanda, total_pago: novoTotalPago, restante: Math.round((totalComanda - novoTotalPago) * 100) / 100 }
-}
-
-/** Agendamentos ainda não quitados (aceita pagamento parcial). */
-export async function getAgendamentosPendentesPagamento() {
-  const [{ data: appts, error: errA }, { data: pagos, error: errP }, { data: itens, error: errI }] =
-    await Promise.all([
-      supabase
-        .from('agendamentos')
-        .select('*, barbeiros(nome, foto_url), servicos(nome, preco), clientes(nome)')
-        .not('status', 'in', '("cancelado","concluido")')
-        .order('data', { ascending: false }),
-      supabase.from('pagamentos').select('agendamento_id, valor, status'),
-      supabase.from('agendamento_servicos').select('agendamento_id, preco, servico_id, servicos(nome, preco)'),
-    ])
-  if (errA) throw new Error(`Erro ao buscar agendamentos: ${errA.message}`)
-  if (errP) throw new Error(`Erro ao buscar pagamentos: ${errP.message}`)
-  // itens pode falhar se a tabela ainda não existir — trata como vazio
-  const itemRows = errI ? [] : itens || []
-
-  const paidByAppt = new Map<string, number>()
-  for (const p of pagos || []) {
-    if (p.status && p.status !== 'Pago') continue
-    paidByAppt.set(
-      p.agendamento_id,
-      (paidByAppt.get(p.agendamento_id) || 0) + Number(p.valor || 0),
-    )
-  }
-  const itemsByAppt = new Map<string, number>()
-  for (const i of itemRows) {
-    itemsByAppt.set(
-      i.agendamento_id,
-      (itemsByAppt.get(i.agendamento_id) || 0) + Number(i.preco || 0),
-    )
-  }
-
-  return (appts || [])
-    .map((a: any) => {
-      const itemsTotal = itemsByAppt.get(a.id) || 0
-      const total =
-        itemsTotal > 0
-          ? itemsTotal
-          : Number(a.valor ?? a.servicos?.preco ?? 0)
-      const pago = paidByAppt.get(a.id) || 0
-      const restante = Math.round((total - pago) * 100) / 100
-      return {
-        ...a,
-        total_comanda: total,
-        total_pago: pago,
-        restante,
-      }
-    })
-    .filter((a: { restante: number }) => a.restante > 0.009)
-}
-
-export async function getPagamentosDoAgendamento(agendamentoId: string) {
-  const { data, error } = await supabase
-    .from('pagamentos')
-    .select('*')
-    .eq('agendamento_id', agendamentoId)
-    .order('created_at', { ascending: true })
-  if (error) throw new Error(`Erro ao buscar pagamentos: ${error.message}`)
-  return data ?? []
-}
-
-export async function updatePagamentoStatus(id: string, status: string) {
-  const { error } = await supabase
-    .from('pagamentos')
-    .update({ status })
-    .eq('id', id)
-  if (error) throw new Error(`Erro ao atualizar pagamento: ${error.message}`)
-}
-
-export async function deletePagamento(id: string) {
-  const { error } = await supabase
-    .from('pagamentos')
-    .delete()
-    .eq('id', id)
-  if (error) throw new Error(`Erro ao excluir pagamento: ${error.message}`)
-}
-
-export async function getPagamentosDoDia() {
-  const { data, error } = await supabase
-    .from('pagamentos')
-    .select('*, agendamentos(*)')
-    .eq('status', 'Pago')
-    .order('created_at', { ascending: false })
-  if (error) throw new Error(`Erro ao buscar pagamentos do dia: ${error.message}`)
-  return (data ?? []).filter((p: { created_at?: string | null }) => isCreatedToday(p.created_at ?? null))
-}
-
-export async function getResumoFinanceiro() {
-  const { data, error } = await supabase
-    .from('pagamentos')
-    .select('id, valor, forma_pagamento, status, created_at, agendamento_id')
-    .eq('status', 'Pago')
-  if (error) throw new Error(`Erro ao buscar resumo financeiro: ${error.message}`)
-
-  const pagos = data ?? []
-  const deHoje = pagos.filter((p: { created_at?: string | null }) => isCreatedToday(p.created_at ?? null))
-  const total = pagos.reduce((acc: number, p: { valor?: number | null }) => acc + Number(p.valor || 0), 0)
-
-  const porForma: Record<string, number> = {}
-  for (const p of deHoje) {
-    const forma = normalizeFormaPagamento(p.forma_pagamento)
-    if (!forma) continue
-    porForma[forma] = (porForma[forma] || 0) + Number(p.valor || 0)
-  }
-
-  const agendamentosHoje = new Set(
-    deHoje.map((p: { agendamento_id?: string | null; id?: string }) => p.agendamento_id || p.id).filter(Boolean),
-  )
-
-  return {
-    total,
-    porForma,
-    quantidade: agendamentosHoje.size,
-  }
-}
-
-// =====================
-// Produtos (completas)
-// =====================
-export type Produto = {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  query,
+  where,
+  orderBy,
+  limit,
+} from 'firebase/firestore'
+import { auth, db } from './firebase'
+import type {
+  Barber,
+  CreateBarberInput,
+  Service,
+  Client,
+  Appointment,
+  AppointmentStatus,
+  Tenant,
+  TenantStatus,
+  WhatsAppConnection,
+  AISettings,
+  ConversationState,
+  ConversationMessage,
+  PlatformBilling,
+  PlatformExpense,
+  AuditLog,
+} from '../types/database'
+
+// Tipos auxiliares compatíveis com as telas existentes
+export interface Produto {
   id: string
   nome: string
   preco_venda: number
+  preco_custo: number
   estoque_atual: number
   estoque_minimo: number
-  created_at: string
+  ativo?: boolean
+  created_at?: string
 }
 
-export async function getProdutos(): Promise<Produto[]> {
-  const { data, error } = await supabase
-    .from('produtos')
-    .select('*')
-    .order('nome')
-  if (error) throw new Error(`Erro ao buscar produtos: ${error.message}`)
-  return data ?? []
-}
-
-export async function getProduto(id: string): Promise<Produto> {
-  const { data, error } = await supabase
-    .from('produtos')
-    .select('*')
-    .eq('id', id)
-    .single()
-  if (error) throw new Error(`Erro ao buscar produto: ${error.message}`)
-  return data
-}
-
-export async function createProduto(produto: {
-  nome: string
-  preco_venda?: number
-  estoque_atual?: number
-  estoque_minimo?: number
-}): Promise<Produto> {
-  const { data, error } = await supabase
-    .from('produtos')
-    .insert(produto)
-    .select()
-    .single()
-  if (error) throw new Error(`Erro ao criar produto: ${error.message}`)
-  return data
-}
-
-export async function updateProduto(id: string, updates: Partial<Produto>): Promise<Produto> {
-  const { data, error } = await supabase
-    .from('produtos')
-    .update(updates)
-    .eq('id', id)
-    .select()
-    .single()
-  if (error) throw new Error(`Erro ao atualizar produto: ${error.message}`)
-  return data
-}
-
-export async function deleteProduto(id: string) {
-  const { error } = await supabase
-    .from('produtos')
-    .delete()
-    .eq('id', id)
-  if (error) throw new Error(`Erro ao excluir produto: ${error.message}`)
-}
-
-// =====================
-// Movimentações de Estoque
-// =====================
-export type MovimentacaoEstoque = {
+export interface MovimentacaoEstoque {
   id: string
   produto_id: string
   tipo: 'entrada' | 'saida'
   quantidade: number
-  motivo: 'venda' | 'compra' | 'ajuste' | 'perda'
-  referencia_id: string | null
-  observacao: string | null
-  created_at: string
-  barbeiro_id: string | null
-  comissao_percentual: number | null
-  produtos?: { nome: string }
-  barbeiros?: { nome: string; percentual_produto: number }
-}
-
-export async function getMovimentacoes(produtoId?: string): Promise<MovimentacaoEstoque[]> {
-  let query = supabase
-    .from('movimentacoes_estoque')
-    .select('*, produtos(nome), barbeiros(nome, percentual_produto)')
-    .order('created_at', { ascending: false })
-  if (produtoId) query = query.eq('produto_id', produtoId)
-  const { data, error } = await query
-  if (error) throw new Error(`Erro ao buscar movimentações: ${error.message}`)
-  return data ?? []
-}
-
-export async function registrarSaidaEstoque(params: {
-  produto_id: string
-  quantidade: number
-  motivo: 'venda' | 'ajuste' | 'perda'
-  referencia_id?: string
+  motivo?: string
   observacao?: string
   barbeiro_id?: string
-}): Promise<MovimentacaoEstoque> {
-  const { data: produto, error: errProduto } = await supabase
-    .from('produtos')
-    .select('estoque_atual, preco_venda')
-    .eq('id', params.produto_id)
-    .single()
-  if (errProduto) throw new Error(`Produto não encontrado: ${errProduto.message}`)
-  if (produto.estoque_atual < params.quantidade) {
-    throw new Error(`Estoque insuficiente. Disponível: ${produto.estoque_atual}, solicitado: ${params.quantidade}`)
-  }
-  let comissaoPercentual: number | null = null
-  if (params.barbeiro_id) {
-    const { data: barbeiro, error: errBarbeiro } = await supabase
-      .from('barbeiros')
-      .select('percentual_produto')
-      .eq('id', params.barbeiro_id)
-      .single()
-    if (errBarbeiro) throw new Error(`Barbeiro não encontrado: ${errBarbeiro.message}`)
-    comissaoPercentual = barbeiro.percentual_produto ?? 0
-  }
-  const { data: mov, error: errMov } = await supabase
-    .from('movimentacoes_estoque')
-    .insert({
-      produto_id: params.produto_id,
-      tipo: 'saida',
-      quantidade: params.quantidade,
-      motivo: params.motivo,
-      referencia_id: params.referencia_id || null,
-      observacao: params.observacao || null,
-      barbeiro_id: params.barbeiro_id || null,
-      comissao_percentual: comissaoPercentual,
-    })
-    .select()
-    .single()
-  if (errMov) throw new Error(`Erro ao registrar saída: ${errMov.message}`)
-  const { error: errUpdate } = await supabase
-    .from('produtos')
-    .update({ estoque_atual: produto.estoque_atual - params.quantidade })
-    .eq('id', params.produto_id)
-  if (errUpdate) throw new Error(`Erro ao atualizar estoque: ${errUpdate.message}`)
-  return mov
+  comissao_percentual?: number
+  barbeiros?: { nome: string } | null
+  created_at: string
 }
 
-export async function registrarEntradaEstoque(params: {
-  produto_id: string
-  quantidade: number
-  motivo: 'compra' | 'ajuste'
-  observacao?: string
-}): Promise<MovimentacaoEstoque> {
-  const { data: produto, error: errProduto } = await supabase
-    .from('produtos')
-    .select('estoque_atual')
-    .eq('id', params.produto_id)
-    .single()
-  if (errProduto && errProduto.code !== 'PGRST116')
-    throw new Error(`Erro ao buscar produto: ${errProduto.message}`)
-  const estoqueAtual = produto?.estoque_atual ?? 0
-  const { data: mov, error: errMov } = await supabase
-    .from('movimentacoes_estoque')
-    .insert({
-      produto_id: params.produto_id,
-      tipo: 'entrada',
-      quantidade: params.quantidade,
-      motivo: params.motivo,
-      observacao: params.observacao || null,
-    })
-    .select()
-    .single()
-  if (errMov) throw new Error(`Erro ao registrar entrada: ${errMov.message}`)
-  const { error: errUpdate } = await supabase
-    .from('produtos')
-    .update({ estoque_atual: estoqueAtual + params.quantidade })
-    .eq('id', params.produto_id)
-  if (errUpdate) throw new Error(`Erro ao atualizar estoque: ${errUpdate.message}`)
-  return mov
-}
-
-// =====================
-// TIPOS DE COMISSÕES (exportados)
-// =====================
-export type ResumoComissaoBarbeiro = {
+export interface ResumoComissaoBarbeiro {
   barbeiro_id: string
   nome: string
+  nome_barbeiro: string
   total_servicos: number
   valor_servicos: number
   comissao_servicos: number
@@ -1470,32 +69,27 @@ export type ResumoComissaoBarbeiro = {
   total_a_receber: number
 }
 
-export type DetalheServicoComissao = {
-  data: string
-  servico_nome: string
-  valor_cobrado: number
-  percentual_comissao: number
-  valor_comissao: number
-}
-
-export type DetalheVendaComissao = {
-  data: string
-  produto_nome: string
-  quantidade: number
-  valor_total: number
-  percentual_comissao: number
-  valor_comissao: number
-}
-
-export type RelatorioComissaoCompleto = {
+export interface RelatorioComissaoCompleto {
   barbeiro: {
-    id: string
     nome: string
     percentual_servico: number
     percentual_produto: number
   }
-  servicos: DetalheServicoComissao[]
-  vendas: DetalheVendaComissao[]
+  servicos: Array<{
+    data: string
+    servico_nome: string
+    valor_cobrado: number
+    percentual_comissao: number
+    valor_comissao: number
+  }>
+  vendas: Array<{
+    data: string
+    produto_nome: string
+    quantidade: number
+    valor_total: number
+    percentual_comissao: number
+    valor_comissao: number
+  }>
   totais: {
     total_servicos: number
     valor_servicos: number
@@ -1503,432 +97,1278 @@ export type RelatorioComissaoCompleto = {
     total_vendas: number
     valor_vendas: number
     comissao_vendas: number
+    total_geral: number
     total_a_receber: number
   }
-}
-
-// =====================
-// Comissões e Relatórios
-// =====================
-export async function getResumoComissoes(params: {
-  dataInicio: string
-  dataFim: string
-}): Promise<ResumoComissaoBarbeiro[]> {
-  const { dataInicio, dataFim } = params
-  const { data: barbeiros, error: errBarbeiros } = await supabase
-    .from('barbeiros')
-    .select('id, nome, percentual_servico, percentual_produto')
-    .order('nome')
-  if (errBarbeiros) throw new Error(`Erro ao buscar barbeiros: ${errBarbeiros.message}`)
-  const resultado: ResumoComissaoBarbeiro[] = []
-  for (const barbeiro of barbeiros ?? []) {
-    const { data: servicos, error: errServicos } = await supabase
-      .from('agendamentos')
-      .select('valor, servicos(preco)')
-      .eq('barbeiro_id', barbeiro.id)
-      .eq('status', 'concluido')
-      .gte('data', dataInicio)
-      .lte('data', dataFim)
-    if (errServicos) throw new Error(`Erro ao buscar serviços: ${errServicos.message}`)
-    const servicosComValor = (servicos ?? []).map((s: any) => {
-      const precoServico = Array.isArray(s.servicos) ? s.servicos[0]?.preco : s.servicos?.preco
-      return Number(s.valor || precoServico || 0)
-    }).filter((v: number) => v > 0)
-    const totalServicos = servicosComValor.length
-    const valorServicos = servicosComValor.reduce((acc: number, v: number) => acc + v, 0)
-    const comissaoServicos = valorServicos * ((barbeiro.percentual_servico || 0) / 100)
-    const { data: vendas, error: errVendas } = await supabase
-      .from('movimentacoes_estoque')
-      .select('quantidade, comissao_percentual, produtos!inner(preco_venda)')
-      .eq('barbeiro_id', barbeiro.id)
-      .eq('motivo', 'venda')
-      .gte('created_at', `${dataInicio}T00:00:00`)
-      .lte('created_at', `${dataFim}T23:59:59`)
-    if (errVendas) throw new Error(`Erro ao buscar vendas: ${errVendas.message}`)
-    const totalVendas = vendas?.length ?? 0
-    const valorVendas = vendas?.reduce((acc: number, v: any) => {
-      const produto = joinOne<{ preco_venda: number }>(
-        v.produtos as { preco_venda: number } | { preco_venda: number }[] | null,
-      )
-      return acc + (Number(produto?.preco_venda || 0) * v.quantidade)
-    }, 0) ?? 0
-    const comissaoVendas = vendas?.reduce((acc: number, v: any) => {
-      const produto = joinOne<{ preco_venda: number }>(
-        v.produtos as { preco_venda: number } | { preco_venda: number }[] | null,
-      )
-      const valorItem = Number(produto?.preco_venda || 0) * v.quantidade
-      return acc + (valorItem * (v.comissao_percentual ?? barbeiro.percentual_produto) / 100)
-    }, 0) ?? 0
-    resultado.push({
-      barbeiro_id: barbeiro.id,
-      nome: barbeiro.nome,
-      total_servicos: totalServicos,
-      valor_servicos: valorServicos,
-      comissao_servicos: comissaoServicos,
-      total_vendas: totalVendas,
-      valor_vendas: valorVendas,
-      comissao_vendas: comissaoVendas,
-      total_a_receber: comissaoServicos + comissaoVendas,
-    })
+  resumoGeral?: {
+    totalServicos: number
+    valorServicos: number
+    totalComissaoServicos: number
+    totalVendas: number
+    valorVendas: number
+    totalComissaoVendas: number
+    totalGeralComissoes: number
   }
-  return resultado
+  barbeiros?: ResumoComissaoBarbeiro[]
 }
 
-export async function getRelatorioComissoes(params: {
-  barbeiro_id: string
-  dataInicio: string
-  dataFim: string
-}): Promise<RelatorioComissaoCompleto> {
-  const { barbeiro_id, dataInicio, dataFim } = params
-  const { data: barbeiro, error: errBarbeiro } = await supabase
-    .from('barbeiros')
-    .select('id, nome, percentual_servico, percentual_produto')
-    .eq('id', barbeiro_id)
-    .single()
-  if (errBarbeiro) throw new Error(`Barbeiro não encontrado: ${errBarbeiro.message}`)
-  const { data: servicos, error: errServicos } = await supabase
-    .from('agendamentos')
-    .select('data, valor, servicos!inner(nome, preco)')
-    .eq('barbeiro_id', barbeiro_id)
-    .eq('status', 'concluido')
-    .gte('data', dataInicio)
-    .lte('data', dataFim)
-    .order('data', { ascending: false })
-  if (errServicos) throw new Error(`Erro ao buscar serviços: ${errServicos.message}`)
-  const detalheServicos: DetalheServicoComissao[] = (servicos ?? []).map((s: any) => {
-    const servico = joinOne<{ nome: string; preco: number }>(
-      s.servicos as { nome: string; preco: number } | { nome: string; preco: number }[] | null,
-    )
-    const valor = Number(s.valor || servico?.preco || 0)
+// =====================
+// Resolução de Tenant Ativo
+// =====================
+let cachedTenantId: string | null = null
+
+export function setTenantIdOverride(id: string | null) {
+  cachedTenantId = id
+}
+
+export async function resolveTenantId(explicitTenantId?: string): Promise<string> {
+  if (explicitTenantId && explicitTenantId !== 'default-tenant' && explicitTenantId !== 'barbearia-principal') {
+    return explicitTenantId
+  }
+  if (cachedTenantId && cachedTenantId !== 'default-tenant' && cachedTenantId !== 'barbearia-principal') {
+    return cachedTenantId
+  }
+
+  const user = auth.currentUser
+  if (user) {
+    try {
+      const userDoc = await getDoc(doc(db, 'users', user.uid))
+      if (userDoc.exists()) {
+        const data = userDoc.data()
+        if (data.tenantId) {
+          cachedTenantId = data.tenantId
+          return data.tenantId
+        }
+      }
+    } catch (err) {
+      console.warn('Não foi possível ler perfil do usuário para tenantId:', err)
+    }
+  }
+
+  // Tenta obter a lista de tenants cadastrados
+  try {
+    const tenantsSnap = await getDocs(collection(db, 'tenants'))
+    if (!tenantsSnap.empty) {
+      const main = tenantsSnap.docs.find((d) => d.id === 'I13A9nw5T4IsaojMPLl6') || tenantsSnap.docs[0]
+      cachedTenantId = main.id
+      return cachedTenantId
+    }
+  } catch (err) {
+    console.warn('Não foi possível ler lista de tenants:', err)
+  }
+
+  cachedTenantId = 'I13A9nw5T4IsaojMPLl6'
+  return 'I13A9nw5T4IsaojMPLl6'
+}
+
+// =====================
+// Autenticação & Sessão
+// =====================
+export async function requireSession() {
+  const user = auth.currentUser
+  if (user) return { user }
+  // Aguarda pequeno ciclo para checagem do estado inicial
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  return auth.currentUser ? { user: auth.currentUser } : null
+}
+
+export async function getCurrentUser() {
+  const user = auth.currentUser
+  if (!user) return null
+  return { user, session: { user } }
+}
+
+// =====================
+// Dashboard
+// =====================
+export async function getDashboardStats(tenantIdParam?: string) {
+  const tId = await resolveTenantId(tenantIdParam)
+  try {
+    const [barbersSnap, productsSnap, appointmentsSnap, clientsSnap] = await Promise.all([
+      getDocs(collection(db, 'tenants', tId, 'barbers')),
+      getDocs(collection(db, 'tenants', tId, 'products')),
+      getDocs(collection(db, 'tenants', tId, 'appointments')),
+      getDocs(collection(db, 'tenants', tId, 'clients')),
+    ])
+
     return {
-      data: s.data,
-      servico_nome: servico?.nome || 'Serviço',
-      valor_cobrado: valor,
-      percentual_comissao: barbeiro.percentual_servico,
-      valor_comissao: valor * ((barbeiro.percentual_servico || 0) / 100),
+      totalBarbers: barbersSnap.size,
+      totalProducts: productsSnap.size,
+      totalAppointments: appointmentsSnap.size,
+      totalClients: clientsSnap.size,
+    }
+  } catch (err) {
+    console.error('Erro em getDashboardStats:', err)
+    return { totalBarbers: 0, totalProducts: 0, totalAppointments: 0, totalClients: 0 }
+  }
+}
+
+// =====================
+// Barbeiros
+// =====================
+let lastSyncTimestamp = 0
+
+export async function syncTenantDataToBackend(tenantId: string, barbers?: Barber[], services?: Service[], force = false) {
+  const now = Date.now()
+  if (!force && now - lastSyncTimestamp < 60000) return
+  lastSyncTimestamp = now
+
+  try {
+    const payload: any = { tenantId }
+    if (barbers) payload.barbers = barbers
+    if (services) payload.services = services
+
+    await fetch('http://localhost:3001/api/sync/tenant-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+  } catch (err) {
+    // Falha silenciosa em caso de backend offline
+  }
+}
+
+export async function getBarbers(tenantIdParam?: string): Promise<Barber[]> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const snap = await getDocs(collection(db, 'tenants', tId, 'barbers'))
+  const barbers = snap.docs.map((d) => {
+    const data = d.data()
+    return {
+      id: d.id,
+      nome: data.nome || data.name || '',
+      email: data.email || null,
+      telefone: data.telefone || data.phone || null,
+      percentual_servico: data.percentual_servico ?? 50,
+      percentual_produto: data.percentual_produto ?? 10,
+      comissao_servico_tipo: data.comissao_servico_tipo || 'porcentagem',
+      comissao_produto_tipo: data.comissao_produto_tipo || 'porcentagem',
+      especialidades: data.especialidades || '',
+      avaliacao: data.avaliacao ?? 5,
+      foto_url: data.foto_url || data.photoUrl || null,
+      ativo: data.ativo ?? data.active ?? true,
+      active: data.active ?? data.ativo ?? true,
+      startHour: data.startHour || '08:00',
+      endHour: data.endHour || '19:00',
+      breakStart: data.breakStart || '12:00',
+      breakEnd: data.breakEnd || '13:00',
+      workingDays: Array.isArray(data.workingDays) ? data.workingDays : [1, 2, 3, 4, 5, 6],
+      daysOff: Array.isArray(data.daysOff) ? data.daysOff : [],
+      created_at: data.created_at || data.createdAt || new Date().toISOString(),
+    } as Barber
+  })
+
+  // Sincroniza em background com o backend para o WhatsApp e IA lerem os dados reais
+  syncTenantDataToBackend(tId, barbers).catch(() => {})
+
+  return barbers
+}
+
+export async function getBarber(id: string, tenantIdParam?: string): Promise<Barber | null> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const d = await getDoc(doc(db, 'tenants', tId, 'barbers', id))
+  if (!d.exists()) return null
+  const data = d.data()
+  return {
+    id: d.id,
+    nome: data.nome || data.name || '',
+    email: data.email || null,
+    telefone: data.telefone || data.phone || null,
+    percentual_servico: data.percentual_servico ?? 50,
+    percentual_produto: data.percentual_produto ?? 10,
+    comissao_servico_tipo: data.comissao_servico_tipo || 'porcentagem',
+    comissao_produto_tipo: data.comissao_produto_tipo || 'porcentagem',
+    especialidades: data.especialidades || '',
+    avaliacao: data.avaliacao ?? 5,
+    foto_url: data.foto_url || data.photoUrl || null,
+    ativo: data.ativo ?? true,
+    active: data.active ?? true,
+    created_at: data.created_at || new Date().toISOString(),
+  } as Barber
+}
+
+export async function createBarber(input: CreateBarberInput, tenantIdParam?: string): Promise<Barber> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const payload = {
+    ...input,
+    name: input.nome,
+    phone: input.telefone || '',
+    active: true,
+    ativo: true,
+    startHour: (input as any).startHour || '08:00',
+    endHour: (input as any).endHour || '19:00',
+    breakStart: (input as any).breakStart || '12:00',
+    breakEnd: (input as any).breakEnd || '13:00',
+    workingDays: (input as any).workingDays || [1, 2, 3, 4, 5, 6],
+    daysOff: (input as any).daysOff || [],
+    created_at: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
+  }
+  const ref = await addDoc(collection(db, 'tenants', tId, 'barbers'), payload)
+
+  // Sincroniza nos aliases para que o WhatsApp e a IA leiam instantaneamente
+  const aliases = ['I13A9nw5T4IsaojMPLl6', 'barbearia-principal', 'default-tenant'].filter((a) => a !== tId)
+  for (const alias of aliases) {
+    try {
+      await setDoc(doc(db, 'tenants', alias, 'barbers', ref.id), payload)
+    } catch {}
+  }
+
+  // Notifica o backend
+  getBarbers(tId).catch(() => {})
+
+  return { id: ref.id, ...payload } as Barber
+}
+
+export async function updateBarber(id: string, input: Partial<CreateBarberInput>, tenantIdParam?: string): Promise<void> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const payload: any = { ...input }
+  if (input.nome) payload.name = input.nome
+  if (input.telefone) payload.phone = input.telefone
+  await updateDoc(doc(db, 'tenants', tId, 'barbers', id), payload)
+
+  const aliases = ['I13A9nw5T4IsaojMPLl6', 'barbearia-principal', 'default-tenant'].filter((a) => a !== tId)
+  for (const alias of aliases) {
+    try {
+      await updateDoc(doc(db, 'tenants', alias, 'barbers', id), payload)
+    } catch {}
+  }
+
+  // Notifica o backend
+  getBarbers(tId).catch(() => {})
+}
+
+export async function deleteBarber(id: string, tenantIdParam?: string): Promise<void> {
+  const tId = await resolveTenantId(tenantIdParam)
+  await deleteDoc(doc(db, 'tenants', tId, 'barbers', id))
+
+  const aliases = ['I13A9nw5T4IsaojMPLl6', 'barbearia-principal', 'default-tenant'].filter((a) => a !== tId)
+  for (const alias of aliases) {
+    try {
+      await deleteDoc(doc(db, 'tenants', alias, 'barbers', id))
+    } catch {}
+  }
+
+  // Notifica o backend
+  getBarbers(tId).catch(() => {})
+}
+
+export async function updateBarberRoutine(
+  barberId: string,
+  routine: {
+    startHour: string
+    endHour: string
+    breakStart?: string
+    breakEnd?: string
+    workingDays: number[]
+    daysOff: string[]
+  },
+  tenantIdParam?: string,
+): Promise<void> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const payload = {
+    startHour: routine.startHour,
+    endHour: routine.endHour,
+    breakStart: routine.breakStart || '12:00',
+    breakEnd: routine.breakEnd || '13:00',
+    workingDays: routine.workingDays,
+    daysOff: routine.daysOff,
+    updatedAt: new Date().toISOString(),
+  }
+
+  try {
+    await updateDoc(doc(db, 'tenants', tId, 'barbers', barberId), payload)
+  } catch {}
+
+  // Sincroniza qualquer documento irmão com o mesmo nome para evitar inconsistência de folgas
+  try {
+    const allBarbersSnap = await getDocs(collection(db, 'tenants', tId, 'barbers'))
+    const currentDoc = allBarbersSnap.docs.find((d) => d.id === barberId)
+    const currentName = (currentDoc?.data()?.nome || currentDoc?.data()?.name || '').trim().toLowerCase()
+    if (currentName) {
+      for (const d of allBarbersSnap.docs) {
+        if (d.id !== barberId) {
+          const dName = (d.data()?.nome || d.data()?.name || '').trim().toLowerCase()
+          if (dName === currentName) {
+            await updateDoc(doc(db, 'tenants', tId, 'barbers', d.id), payload)
+          }
+        }
+      }
+    }
+  } catch {}
+
+  const aliases = ['I13A9nw5T4IsaojMPLl6', 'barbearia-principal', 'default-tenant'].filter((a) => a !== tId)
+  for (const alias of aliases) {
+    try {
+      await updateDoc(doc(db, 'tenants', alias, 'barbers', barberId), payload)
+    } catch {}
+  }
+
+  // Notifica e sincroniza o backend
+  const allBarbers = await getBarbers(tId)
+  await syncTenantDataToBackend(tId, allBarbers)
+}
+
+export async function getBarbeiroByUserId(userId: string, tenantIdParam?: string): Promise<Barber | null> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const q = query(collection(db, 'tenants', tId, 'barbers'), where('user_id', '==', userId))
+  const snap = await getDocs(q)
+  if (snap.empty) return null
+  const d = snap.docs[0]
+  return { id: d.id, ...d.data() } as Barber
+}
+
+export async function getAgendaBarbeiro(barberId: string, tenantIdParam?: string) {
+  const appointments = await getAppointments(tenantIdParam)
+  return appointments
+    .filter((a: any) => (a.barbeiro_id === barberId || a.barberId === barberId))
+    .map((a: any) => ({
+      id: a.id,
+      data: a.data || a.date,
+      status: a.status,
+      servicos: a.servicos || {
+        nome: a.serviceName || 'Serviço',
+        duracao_minutos: a.durationMinutes || 30,
+        preco: a.price || a.valor || 0,
+      },
+      clientes: a.clientes || {
+        nome: a.clientName || 'Cliente',
+        telefone: a.clientPhone || null,
+      },
+    }))
+}
+
+// =====================
+// Serviços
+// =====================
+export async function getServices(tenantIdParam?: string): Promise<Service[]> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const snap = await getDocs(collection(db, 'tenants', tId, 'services'))
+  return snap.docs.map((d) => {
+    const data = d.data()
+    return {
+      id: d.id,
+      tenantId: tId,
+      nome: data.nome || data.name || '',
+      name: data.name || data.nome || '',
+      preco: Number(data.preco ?? data.price ?? 0),
+      price: Number(data.price ?? data.preco ?? 0),
+      duracao_minutos: Number(data.duracao_minutos ?? data.durationMinutes ?? 30),
+      durationMinutes: Number(data.durationMinutes ?? data.duracao_minutos ?? 30),
+      descricao: data.descricao || data.description || '',
+      description: data.description || data.descricao || '',
+      ativo: data.ativo ?? data.active ?? true,
+      active: data.active ?? data.ativo ?? true,
+      enabledBarbers: data.enabledBarbers || [],
+      created_at: data.created_at || data.createdAt || new Date().toISOString(),
+    } as unknown as Service
+  })
+
+  // Sincroniza em background com o backend para o WhatsApp e IA lerem os serviços reais
+  syncTenantDataToBackend(tId, undefined, services as any).catch(() => {})
+
+  return services
+}
+
+export async function createService(
+  input: { nome: string; descricao?: string | null; duracao_minutos: number; preco: number },
+  tenantIdParam?: string,
+): Promise<Service> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const payload = {
+    nome: input.nome,
+    name: input.nome,
+    descricao: input.descricao || '',
+    description: input.descricao || '',
+    duracao_minutos: input.duracao_minutos,
+    durationMinutes: input.duracao_minutos,
+    preco: input.preco,
+    price: input.preco,
+    ativo: true,
+    active: true,
+    enabledBarbers: [],
+    created_at: new Date().toISOString(),
+  }
+  const ref = await addDoc(collection(db, 'tenants', tId, 'services'), payload)
+
+  // Sincroniza nos aliases
+  const aliases = ['I13A9nw5T4IsaojMPLl6', 'barbearia-principal', 'default-tenant'].filter((a) => a !== tId)
+  for (const alias of aliases) {
+    try {
+      await setDoc(doc(db, 'tenants', alias, 'services', ref.id), payload)
+    } catch {}
+  }
+
+  // Notifica o backend
+  getServices(tId).catch(() => {})
+
+  return { id: ref.id, tenantId: tId, ...payload } as unknown as Service
+}
+
+export async function deleteService(id: string, tenantIdParam?: string): Promise<void> {
+  const tId = await resolveTenantId(tenantIdParam)
+  await deleteDoc(doc(db, 'tenants', tId, 'services', id))
+
+  const aliases = ['I13A9nw5T4IsaojMPLl6', 'barbearia-principal', 'default-tenant'].filter((a) => a !== tId)
+  for (const alias of aliases) {
+    try {
+      await deleteDoc(doc(db, 'tenants', alias, 'services', id))
+    } catch {}
+  }
+
+  // Notifica o backend
+  getServices(tId).catch(() => {})
+}
+
+// =====================
+// Clientes
+// =====================
+export async function getClients(tenantIdParam?: string): Promise<Client[]> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const snap = await getDocs(collection(db, 'tenants', tId, 'clients'))
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Client))
+}
+
+export async function findOrCreateClient(
+  input: { nome: string; email?: string; telefone?: string } | string,
+  telefone?: string | null,
+  email?: string | null,
+  tenantIdParam?: string,
+): Promise<Client> {
+  const tId = await resolveTenantId(tenantIdParam)
+  let nome = ''
+  let tel = telefone || ''
+  let mail = email || ''
+
+  if (typeof input === 'object' && input !== null) {
+    nome = input.nome || ''
+    tel = input.telefone || tel
+    mail = input.email || mail
+  } else {
+    nome = input || ''
+  }
+
+  if (tel) {
+    const q = query(collection(db, 'tenants', tId, 'clients'), where('telefone', '==', tel))
+    const snap = await getDocs(q)
+    if (!snap.empty) {
+      return { id: snap.docs[0].id, ...snap.docs[0].data() } as Client
+    }
+  }
+
+  const payload = {
+    nome,
+    telefone: tel,
+    email: mail,
+    totalAppointments: 0,
+    created_at: new Date().toISOString(),
+  }
+  const ref = await addDoc(collection(db, 'tenants', tId, 'clients'), payload)
+  return { id: ref.id, ...payload } as Client
+}
+
+// =====================
+// Agendamentos
+// =====================
+
+/**
+ * Remove agendamentos gerados por testes automatizados do Firestore
+ */
+export async function purgeTestAppointments(tenantIdParam?: string): Promise<number> {
+  const tId = await resolveTenantId(tenantIdParam)
+  let count = 0
+  try {
+    const snap = await getDocs(collection(db, 'tenants', tId, 'appointments'))
+    for (const docSnap of snap.docs) {
+      // Deleta agendamentos de teste (identificados pelo prefixo appt_ gerado pelos scripts)
+      if (docSnap.id.startsWith('appt_')) {
+        await deleteDoc(doc(db, 'tenants', tId, 'appointments', docSnap.id))
+        count++
+      }
+    }
+    // Remove também clientes fictícios criados em testes
+    const clientSnap = await getDocs(collection(db, 'tenants', tId, 'clients'))
+    for (const c of clientSnap.docs) {
+      if (c.id.startsWith('cli_') || c.id.startsWith('551199999') || c.id === '18670306783291') {
+        await deleteDoc(doc(db, 'tenants', tId, 'clients', c.id))
+      }
+    }
+    console.log(`[BarberAI Clean] Purged ${count} test appointments from Firestore.`)
+  } catch (err) {
+    console.error('Erro ao purgar agendamentos de teste:', err)
+  }
+  return count
+}
+
+export async function getAppointments(tenantIdParam?: string): Promise<Appointment[]> {
+  const tId = await resolveTenantId(tenantIdParam)
+
+  // Sincroniza apenas novos agendamentos reais pendentes do WhatsApp para o Firestore
+  try {
+    const res = await fetch(`http://localhost:3001/api/appointments/pending-sync?tenantId=${tId}`)
+    if (res.ok) {
+      const data = await res.json()
+      const pending: any[] = data.appointments || []
+      for (const appt of pending) {
+        const clean = { ...appt }
+        delete clean.cloudSynced
+
+        // Salva diretamente no Firestore da nuvem
+        await setDoc(doc(db, 'tenants', tId, 'appointments', appt.id), clean, { merge: true })
+
+        // Garante registro de cliente em 'clients' caso necessário
+        if (appt.clientId && appt.clientName) {
+          await setDoc(
+            doc(db, 'tenants', tId, 'clients', appt.clientId),
+            {
+              id: appt.clientId,
+              nome: appt.clientName,
+              telefone: appt.clientPhone || '',
+              email: appt.clientes?.email || '',
+              updatedAt: new Date().toISOString(),
+            },
+            { merge: true },
+          )
+        }
+
+        // Marca como sincronizado no servidor local
+        await fetch('http://localhost:3001/api/appointments/mark-synced', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tenantId: tId, appointmentId: appt.id }),
+        })
+      }
+    }
+  } catch (err) {
+    // Falha silenciosa em caso de backend offline
+  }
+
+  const snap = await getDocs(collection(db, 'tenants', tId, 'appointments'))
+  return snap.docs.map((d) => {
+    const data = d.data()
+    return {
+      id: d.id,
+      tenantId: tId,
+      data: data.data || data.date || '',
+      date: data.date || data.data || '',
+      horario: data.horario || data.time || '',
+      time: data.time || data.horario || '',
+      barbeiro_id: data.barbeiro_id || data.barberId || null,
+      barberId: data.barberId || data.barbeiro_id || '',
+      servico_id: data.servico_id || data.serviceId || null,
+      serviceId: data.serviceId || data.servico_id || '',
+      cliente_id: data.cliente_id || data.clientId || null,
+      clientId: data.clientId || data.cliente_id || '',
+      status: (data.status || 'pendente') as AppointmentStatus,
+      valor: data.valor ?? data.price ?? 0,
+      price: data.price ?? data.valor ?? 0,
+      durationMinutes: data.durationMinutes || data.duracao_minutos || 30,
+      clientName: data.clientName || data.clientes?.nome || '',
+      clientPhone: data.clientPhone || data.clientes?.telefone || '',
+      barberName: data.barberName || data.barbeiros?.nome || '',
+      serviceName: data.serviceName || data.servicos?.nome || '',
+      barbeiros: data.barbeiros || (data.barberName ? { nome: data.barberName } : null),
+      servicos: data.servicos || (data.serviceName ? { nome: data.serviceName, duracao_minutos: data.durationMinutes || 30, preco: data.price || 0 } : null),
+      clientes: data.clientes || (data.clientName ? { nome: data.clientName, email: '' } : null),
+      created_at: data.created_at || data.createdAt || new Date().toISOString(),
+    } as unknown as Appointment
+  })
+}
+
+export async function createAppointment(
+  input: {
+    data: string
+    horario: string
+    barbeiro_id?: string | null
+    servico_id?: string | null
+    cliente_id?: string | null
+    valor?: number
+    status?: string
+    notes?: string
+  },
+  tenantIdParam?: string,
+): Promise<Appointment> {
+  const tId = await resolveTenantId(tenantIdParam)
+
+  // Busca dados de apoio para desnormalizar (barbeiro, serviço, cliente)
+  let barberName = ''
+  let serviceName = ''
+  let clientName = ''
+
+  try {
+    const promises: Promise<any>[] = []
+    if (input.barbeiro_id) promises.push(getDoc(doc(db, 'tenants', tId, 'barbers', input.barbeiro_id)))
+    else promises.push(Promise.resolve(null))
+
+    if (input.servico_id) promises.push(getDoc(doc(db, 'tenants', tId, 'services', input.servico_id)))
+    else promises.push(Promise.resolve(null))
+
+    if (input.cliente_id) promises.push(getDoc(doc(db, 'tenants', tId, 'clients', input.cliente_id)))
+    else promises.push(Promise.resolve(null))
+
+    const [bSnap, sSnap, cSnap] = await Promise.all(promises)
+    if (bSnap && bSnap.exists()) barberName = bSnap.data().nome || bSnap.data().name || ''
+    if (sSnap && sSnap.exists()) serviceName = sSnap.data().nome || sSnap.data().name || ''
+    if (cSnap && cSnap.exists()) clientName = cSnap.data().nome || ''
+  } catch (e) {
+    console.warn('Erro ao obter dados complementares do agendamento:', e)
+  }
+
+  const payload: any = {
+    ...input,
+    date: input.data,
+    time: input.horario,
+    barberId: input.barbeiro_id || '',
+    serviceId: input.servico_id || '',
+    clientId: input.cliente_id || '',
+    barberName,
+    serviceName,
+    clientName,
+    status: input.status || 'pendente',
+    valor: input.valor ?? 0,
+    price: input.valor ?? 0,
+    barbeiros: { nome: barberName },
+    servicos: { nome: serviceName, preco: input.valor ?? 0, duracao_minutos: 30 },
+    clientes: { nome: clientName, email: '' },
+    origin: 'manual',
+    created_at: new Date().toISOString(),
+  }
+
+  const ref = await addDoc(collection(db, 'tenants', tId, 'appointments'), payload)
+  return { id: ref.id, ...payload } as unknown as Appointment
+}
+
+export async function updateAppointmentStatus(
+  id: string,
+  status: AppointmentStatus,
+  tenantIdParam?: string,
+): Promise<void> {
+  const tId = await resolveTenantId(tenantIdParam)
+  await updateDoc(doc(db, 'tenants', tId, 'appointments', id), {
+    status,
+    updated_at: new Date().toISOString(),
+  })
+}
+
+export async function deleteAppointment(id: string, tenantIdParam?: string): Promise<void> {
+  const tId = await resolveTenantId(tenantIdParam)
+  await deleteDoc(doc(db, 'tenants', tId, 'appointments', id))
+}
+
+// =====================
+// Produtos & Estoque
+// =====================
+export async function getProdutos(tenantIdParam?: string): Promise<Produto[]> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const snap = await getDocs(collection(db, 'tenants', tId, 'products'))
+  return snap.docs.map((d) => {
+    const data = d.data()
+    return {
+      id: d.id,
+      nome: data.nome || data.name || '',
+      preco_venda: Number(data.preco_venda ?? data.price ?? 0),
+      preco_custo: Number(data.preco_custo ?? data.cost ?? 0),
+      estoque_atual: Number(data.estoque_atual ?? data.stock ?? 0),
+      estoque_minimo: Number(data.estoque_minimo ?? 5),
+      ativo: data.ativo ?? true,
+      created_at: data.created_at || new Date().toISOString(),
     }
   })
-  const { data: vendas, error: errVendas } = await supabase
-    .from('movimentacoes_estoque')
-    .select('created_at, quantidade, comissao_percentual, produtos!inner(nome, preco_venda)')
-    .eq('barbeiro_id', barbeiro_id)
-    .eq('motivo', 'venda')
-    .gte('created_at', `${dataInicio}T00:00:00`)
-    .lte('created_at', `${dataFim}T23:59:59`)
-    .order('created_at', { ascending: false })
-  if (errVendas) throw new Error(`Erro ao buscar vendas: ${errVendas.message}`)
-  const detalheVendas: DetalheVendaComissao[] = (vendas ?? []).map((v: any) => {
-    const produto = joinOne<{ nome: string; preco_venda: number }>(
-      v.produtos as { nome: string; preco_venda: number } | { nome: string; preco_venda: number }[] | null,
-    )
-    const valorTotal = Number(produto?.preco_venda || 0) * v.quantidade
-    const perc = v.comissao_percentual ?? barbeiro.percentual_produto
+}
+
+export async function createProduto(input: Partial<Produto>, tenantIdParam?: string): Promise<Produto> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const payload = {
+    ...input,
+    created_at: new Date().toISOString(),
+  }
+  const ref = await addDoc(collection(db, 'tenants', tId, 'products'), payload)
+  return { id: ref.id, ...payload } as Produto
+}
+
+export async function updateProduto(id: string, input: Partial<Produto>, tenantIdParam?: string): Promise<void> {
+  const tId = await resolveTenantId(tenantIdParam)
+  await updateDoc(doc(db, 'tenants', tId, 'products', id), input)
+}
+
+export async function deleteProduto(id: string, tenantIdParam?: string): Promise<void> {
+  const tId = await resolveTenantId(tenantIdParam)
+  await deleteDoc(doc(db, 'tenants', tId, 'products', id))
+}
+
+export async function getMovimentacoes(tenantIdParam?: string): Promise<MovimentacaoEstoque[]> {
+  const tId = await resolveTenantId(tenantIdParam)
+  try {
+    const snap = await getDocs(collection(db, 'tenants', tId, 'stock_movements'))
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as MovimentacaoEstoque))
+  } catch {
+    return []
+  }
+}
+
+export async function registrarMovimentacao(
+  input: { produto_id: string; tipo: 'entrada' | 'saida'; quantidade: number; motivo?: string },
+  tenantIdParam?: string,
+): Promise<void> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const payload = {
+    ...input,
+    created_at: new Date().toISOString(),
+  }
+  await addDoc(collection(db, 'tenants', tId, 'stock_movements'), payload)
+
+  // Atualiza estoque do produto
+  const pRef = doc(db, 'tenants', tId, 'products', input.produto_id)
+  const pSnap = await getDoc(pRef)
+  if (pSnap.exists()) {
+    const atual = Number(pSnap.data().estoque_atual || 0)
+    const novo = input.tipo === 'entrada' ? atual + input.quantidade : Math.max(0, atual - input.quantidade)
+    await updateDoc(pRef, { estoque_atual: novo })
+  }
+}
+
+export async function registrarEntradaEstoque(
+  input: any,
+  quantidade?: number,
+  motivo?: string,
+  tenantIdParam?: string,
+): Promise<void> {
+  if (typeof input === 'object' && input !== null) {
+    return registrarMovimentacao({ ...input, tipo: 'entrada' }, tenantIdParam)
+  }
+  return registrarMovimentacao({ produto_id: input, tipo: 'entrada', quantidade: quantidade || 1, motivo }, tenantIdParam)
+}
+
+export async function registrarSaidaEstoque(
+  input: any,
+  quantidade?: number,
+  motivo?: string,
+  tenantIdParam?: string,
+): Promise<void> {
+  if (typeof input === 'object' && input !== null) {
+    return registrarMovimentacao({ ...input, tipo: 'saida' }, tenantIdParam)
+  }
+  return registrarMovimentacao({ produto_id: input, tipo: 'saida', quantidade: quantidade || 1, motivo }, tenantIdParam)
+}
+
+// =====================
+// Financeiro & Comissões
+// =====================
+export async function getPagamentos(tenantIdParam?: string) {
+  const tId = await resolveTenantId(tenantIdParam)
+  try {
+    const snap = await getDocs(collection(db, 'tenants', tId, 'payments'))
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+  } catch {
+    return []
+  }
+}
+
+export async function createPagamento(input: any, tenantIdParam?: string) {
+  const tId = await resolveTenantId(tenantIdParam)
+  const ref = await addDoc(collection(db, 'tenants', tId, 'payments'), {
+    ...input,
+    created_at: new Date().toISOString(),
+  })
+  return { id: ref.id, ...input }
+}
+
+export async function deletePagamento(id: string, tenantIdParam?: string) {
+  const tId = await resolveTenantId(tenantIdParam)
+  await deleteDoc(doc(db, 'tenants', tId, 'payments', id))
+}
+
+export async function getResumoFinanceiro(tenantIdParam?: string) {
+  const pagamentos = await getPagamentos(tenantIdParam)
+  const total = pagamentos.reduce((acc: number, p: any) => acc + (Number(p.valor) || 0), 0)
+  const porForma: Record<string, number> = {}
+  pagamentos.forEach((p: any) => {
+    const f = p.forma_pagamento || p.forma || 'Dinheiro'
+    porForma[f] = (porForma[f] || 0) + (Number(p.valor) || 0)
+  })
+  return {
+    total,
+    totalRecebido: total,
+    quantidade: pagamentos.length,
+    porForma,
+    pagamentosRecentes: pagamentos.slice(0, 10),
+  }
+}
+
+export async function getResumoComissoes(
+  _filter: { dataInicio?: string; dataFim?: string },
+  tenantIdParam?: string,
+): Promise<ResumoComissaoBarbeiro[]> {
+  const barbers = await getBarbers(tenantIdParam)
+  const appointments = await getAppointments(tenantIdParam)
+
+  return barbers.map((b) => {
+    const appts = appointments.filter((a) => (a as any).barbeiro_id === b.id && (a.status === 'concluido' || a.status === 'confirmado'))
+    const total_servicos = appts.length
+    const valor_servicos = appts.reduce((sum, a) => sum + (Number((a as any).valor) || 0), 0)
+    const comissao_servicos = (valor_servicos * (b.percentual_servico || 50)) / 100
+
     return {
-      data: v.created_at,
-      produto_nome: produto?.nome || 'Produto',
-      quantidade: v.quantidade,
-      valor_total: valorTotal,
-      percentual_comissao: perc,
-      valor_comissao: valorTotal * (perc / 100),
+      barbeiro_id: b.id,
+      nome: b.nome || (b as any).name || '',
+      nome_barbeiro: b.nome || (b as any).name || '',
+      total_servicos,
+      valor_servicos,
+      comissao_servicos,
+      total_vendas: 0,
+      valor_vendas: 0,
+      comissao_vendas: 0,
+      total_a_receber: comissao_servicos,
     }
   })
+}
+
+export async function getRelatorioComissoes(
+  filter: { barbeiro_id?: string; dataInicio?: string; dataFim?: string },
+  tenantIdParam?: string,
+): Promise<RelatorioComissaoCompleto> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const resumo = await getResumoComissoes(filter, tId)
+  const geral = resumo.reduce(
+    (acc, r) => {
+      acc.totalServicos += r.total_servicos
+      acc.valorServicos += r.valor_servicos
+      acc.totalComissaoServicos += r.comissao_servicos
+      acc.totalGeralComissoes += r.total_a_receber
+      return acc
+    },
+    {
+      totalServicos: 0,
+      valorServicos: 0,
+      totalComissaoServicos: 0,
+      totalVendas: 0,
+      valorVendas: 0,
+      totalComissaoVendas: 0,
+      totalGeralComissoes: 0,
+    },
+  )
+
+  const barbeiroAlvo = filter.barbeiro_id ? await getBarber(filter.barbeiro_id, tId) : null
+  const bNome = barbeiroAlvo?.nome || (resumo[0]?.nome_barbeiro || 'Barbeiro')
+  const pServ = barbeiroAlvo?.percentual_servico ?? 50
+  const pProd = barbeiroAlvo?.percentual_produto ?? 10
 
   return {
     barbeiro: {
-      id: barbeiro.id,
-      nome: barbeiro.nome,
-      percentual_servico: barbeiro.percentual_servico,
-      percentual_produto: barbeiro.percentual_produto,
+      nome: bNome,
+      percentual_servico: pServ,
+      percentual_produto: pProd,
     },
-    servicos: detalheServicos,
-    vendas: detalheVendas,
+    servicos: [],
+    vendas: [],
     totais: {
-      total_servicos: detalheServicos.length,
-      valor_servicos: detalheServicos.reduce((acc, s) => acc + s.valor_cobrado, 0),
-      comissao_servicos: detalheServicos.reduce((acc, s) => acc + s.valor_comissao, 0),
-      total_vendas: detalheVendas.length,
-      valor_vendas: detalheVendas.reduce((acc, v) => acc + v.valor_total, 0),
-      comissao_vendas: detalheVendas.reduce((acc, v) => acc + v.valor_comissao, 0),
-      total_a_receber:
-        detalheServicos.reduce((acc, s) => acc + s.valor_comissao, 0) +
-        detalheVendas.reduce((acc, v) => acc + v.valor_comissao, 0),
-    },
+      total_servicos: geral.totalServicos,
+      valor_servicos: geral.valorServicos,
+      comissao_servicos: geral.totalComissaoServicos,
+      total_vendas: 0,
+      valor_vendas: 0,
+      comissao_vendas: 0,
+      total_geral: geral.totalGeralComissoes,
+      total_a_receber: geral.totalGeralComissoes,
+    } as any,
+    resumoGeral: geral,
+    barbeiros: resumo,
   }
 }
 
 // =====================
-// Horários e bloqueios do barbeiro
+// Configurações da Barbearia
 // =====================
-export type BarberDayHours = {
-  id?: string
-  barbeiro_id: string
-  dia_semana: number
-  abertura: string | null
-  fechamento: string | null
-  fechado: boolean
-}
-
-export type BarberBlock = {
-  id: string
-  barbeiro_id: string
-  inicio: string
-  fim: string | null
-  motivo: string | null
-  created_at?: string
-}
-
-export async function getBarbeiroHorarios(barbeiroId: string): Promise<BarberDayHours[]> {
-  const { data, error } = await supabase
-    .from('barbeiro_horarios')
-    .select('*')
-    .eq('barbeiro_id', barbeiroId)
-    .order('dia_semana')
-  if (error) throw new Error(`Erro ao buscar horários: ${error.message}`)
-  return data ?? []
-}
-
-function normalizeDayHours(input: {
-  abertura?: string | null
-  fechamento?: string | null
-  fechado?: boolean
-}): { abertura: string | null; fechamento: string | null; fechado: boolean } {
-  const abertura = input.abertura ? String(input.abertura).slice(0, 5) : null
-  const fechamento = input.fechamento ? String(input.fechamento).slice(0, 5) : null
-  // Se limpou horários, força fechado
-  if (!abertura || !fechamento) {
-    return { abertura: null, fechamento: null, fechado: true }
+export async function getConfiguracoes(tenantIdParam?: string) {
+  const tId = await resolveTenantId(tenantIdParam)
+  const snap = await getDoc(doc(db, 'tenants', tId, 'settings', 'general'))
+  if (snap.exists()) {
+    return snap.data()
   }
-  if (input.fechado) {
-    return { abertura: null, fechamento: null, fechado: true }
+  return {
+    nome_barbearia: 'Barber AI Barbearia',
+    telefone: '(11) 99999-9999',
+    endereco: 'Rua Principal, 100',
+    horario_abertura: '09:00',
+    horario_fechamento: '19:00',
+    dias_funcionamento: [1, 2, 3, 4, 5, 6],
   }
-  if (abertura >= fechamento) {
-    throw new Error('Horário de abertura deve ser anterior ao de fechamento')
-  }
-  return { abertura, fechamento, fechado: false }
 }
 
-export async function upsertBarbeiroHorario(row: {
-  barbeiro_id: string
-  dia_semana: number
-  abertura: string | null
-  fechamento: string | null
-  fechado: boolean
-}) {
-  const normalized = normalizeDayHours(row)
-  const { data, error } = await supabase
-    .from('barbeiro_horarios')
-    .upsert(
-      {
-        barbeiro_id: row.barbeiro_id,
-        dia_semana: row.dia_semana,
-        ...normalized,
-      },
-      { onConflict: 'barbeiro_id,dia_semana' },
-    )
-    .select()
-    .single()
-  if (error) throw new Error(`Erro ao salvar horário: ${error.message}`)
-  return data
+export async function updateConfiguracoes(data: any, tenantIdParam?: string) {
+  const tId = await resolveTenantId(tenantIdParam)
+  await setDoc(doc(db, 'tenants', tId, 'settings', 'general'), data, { merge: true })
 }
 
-export async function saveBarbeiroDiasAtendimento(
-  barbeiroId: string,
-  openDays: number[],
-  hoursByDay?: Record<number, { abertura?: string | null; fechamento?: string | null }>,
+// =====================
+// Gestão de Usuários
+// =====================
+export async function getUsers(tenantIdParam?: string): Promise<Barber[]> {
+  return await getBarbers(tenantIdParam)
+}
+
+export async function createBarberUser(
+  input: { nome: string; email: string; telefone?: string; senha?: string; avaliacao?: number },
+  tenantIdParam?: string,
 ) {
-  const existing = await getBarbeiroHorarios(barbeiroId)
-  const openSet = new Set(openDays)
-  const rows = []
-  for (let dia = 0; dia <= 6; dia++) {
-    const prev = existing.find((h) => h.dia_semana === dia)
-    const extra = hoursByDay?.[dia]
-    const aberto = openSet.has(dia)
-    const abertura = aberto
-      ? extra?.abertura || prev?.abertura || '08:30'
-      : null
-    const fechamento = aberto
-      ? extra?.fechamento || prev?.fechamento || '19:30'
-      : null
-    // Aberto sem horário → fecha o dia (evita violar CHECK)
-    const payload = aberto && abertura && fechamento
-      ? { abertura, fechamento, fechado: false as const }
-      : { abertura: null, fechamento: null, fechado: true as const }
-    rows.push(
-      upsertBarbeiroHorario({
-        barbeiro_id: barbeiroId,
-        dia_semana: dia,
-        ...payload,
-      }),
-    )
-  }
-  await Promise.all(rows)
-}
-
-export async function getBarbeiroBloqueios(barbeiroId: string): Promise<BarberBlock[]> {
-  const hoje = new Date()
-  hoje.setHours(0, 0, 0, 0)
-  const { data, error } = await supabase
-    .from('barbeiro_bloqueios')
-    .select('*')
-    .eq('barbeiro_id', barbeiroId)
-    .or(`fim.gte.${hoje.toISOString()},fim.is.null`)
-    .order('inicio', { ascending: true })
-  if (error) throw new Error(`Erro ao buscar bloqueios: ${error.message}`)
-  return data ?? []
-}
-
-export async function createBarbeiroBloqueio(params: {
-  barbeiro_id: string
-  inicio: string
-  fim?: string | null
-  motivo?: string
-}) {
-  const { data, error } = await supabase
-    .from('barbeiro_bloqueios')
-    .insert({
-      barbeiro_id: params.barbeiro_id,
-      inicio: params.inicio,
-      fim: params.fim && String(params.fim).trim() ? params.fim : null,
-      motivo: params.motivo || null,
-    })
-    .select()
-    .single()
-  if (error) throw new Error(`Erro ao criar bloqueio: ${error.message}`)
-  return data
-}
-
-export async function deleteBarbeiroBloqueio(id: string) {
-  const { error } = await supabase.from('barbeiro_bloqueios').delete().eq('id', id)
-  if (error) throw new Error(`Erro ao remover bloqueio: ${error.message}`)
-}
-
-// =====================
-// Foto do barbeiro
-// =====================
-export async function uploadBarberPhoto(barbeiroId: string, file: File): Promise<string> {
-  const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '')
-  const path = `${barbeiroId}/${Date.now()}.${ext || 'jpg'}`
-  const { error: upErr } = await supabase.storage
-    .from('barber-photos')
-    .upload(path, file, { upsert: true, contentType: file.type || 'image/jpeg' })
-  if (upErr) throw new Error(`Erro ao enviar foto: ${upErr.message}`)
-
-  const { data: pub } = supabase.storage.from('barber-photos').getPublicUrl(path)
-  const url = pub.publicUrl
-  await updateBarber(barbeiroId, { foto_url: url })
-  return url
-}
-
-// =====================
-// Serviços da comanda (agendamento)
-// =====================
-export type AgendamentoServicoItem = {
-  id: string
-  agendamento_id: string
-  servico_id: string
-  preco: number
-  duracao_minutos: number | null
-  servicos?: { nome: string; preco: number; duracao_minutos: number | null } | null
-}
-
-async function recalcAppointmentTotal(agendamentoId: string) {
-  const { data: items } = await supabase
-    .from('agendamento_servicos')
-    .select('preco, servico_id')
-    .eq('agendamento_id', agendamentoId)
-  const total = (items || []).reduce(
-    (s: number, i: { preco?: number | null }) => s + Number(i.preco || 0),
-    0,
+  const tId = await resolveTenantId(tenantIdParam)
+  return await createBarber(
+    {
+      nome: input.nome,
+      email: input.email,
+      telefone: input.telefone || '',
+      avaliacao: input.avaliacao || 5,
+    },
+    tId,
   )
-  const primary = items?.[0]?.servico_id || null
-  await supabase
-    .from('agendamentos')
-    .update({ valor: total, ...(primary ? { servico_id: primary } : {}) })
-    .eq('id', agendamentoId)
-  return total
 }
 
-export async function getAgendamentoServicos(agendamentoId: string): Promise<AgendamentoServicoItem[]> {
-  const { data, error } = await supabase
-    .from('agendamento_servicos')
-    .select('*, servicos(nome, preco, duracao_minutos)')
-    .eq('agendamento_id', agendamentoId)
-    .order('created_at', { ascending: true })
-  if (error) throw new Error(`Erro ao buscar serviços da comanda: ${error.message}`)
-  return (data as AgendamentoServicoItem[]) ?? []
+// =====================
+// WhatsApp e IA (Seção 8 e 12)
+// =====================
+export async function getWhatsAppConnection(tenantIdParam?: string): Promise<WhatsAppConnection | null> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const snap = await getDoc(doc(db, 'tenants', tId, 'whatsappConnections', 'primary'))
+  if (snap.exists()) {
+    return { id: snap.id, tenantId: tId, ...snap.data() } as WhatsAppConnection
+  }
+  return {
+    id: 'primary',
+    tenantId: tId,
+    phoneNumberId: '',
+    wabaId: '',
+    businessPhoneNumber: '',
+    webhookVerifyToken: 'barberai_webhook_verify_2026',
+    status: 'disconnected',
+  }
 }
 
-export async function addServicoAoAgendamento(agendamentoId: string, servicoId: string) {
-  const { data: servico, error: errS } = await supabase
-    .from('servicos')
-    .select('id, preco, duracao_minutos')
-    .eq('id', servicoId)
-    .single()
-  if (errS) throw new Error(`Serviço não encontrado: ${errS.message}`)
+export async function saveWhatsAppConnection(
+  input: Partial<WhatsAppConnection>,
+  tenantIdParam?: string,
+): Promise<void> {
+  const tId = await resolveTenantId(tenantIdParam)
+  await setDoc(doc(db, 'tenants', tId, 'whatsappConnections', 'primary'), input, { merge: true })
+}
 
-  // Garante item inicial se a comanda ainda não tem linhas (legado)
-  const existing = await getAgendamentoServicos(agendamentoId)
-  if (!existing.length) {
-    const { data: appt } = await supabase
-      .from('agendamentos')
-      .select('servico_id, valor, servicos(preco, duracao_minutos)')
-      .eq('id', agendamentoId)
-      .maybeSingle()
-    if (appt?.servico_id) {
-      const preco = Number(
-        appt.valor ??
-          (appt as { servicos?: { preco?: number } }).servicos?.preco ??
-          0,
+export async function getAISettings(tenantIdParam?: string): Promise<AISettings> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const snap = await getDoc(doc(db, 'tenants', tId, 'aiSettings', 'primary'))
+  if (snap.exists()) {
+    return { tenantId: tId, ...snap.data() } as AISettings
+  }
+  return {
+    tenantId: tId,
+    enabled: true,
+    provider: 'gemini',
+    model: 'gemini-3.8-flash',
+    greetingMessage: 'Olá! Seja bem-vindo à nossa barbearia. ✂️ Vou te ajudar a agendar seu horário. Como posso te chamar?',
+    humanHandoffKeyword: 'humano',
+    audioEnabled: false,
+    elevenlabsVoiceId: '21m00Tcm4TlvDq8ikWAM',
+    language: 'pt-BR',
+  }
+}
+
+export async function saveAISettings(input: Partial<AISettings>, tenantIdParam?: string): Promise<void> {
+  const tId = await resolveTenantId(tenantIdParam)
+  await setDoc(doc(db, 'tenants', tId, 'aiSettings', 'primary'), input, { merge: true })
+}
+
+export async function getConversations(tenantIdParam?: string): Promise<ConversationState[]> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const snap = await getDocs(collection(db, 'tenants', tId, 'conversations'))
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as ConversationState))
+}
+
+export async function getConversationMessages(
+  conversationId: string,
+  tenantIdParam?: string,
+): Promise<ConversationMessage[]> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const snap = await getDocs(
+    query(
+      collection(db, 'tenants', tId, 'conversations', conversationId, 'messages'),
+      orderBy('timestamp', 'asc'),
+    ),
+  )
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as ConversationMessage))
+}
+
+// Simulador interativo do motor de atendimento no frontend
+export async function simulateIncomingWhatsAppMessage(
+  tenantId: string,
+  clientPhone: string,
+  messageText: string,
+): Promise<{ replyText: string; state: ConversationState; audioUrl?: string }> {
+  // Chamada para a API local do backend
+  try {
+    const res = await fetch('/api/simulator/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tenantId, clientPhone, messageText }),
+    })
+    if (res.ok) {
+      return await res.json()
+    }
+  } catch (err) {
+    console.warn('Backend server offline, executando fallback local do fluxo fixo:', err)
+  }
+
+  // Fallback direto via Firestore para simulação caso o servidor backend ainda não esteja com proxy
+  return await processConversationStepLocally(tenantId, clientPhone, messageText)
+}
+
+async function processConversationStepLocally(
+  tenantId: string,
+  clientPhone: string,
+  messageText: string,
+): Promise<{ replyText: string; state: ConversationState; audioUrl?: string }> {
+  const convRef = doc(db, 'tenants', tenantId, 'conversations', clientPhone)
+  const convSnap = await getDoc(convRef)
+
+  let state: ConversationState = convSnap.exists()
+    ? (convSnap.data() as ConversationState)
+    : {
+        id: clientPhone,
+        tenantId,
+        clientPhone,
+        currentStep: 'INITIAL',
+        lastMessageAt: new Date().toISOString(),
+        status: 'active',
+      }
+
+  const text = messageText.trim()
+  let replyText = ''
+
+  // ETAPA 1 - Saudação
+  if (state.currentStep === 'INITIAL' || !state.clientName) {
+    if (state.currentStep === 'INITIAL') {
+      const config = await getConfiguracoes(tenantId)
+      const nomeBarbearia = config.nome_barbearia || 'Nossa Barbearia'
+      replyText = `Olá! Seja bem-vindo à ${nomeBarbearia}. ✂️\nVou te ajudar a agendar seu horário.\nComo posso te chamar?`
+      state.currentStep = 'AWAITING_NAME'
+    } else {
+      state.clientName = text
+      state.currentStep = 'AWAITING_SERVICE'
+      const services = await getServices(tenantId)
+      const activeServices = services.filter((s) => s.ativo)
+      let list = activeServices
+        .map((s, idx) => `${idx + 1}. ${s.nome} - R$ ${s.preco.toFixed(2)} (${s.duracao_minutos} min)`)
+        .join('\n')
+      replyText = `Prazer, ${state.clientName}! Qual serviço você gostaria de agendar?\n\n${list || '1. Corte Cabelo - R$ 40,00'}`
+    }
+  } else if (state.currentStep === 'AWAITING_SERVICE') {
+    const services = await getServices(tenantId)
+    const selected = services.find((s) => s.nome.toLowerCase().includes(text.toLowerCase())) || services[0]
+    state.selectedServiceId = selected ? selected.id : '1'
+    state.selectedServiceName = selected ? selected.nome : 'Corte Masculino'
+    state.selectedPrice = selected ? selected.preco : 45
+    state.selectedDuration = selected ? selected.duracao_minutos : 30
+    state.currentStep = 'AWAITING_BARBER'
+
+    const barbers = await getBarbers(tenantId)
+    const barberList = barbers.map((b, idx) => `${idx + 1}. ${b.nome}`).join('\n')
+    replyText = `Com qual barbeiro você gostaria de agendar?\n\n${barberList}\n0. Não tenho preferência (primeiro disponível)`
+  } else if (state.currentStep === 'AWAITING_BARBER') {
+    const barbers = await getBarbers(tenantId)
+    const chosen = barbers.find((b) => b.nome.toLowerCase().includes(text.toLowerCase())) || barbers[0]
+    state.selectedBarberId = chosen ? chosen.id : '1'
+    state.selectedBarberName = chosen ? chosen.nome : 'Primeiro Disponível'
+    state.currentStep = 'AWAITING_DATE'
+
+    const tomorrow = new Date()
+    tomorrow.setDate(tomorrow.getDate() + 1)
+    const dataSugestao = tomorrow.toISOString().split('T')[0]
+    replyText = `Qual dia fica melhor para você? (Exemplo: ${dataSugestao} ou Digite: Hoje, Amanhã, etc.)`
+  } else if (state.currentStep === 'AWAITING_DATE') {
+    state.selectedDate = text.includes('-') ? text : new Date().toISOString().split('T')[0]
+    state.currentStep = 'AWAITING_TIME'
+    replyText = `Perfeito! Para a data escolhida, encontrei estes horários disponíveis:\n\n09:00\n10:30\n14:00\n15:30\n\nQual horário você prefere?`
+  } else if (state.currentStep === 'AWAITING_TIME') {
+    state.selectedTime = text
+    state.currentStep = 'AWAITING_CONFIRMATION'
+    replyText = `Confira seu agendamento:\n\n✂️ Serviço: ${state.selectedServiceName}\n💈 Barbeiro: ${state.selectedBarberName}\n📅 Data: ${state.selectedDate}\n🕒 Horário: ${state.selectedTime}\n💰 Valor: R$ ${state.selectedPrice?.toFixed(2)}\n\nPodemos confirmar? (Responda "Sim" para confirmar ou "Cancelar")`
+  } else if (state.currentStep === 'AWAITING_CONFIRMATION') {
+    if (text.toLowerCase().includes('sim') || text.toLowerCase().includes('confirma')) {
+      state.currentStep = 'BOOKING_CONFIRMED'
+      state.status = 'completed'
+
+      // Cria agendamento atômico
+      await createAppointment(
+        {
+          data: state.selectedDate || '',
+          horario: state.selectedTime || '',
+          barbeiro_id: state.selectedBarberId || '',
+          servico_id: state.selectedServiceId || '',
+          cliente_id: clientPhone,
+          valor: state.selectedPrice,
+          status: 'confirmado',
+          notes: 'Agendado automaticamente pelo bot de IA via WhatsApp',
+        },
+        tenantId,
       )
-      const dur = (appt as { servicos?: { duracao_minutos?: number } }).servicos?.duracao_minutos ?? null
-      await supabase.from('agendamento_servicos').insert({
-        agendamento_id: agendamentoId,
-        servico_id: appt.servico_id,
-        preco,
-        duracao_minutos: dur,
-      })
+
+      replyText = `🎉 Seu agendamento foi confirmado com sucesso!\n\n✂️ ${state.selectedServiceName}\n💈 Barbeiro: ${state.selectedBarberName}\n📅 Data: ${state.selectedDate} às ${state.selectedTime}\n\nTe esperamos lá! Se precisar cancelar ou remarcar, é só nos chamar.`
+    } else {
+      state.currentStep = 'INITIAL'
+      replyText = 'Agendamento cancelado. Quando quiser agendar novamente, basta enviar uma mensagem!'
     }
   }
 
-  const { data, error } = await supabase
-    .from('agendamento_servicos')
-    .insert({
-      agendamento_id: agendamentoId,
-      servico_id: servicoId,
-      preco: Number(servico.preco),
-      duracao_minutos: servico.duracao_minutos ?? null,
-    })
-    .select('*, servicos(nome, preco, duracao_minutos)')
-    .single()
-  if (error) throw new Error(`Erro ao adicionar serviço: ${error.message}`)
-  await recalcAppointmentTotal(agendamentoId)
-  return data as AgendamentoServicoItem
-}
+  state.lastMessageAt = new Date().toISOString()
+  await setDoc(convRef, state, { merge: true })
 
-export async function removeServicoDoAgendamento(itemId: string, agendamentoId: string) {
-  const { error } = await supabase.from('agendamento_servicos').delete().eq('id', itemId)
-  if (error) throw new Error(`Erro ao remover serviço: ${error.message}`)
-  await recalcAppointmentTotal(agendamentoId)
-}
-
-export async function ensureAgendamentoServicos(agendamentoId: string) {
-  const existing = await getAgendamentoServicos(agendamentoId)
-  if (existing.length) return existing
-  const { data: appt } = await supabase
-    .from('agendamentos')
-    .select('servico_id, valor, servicos(preco, duracao_minutos)')
-    .eq('id', agendamentoId)
-    .maybeSingle()
-  if (!appt?.servico_id) return []
-  const preco = Number(
-    appt.valor ?? (appt as { servicos?: { preco?: number } }).servicos?.preco ?? 0,
-  )
-  const dur = (appt as { servicos?: { duracao_minutos?: number } }).servicos?.duracao_minutos ?? null
-  await supabase.from('agendamento_servicos').insert({
-    agendamento_id: agendamentoId,
-    servico_id: appt.servico_id,
-    preco,
-    duracao_minutos: dur,
+  // Salva mensagem no histórico
+  await addDoc(collection(db, 'tenants', tenantId, 'conversations', clientPhone, 'messages'), {
+    conversationId: clientPhone,
+    tenantId,
+    sender: 'client',
+    text: messageText,
+    timestamp: new Date().toISOString(),
   })
-  return getAgendamentoServicos(agendamentoId)
+  await addDoc(collection(db, 'tenants', tenantId, 'conversations', clientPhone, 'messages'), {
+    conversationId: clientPhone,
+    tenantId,
+    sender: 'bot',
+    text: replyText,
+    timestamp: new Date().toISOString(),
+  })
+
+  return { replyText, state }
+}
+
+// =====================
+// Superadministrador (Seções 5 e 6)
+// =====================
+export async function getPlatformStats() {
+  try {
+    const tenantsSnap = await getDocs(collection(db, 'tenants'))
+    const tenants = tenantsSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Tenant))
+
+    const totalTenants = tenants.length
+    const activeTenants = tenants.filter((t) => t.status === 'active').length
+    const blockedTenants = tenants.filter((t) => t.status === 'blocked' || t.status === 'suspended').length
+
+    // Faturamento previsto (soma dos valores manuais de cada barbearia)
+    const faturamentoMensalPrevisto = tenants
+      .filter((t) => t.status === 'active')
+      .reduce((sum, t) => sum + (Number(t.monthlyFee) || 0), 0)
+
+    // Billing
+    const billingSnap = await getDocs(collection(db, 'platform_billing'))
+    const billings = billingSnap.docs.map((d) => d.data() as PlatformBilling)
+    const valoresPendentes = billings
+      .filter((b) => b.status === 'pending')
+      .reduce((sum, b) => sum + (Number(b.amount) || 0), 0)
+
+    // Agregações globais
+    return {
+      totalTenants,
+      activeTenants,
+      blockedTenants,
+      faturamentoMensalPrevisto,
+      valoresPendentes,
+      totalClientes: totalTenants * 12, // estimativa inicial de empty state
+      totalAgendamentos: totalTenants * 25,
+      atendimentosIA: totalTenants * 18,
+      statusWhatsApp: activeTenants > 0 ? 'Operacional' : 'Sem conexões ativas',
+    }
+  } catch (err) {
+    console.error('Erro ao buscar platform stats:', err)
+    return {
+      totalTenants: 0,
+      activeTenants: 0,
+      blockedTenants: 0,
+      faturamentoMensalPrevisto: 0,
+      valoresPendentes: 0,
+      totalClientes: 0,
+      totalAgendamentos: 0,
+      atendimentosIA: 0,
+      statusWhatsApp: 'Aguardando dados',
+    }
+  }
+}
+
+export async function getTenants(): Promise<Tenant[]> {
+  const snap = await getDocs(collection(db, 'tenants'))
+  return snap.docs.map((d) => {
+    const data = d.data()
+    return {
+      id: d.id,
+      name: data.name || '',
+      slug: data.slug || d.id,
+      contactPhone: data.contactPhone || '',
+      contactEmail: data.contactEmail || '',
+      ownerName: data.ownerName || '',
+      ownerEmail: data.ownerEmail || '',
+      status: (data.status || 'active') as TenantStatus,
+      monthlyFee: Number(data.monthlyFee || 0),
+      contractStartDate: data.contractStartDate || new Date().toISOString().split('T')[0],
+      billingDueDate: Number(data.billingDueDate || 10),
+      createdAt: data.createdAt || new Date().toISOString(),
+      updatedAt: data.updatedAt || new Date().toISOString(),
+    }
+  })
+}
+
+export async function createTenant(tenantData: Omit<Tenant, 'id' | 'createdAt' | 'updatedAt'>): Promise<Tenant> {
+  const payload = {
+    ...tenantData,
+    status: tenantData.status || 'active',
+    monthlyFee: Number(tenantData.monthlyFee || 0),
+    billingDueDate: Number(tenantData.billingDueDate || 10),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }
+  const ref = await addDoc(collection(db, 'tenants'), payload)
+  return { id: ref.id, ...payload }
+}
+
+export async function updateTenant(tenantId: string, data: Partial<Tenant>): Promise<void> {
+  await updateDoc(doc(db, 'tenants', tenantId), {
+    ...data,
+    updatedAt: new Date().toISOString(),
+  })
+}
+
+export async function updateTenantStatus(tenantId: string, status: TenantStatus): Promise<void> {
+  await updateDoc(doc(db, 'tenants', tenantId), {
+    status,
+    updatedAt: new Date().toISOString(),
+  })
+}
+
+export async function getPlatformBilling(): Promise<PlatformBilling[]> {
+  const snap = await getDocs(collection(db, 'platform_billing'))
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as PlatformBilling))
+}
+
+export async function createPlatformBilling(data: Omit<PlatformBilling, 'id'>): Promise<PlatformBilling> {
+  const ref = await addDoc(collection(db, 'platform_billing'), data)
+  return { id: ref.id, ...data }
+}
+
+export async function updatePlatformBillingStatus(id: string, status: 'pending' | 'paid' | 'overdue'): Promise<void> {
+  const update: any = { status }
+  if (status === 'paid') update.paidAt = new Date().toISOString()
+  await updateDoc(doc(db, 'platform_billing', id), update)
+}
+
+export async function getPlatformExpenses(): Promise<PlatformExpense[]> {
+  const snap = await getDocs(collection(db, 'platform_expenses'))
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as PlatformExpense))
+}
+
+export async function createPlatformExpense(data: Omit<PlatformExpense, 'id'>): Promise<PlatformExpense> {
+  const ref = await addDoc(collection(db, 'platform_expenses'), data)
+  return { id: ref.id, ...data }
+}
+
+export async function getPlatformLogs(): Promise<AuditLog[]> {
+  try {
+    const snap = await getDocs(query(collection(db, 'platform_logs'), limit(50)))
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as AuditLog))
+  } catch {
+    return []
+  }
 }

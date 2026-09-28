@@ -1,95 +1,214 @@
 import express from 'express'
-import { initFirebaseAdmin, getFirebaseMode } from './lib/firebaseAdmin.mjs'
-import { assertLocalIsolation } from './lib/whatsappLock.mjs'
-import {
-  consultar_disponibilidade,
-  criar_agendamento,
-  listar_servicos,
-  obter_proximo_barbeiro_rodizio,
-} from './tools/divaTools.mjs'
-import { DIVA_SYSTEM_PROMPT, extractUazapiInbound, handleDivaMessage } from './agent/divaLocal.mjs'
+import cors from 'cors'
+import dotenv from 'dotenv'
+import webhookRoutes from './routes/webhook.mjs'
+import whatsappQrRoutes from './routes/whatsappQr.mjs'
+import conversationRoutes from './routes/conversations.mjs'
+import healthRoutes from './routes/health.mjs'
+import { restoreAllSessions } from './services/whatsappBaileysManager.mjs'
+import { processConversationMessage } from './services/stateMachine.mjs'
+import { calculateAvailableSlots } from './services/availability.mjs'
+import { adminDb } from './lib/firebaseAdmin.mjs'
 
-const PORT = Number(process.env.DIVA_LOCAL_PORT || 8787)
+dotenv.config()
 
-initFirebaseAdmin()
-assertLocalIsolation()
+process.on('unhandledRejection', (reason) => {
+  console.warn('[Process Server Warning] Unhandled Rejection:', reason?.message || reason)
+})
+process.on('uncaughtException', (err) => {
+  console.warn('[Process Server Warning] Uncaught Exception:', err.message)
+})
 
 const app = express()
-app.use(express.json({ limit: '1mb' }))
+const PORT = process.env.PORT || 3001
 
-app.get('/health', (_req, res) => {
-  res.json({
-    ok: true,
-    service: 'diva-local-backend',
-    firebase: getFirebaseMode(),
-    whatsappOficial: 'bloqueado',
-    timezone: 'America/Fortaleza',
-    behavior: 'DIVA_BEHAVIOR.md',
-    agendamentoDireto: DIVA_SYSTEM_PROMPT.includes('AGENDAMENTO DIRETO'),
-    expediente: 'segunda a sábado, 08:30 às 19:30',
-  })
-})
+app.use(cors())
+app.use(express.json())
 
-app.post('/webhook/uazapi', async (req, res) => {
+// Diagnóstico completo do sistema (Firebase, Gemini, WhatsApp, dados reais)
+app.use('/api/health', healthRoutes)
+
+// Webhook WhatsApp (Meta Cloud API)
+app.use('/api/webhook', webhookRoutes)
+
+// Rotas de Conexão WhatsApp Web via QR Code (Baileys)
+app.use('/api/whatsapp', whatsappQrRoutes)
+
+// Central de Conversas Reais (WhatsApp Web Chat)
+app.use('/api/conversations', conversationRoutes)
+
+// Endpoint do Simulador do Painel (Tempo Real)
+app.post('/api/simulator/message', async (req, res) => {
+  const { tenantId = 'barbearia-principal', clientPhone = '5511999998888', messageText } = req.body
+
+  if (!messageText) {
+    return res.status(400).json({ error: 'messageText é obrigatório' })
+  }
+
   try {
-    const inbound = extractUazapiInbound(req.body || {})
-    if (inbound.fromMe) {
-      return res.json({ ok: true, ignored: true, reason: 'fromMe' })
-    }
-    if (!inbound.text) {
-      return res.json({ ok: true, ignored: true, reason: 'sem_texto' })
-    }
-    const result = await handleDivaMessage({
-      text: inbound.text,
-      nome: inbound.nome,
-      telefone: inbound.telefone,
-      sessionId: inbound.telefone || 'uazapi_local',
+    const result = await processConversationMessage({
+      tenantId,
+      clientPhone,
+      messageText,
+      phoneNumberId: null, // modo simulação
+      accessToken: null,
     })
-    return res.json({
-      ok: true,
-      inbound,
-      ...result,
-      uazapiSend: result.outbound,
-    })
+
+    return res.json(result)
   } catch (err) {
-    return res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) })
+    console.error('Erro no simulador:', err)
+    return res.status(500).json({ error: err.message })
   }
 })
 
-app.post('/test/webhook', async (req, res) => {
+// Endpoint de sincronização de dados reais da barbearia (Barbeiros, Serviços, Configurações)
+app.post('/api/sync/tenant-data', async (req, res) => {
+  const { tenantId, name, barbers = [], services = [] } = req.body
+
+  if (!tenantId) {
+    return res.status(400).json({ error: 'tenantId é obrigatório' })
+  }
+
   try {
-    const body = req.body || {}
-    const text = String(body.text || body.mensagem || '').trim()
-    if (!text) return res.status(400).json({ ok: false, error: 'Informe text.' })
-    const result = await handleDivaMessage({
-      text,
-      nome: body.nome,
-      telefone: body.telefone || '5585999999999',
-      sessionId: body.sessionId || body.telefone || 'teste_local',
-    })
-    return res.json({ ok: true, ...result })
+    console.log(`[Sync] Sincronizando dados reais para barbearia "${tenantId}"...`)
+
+    // Atualiza documento do tenant
+    if (name) {
+      await adminDb.collection('tenants').doc(tenantId).set(
+        {
+          name,
+          nome: name,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true },
+      )
+    }
+
+    // Atualiza barbeiros reais
+    for (const barber of barbers) {
+      const bId = barber.id || `barb_${Date.now()}`
+      await adminDb.collection('tenants').doc(tenantId).collection('barbers').doc(bId).set(
+        {
+          ...barber,
+          name: barber.nome || barber.name,
+          nome: barber.nome || barber.name,
+          active: barber.active ?? barber.ativo ?? true,
+          ativo: barber.ativo ?? barber.active ?? true,
+          startHour: barber.startHour || '08:00',
+          endHour: barber.endHour || '19:00',
+          workingDays: barber.workingDays || [1, 2, 3, 4, 5, 6],
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true },
+      )
+    }
+
+    // Atualiza serviços reais
+    for (const service of services) {
+      const sId = service.id || `serv_${Date.now()}`
+      await adminDb.collection('tenants').doc(tenantId).collection('services').doc(sId).set(
+        {
+          ...service,
+          name: service.nome || service.name,
+          nome: service.nome || service.name,
+          preco: service.preco || service.price || 35,
+          active: service.active ?? service.ativo ?? true,
+          ativo: service.ativo ?? service.active ?? true,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true },
+      )
+    }
+
+    console.log(`[Sync] ✅ Sincronização concluída com sucesso para "${tenantId}"! Barbeiros: ${barbers.length}, Serviços: ${services.length}`)
+    return res.json({ success: true, tenantId, barbersCount: barbers.length, servicesCount: services.length })
   } catch (err) {
-    return res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) })
+    console.error('[Sync] Erro ao sincronizar dados:', err)
+    return res.status(500).json({ error: err.message })
   }
 })
 
-app.get('/tools/servicos', async (_req, res) => {
-  res.json(await listar_servicos())
+// Endpoint de cálculo de horários livres
+app.post('/api/availability/slots', async (req, res) => {
+  const { tenantId, barberId, dateStr, durationMinutes = 30 } = req.body
+
+  try {
+    let barberData = {
+      startHour: '09:00',
+      endHour: '19:00',
+      workingDays: [1, 2, 3, 4, 5, 6],
+      daysOff: [],
+    }
+
+    if (tenantId && barberId) {
+      const bSnap = await adminDb.collection('tenants').doc(tenantId).collection('barbers').doc(barberId).get()
+      if (bSnap.exists) {
+        barberData = { ...barberData, ...bSnap.data() }
+      }
+    }
+
+    const apptsSnap = await adminDb
+      .collection('tenants')
+      .doc(tenantId || 'barbearia-principal')
+      .collection('appointments')
+      .where('date', '==', dateStr)
+      .get()
+
+    const existingAppointments = apptsSnap.docs.map((d) => d.data())
+
+    const slots = calculateAvailableSlots({
+      dateStr,
+      durationMinutes,
+      barber: barberData,
+      existingAppointments,
+    })
+
+    return res.json({ slots })
+  } catch (err) {
+    console.error('Erro ao calcular horários:', err)
+    return res.status(500).json({ error: err.message })
+  }
 })
 
-app.get('/tools/rodizio', async (_req, res) => {
-  res.json(await obter_proximo_barbeiro_rodizio())
+// Retorna novos agendamentos confirmados via WhatsApp que ainda não foram sincronizados
+app.get('/api/appointments/pending-sync', async (req, res) => {
+  const tenantId = req.query.tenantId || 'I13A9nw5T4IsaojMPLl6'
+  try {
+    const snap = await adminDb.collection('tenants').doc(tenantId).collection('appointments').get()
+    const pending = snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .filter((a) => a.cloudSynced === false && a.origin === 'whatsapp')
+    return res.json({ appointments: pending })
+  } catch (err) {
+    return res.status(500).json({ error: err.message })
+  }
 })
 
-app.get('/tools/disponibilidade', async (req, res) => {
-  res.json(await consultar_disponibilidade(String(req.query.data || ''), req.query.barbeiroId))
-})
-
-app.post('/tools/agendamento', async (req, res) => {
-  res.json(await criar_agendamento(req.body || {}))
+// Marca agendamento como sincronizado com sucesso
+app.post('/api/appointments/mark-synced', async (req, res) => {
+  const { tenantId = 'I13A9nw5T4IsaojMPLl6', appointmentId } = req.body
+  try {
+    if (appointmentId) {
+      await adminDb.collection('tenants').doc(tenantId).collection('appointments').doc(appointmentId).set(
+        { cloudSynced: true, syncedAt: new Date().toISOString() },
+        { merge: true },
+      )
+    }
+    return res.json({ success: true })
+  } catch (err) {
+    return res.status(500).json({ error: err.message })
+  }
 })
 
 app.listen(PORT, () => {
-  console.info(`Diva local backend em http://localhost:${PORT}`)
-  console.info('POST /webhook/uazapi  POST /test/webhook  — WhatsApp oficial bloqueado')
+  console.log(`💈 Servidor Barber AI Backend ativo na porta ${PORT}`)
+  console.log(`📡 Webhook WhatsApp disponível em: http://localhost:${PORT}/api/webhook/whatsapp`)
+  console.log(`📱 Conexão WhatsApp QR Code disponível em: http://localhost:${PORT}/api/whatsapp/qr`)
+
+  // Restaura sessões ativas existentes
+  restoreAllSessions().catch((err) => {
+    console.error('Falha ao restaurar sessões do WhatsApp:', err)
+  })
 })
+
+export default app

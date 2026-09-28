@@ -7,10 +7,13 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
+node_modules/
 dist
 dist-ssr
 *.local
+.env
+.env.local
+serviceAccountKey.json
 
 # Editor directories and files
 .vscode/*
@@ -23,8 +26,11 @@ dist-ssr
 *.sln
 *.sw?
 
+# WhatsApp Sessions (Baileys)
+server/sessions/
+sessions/
+server/data/
+
+# Supabase CLI local
 supabase/.temp/
-.webhook-secret.local
-serviceAccountKey.json
-*-firebase-adminsdk-*.json
 

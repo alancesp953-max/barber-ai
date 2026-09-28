@@ -1,45 +1,17 @@
-import {
-  ActionIcon,
-  Alert,
-  Button,
-  Card,
-  Group,
-  Loader,
-  NumberInput,
-  SimpleGrid,
-  Stack,
-  Text,
-  Textarea,
-  TextInput,
-  Title,
-} from '@mantine/core'
-import { Clock, Pencil, Plus, Trash2 } from 'lucide-react'
+import { Clock, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../../components/PageHeader'
-import { createService, deleteService, getServices, updateService } from '../../lib/api'
+import { createService, deleteService, getServices } from '../../lib/api'
 import { formatCurrency } from '../../lib/format'
 import type { Service } from '../../types/database'
-
-
-const inputStyles = {
-  input: { background: '#0d0d0d', borderColor: 'rgba(197,160,89,0.2)', color: '#f5f5f5' },
-  label: { color: '#cfcfcf' },
-}
 
 export default function Services() {
   const { t } = useTranslation()
   const [services, setServices] = useState<Service[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
-  const [editing, setEditing] = useState<Service | null>(null)
-  const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [name, setName] = useState('')
-  const [price, setPrice] = useState<number | string>('')
-  const [duration, setDuration] = useState<number | string>('')
-  const [buffer, setBuffer] = useState<number | string>(10)
-  const [description, setDescription] = useState('')
 
   const load = async () => {
     try {
@@ -55,61 +27,21 @@ export default function Services() {
     load()
   }, [])
 
-  const resetForm = () => {
-    setShowForm(false)
-    setEditing(null)
-    setName('')
-    setPrice('')
-    setDuration('')
-    setBuffer(10)
-    setDescription('')
-  }
-
-  const openCreate = () => {
-    setError(null)
-    setEditing(null)
-    setName('')
-    setPrice('')
-    setDuration('')
-    setBuffer(10)
-    setDescription('')
-    setShowForm(true)
-  }
-
-  const openEdit = (service: Service) => {
-    setError(null)
-    setEditing(service)
-    setName(service.nome)
-    setPrice(Number(service.preco))
-    setDuration(service.duracao_minutos)
-    setBuffer(Number((service as any).buffer_minutos ?? 10))
-    setDescription(service.descricao || '')
-    setShowForm(true)
-  }
-
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleCreate = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
-    setSaving(true)
-    setError(null)
+    const form = new FormData(e.currentTarget)
+
     try {
-      const payload = {
-        nome: name.trim(),
-        descricao: description.trim() || null,
-        duracao_minutos: Number(duration),
-        buffer_minutos: Number(buffer) || 10,
-        preco: Number(price),
-      }
-      if (editing) {
-        await updateService(editing.id, payload)
-      } else {
-        await createService(payload)
-      }
-      resetForm()
+      await createService({
+        nome: form.get('name') as string,
+        descricao: (form.get('description') as string) || null,
+        duracao_minutos: Number(form.get('duration_minutes')),
+        preco: Number(form.get('price')),
+      })
+      setShowForm(false)
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : t('common.failedToCreate'))
-    } finally {
-      setSaving(false)
     }
   }
 
@@ -117,147 +49,97 @@ export default function Services() {
     if (!confirm(t('services.deleteConfirm'))) return
     try {
       await deleteService(id)
-      if (editing?.id === id) resetForm()
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : t('common.failedToDelete'))
     }
   }
 
+  const inputClass =
+    'w-full rounded-lg border border-barber-gray bg-barber-black px-3 py-2 text-sm text-barber-white focus:border-barber-gold focus:outline-none'
+
   return (
-    <Stack gap="md">
+    <div>
       <PageHeader
         title={t('services.title')}
         description={t('services.description')}
         action={
-          <Button
-            color="gold"
-            c="#0A0A0A"
-            leftSection={<Plus size={16} />}
-            onClick={() => (showForm && !editing ? resetForm() : openCreate())}
+          <button
+            onClick={() => setShowForm(!showForm)}
+            className="flex items-center gap-2 rounded-lg bg-barber-gold px-4 py-2 text-sm font-semibold text-barber-black hover:bg-barber-gold/90"
           >
+            <Plus className="h-4 w-4" />
             {t('services.addService')}
-          </Button>
+          </button>
         }
       />
 
       {error && (
-        <Alert color="red" variant="light" onClose={() => setError(null)} withCloseButton>
+        <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
           {error}
-        </Alert>
+        </div>
       )}
 
       {showForm && (
-        <Card withBorder padding="lg" radius="lg" component="form" onSubmit={handleSubmit}>
-          <Title order={5} c="white" mb="md" style={{ fontFamily: 'Syne, DM Sans, sans-serif' }}>
-            {editing ? t('services.edit') : t('services.new')}
-          </Title>
-          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
-            <TextInput
-              label={t('services.serviceName')}
-              required
-              value={name}
-              onChange={(e) => setName(e.currentTarget.value)}
-              styles={inputStyles}
-            />
-            <NumberInput
-              label={t('common.price')}
-              required
-              decimalScale={2}
-              min={0}
-              value={price}
-              onChange={setPrice}
-              styles={inputStyles}
-            />
-            <NumberInput
-              label={t('services.durationMinutes')}
-              required
-              min={1}
-              value={duration}
-              onChange={setDuration}
-              styles={inputStyles}
-            />
-            <NumberInput
-              label="Intervalo / buffer (min)"
-              description="Margem após o serviço (ex.: 10 → 40min de serviço libera às 15:50 se começou 15:00)"
-              min={0}
-              max={60}
-              value={buffer}
-              onChange={setBuffer}
-              styles={inputStyles}
-            />
-            <Textarea
-              label={t('services.descriptionField')}
-              value={description}
-              onChange={(e) => setDescription(e.currentTarget.value)}
-              styles={inputStyles}
-              style={{ gridColumn: '1 / -1' }}
-            />
-          </SimpleGrid>
-          <Group mt="md">
-            <Button type="submit" color="gold" c="#0A0A0A" loading={saving}>
+        <form
+          onSubmit={handleCreate}
+          className="mb-8 grid gap-4 rounded-2xl border border-barber-gray bg-barber-gray/40 p-6 sm:grid-cols-2"
+        >
+          <input name="name" placeholder={t('services.serviceName')} required className={inputClass} />
+          <input name="price" type="number" step="0.01" placeholder={t('common.price')} required className={inputClass} />
+          <input name="duration_minutes" type="number" placeholder={t('services.durationMinutes')} required className={inputClass} />
+          <textarea name="description" placeholder={t('services.descriptionField')} className={`${inputClass} sm:col-span-2`} rows={2} />
+          <div className="flex gap-2 sm:col-span-2">
+            <button type="submit" className="rounded-lg bg-barber-gold px-4 py-2 text-sm font-semibold text-barber-black">
               {t('services.saveService')}
-            </Button>
-            <Button variant="outline" color="gray" onClick={resetForm}>
+            </button>
+            <button type="button" onClick={() => setShowForm(false)} className="rounded-lg border border-barber-gray px-4 py-2 text-sm text-barber-white/70">
               {t('common.cancel')}
-            </Button>
-          </Group>
-        </Card>
+            </button>
+          </div>
+        </form>
       )}
 
       {loading ? (
-        <Group justify="center" py="xl">
-          <Loader color="gold" />
-          <Text c="dimmed">{t('services.loading')}</Text>
-        </Group>
+        <p className="text-barber-white/60">{t('services.loading')}</p>
       ) : (
-        <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="md">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {services.map((service) => (
-            <Card key={service.id} withBorder padding="lg" radius="lg">
-              <Title order={4} c="white" style={{ fontFamily: 'Syne, DM Sans, sans-serif' }}>
-                {service.nome}
-              </Title>
+            <div
+              key={service.id}
+              className="rounded-2xl border border-barber-gray bg-barber-gray/40 p-6 transition-colors hover:border-barber-gold/30"
+            >
+              <h3 className="font-serif text-lg font-semibold text-barber-white">{service.nome}</h3>
+
               {service.descricao && (
-                <Text size="sm" c="dimmed" mt="xs">
-                  {service.descricao}
-                </Text>
+                <p className="mt-2 text-sm text-barber-white/60">{service.descricao}</p>
               )}
-              <Group justify="space-between" mt="md">
-                <Text fz={22} fw={700} c="gold" style={{ fontFamily: 'Syne, DM Sans, sans-serif' }}>
+
+              <div className="mt-4 flex items-center justify-between">
+                <p className="font-serif text-2xl font-bold text-barber-gold">
                   {formatCurrency(Number(service.preco))}
-                </Text>
-                <Group gap={4} c="dimmed">
-                  <Clock size={14} />
-                  <Text size="sm">{t('services.minutes', { count: service.duracao_minutos })}</Text>
-                </Group>
-              </Group>
-              <Group mt="md" gap="xs">
-                <ActionIcon
-                  variant="outline"
-                  color="gold"
-                  onClick={() => openEdit(service)}
-                  aria-label="Editar"
-                >
-                  <Pencil size={14} />
-                </ActionIcon>
-                <ActionIcon
-                  variant="outline"
-                  color="red"
+                </p>
+                <div className="flex items-center gap-1 text-sm text-barber-white/50">
+                  <Clock className="h-4 w-4" />
+                  {t('services.minutes', { count: service.duracao_minutos })}
+                </div>
+              </div>
+
+              <div className="mt-4 flex gap-2">
+                <button
                   onClick={() => handleDelete(service.id)}
-                  aria-label="Excluir"
+                  className="rounded-lg border border-red-500/30 px-3 py-1.5 text-xs text-red-400 hover:bg-red-500/10"
                 >
-                  <Trash2 size={14} />
-                </ActionIcon>
-              </Group>
-            </Card>
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </div>
+            </div>
           ))}
           {services.length === 0 && (
-            <Text c="dimmed" ta="center" py="xl" style={{ gridColumn: '1 / -1' }}>
-              {t('services.noServices')}
-            </Text>
+            <p className="col-span-full py-8 text-center text-barber-white/50">{t('services.noServices')}</p>
           )}
-        </SimpleGrid>
+        </div>
       )}
-    </Stack>
+    </div>
   )
 }

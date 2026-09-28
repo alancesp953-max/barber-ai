@@ -1,17 +1,16 @@
 import { createFileRoute, redirect } from '@tanstack/react-router'
-import { getBarbeiroByUserId } from '../lib/api'
-import { supabase } from '../services/supabaseClient'
+import { requireSession } from '../lib/api'
 import Login from '../pages/Login'
 
 export const Route = createFileRoute('/login')({
   beforeLoad: async () => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-    if (!session?.user) return
-
-    const barbeiro = await getBarbeiroByUserId(session.user.id)
-    throw redirect({ to: barbeiro ? '/barber/agenda' : '/admin/dashboard' })
+    const session = await requireSession()
+    if (session && session.user) {
+      if (session.user.email?.toLowerCase() === 'admin@barb.com') {
+        throw redirect({ to: '/superadmin/dashboard' })
+      }
+      throw redirect({ to: '/admin/dashboard' })
+    }
   },
   component: Login,
 })

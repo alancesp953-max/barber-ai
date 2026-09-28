@@ -9,44 +9,37 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as IndexRouteImport } from './routes/index'
-import { Route as AdminRouteImport } from './routes/admin'
-import { Route as BarberRouteImport } from './routes/barber'
-import { Route as LoginRouteImport } from './routes/login'
+import { Route as SuperadminRouteImport } from './routes/superadmin'
 import { Route as SignupRouteImport } from './routes/signup'
-import { Route as AdminAppointmentsRouteImport } from './routes/admin/appointments'
-import { Route as AdminBarbersRouteImport } from './routes/admin/barbers'
-import { Route as AdminComissoesRouteImport } from './routes/admin/comissoes'
-import { Route as AdminConfiguracoesRouteImport } from './routes/admin/configuracoes'
-import { Route as AdminDashboardRouteImport } from './routes/admin/dashboard'
-import { Route as AdminFinanceiroRouteImport } from './routes/admin/financeiro'
-import { Route as AdminMarketingRouteImport } from './routes/admin/marketing'
-import { Route as AdminProdutosRouteImport } from './routes/admin/produtos'
-import { Route as AdminRelatoriosRouteImport } from './routes/admin/relatorios'
-import { Route as AdminServicesRouteImport } from './routes/admin/services'
-import { Route as AdminUsuariosRouteImport } from './routes/admin/usuarios'
-import { Route as BarberAgendaRouteImport } from './routes/barber/agenda'
-import { Route as BarberDashboardRouteImport } from './routes/barber/dashboard'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as BarberRouteImport } from './routes/barber'
+import { Route as AdminRouteImport } from './routes/admin'
+import { Route as IndexRouteImport } from './routes/index'
+import { Route as SuperadminTenantsRouteImport } from './routes/superadmin/tenants'
+import { Route as SuperadminLogsRouteImport } from './routes/superadmin/logs'
+import { Route as SuperadminFinanceiroRouteImport } from './routes/superadmin/financeiro'
+import { Route as SuperadminDashboardRouteImport } from './routes/superadmin/dashboard'
 import { Route as BarberLoginRouteImport } from './routes/barber/login'
+import { Route as BarberDashboardRouteImport } from './routes/barber/dashboard'
+import { Route as BarberAgendaRouteImport } from './routes/barber/agenda'
+import { Route as AdminWhatsappQrRouteImport } from './routes/admin/whatsapp-qr'
+import { Route as AdminWhatsappRouteImport } from './routes/admin/whatsapp'
+import { Route as AdminUsuariosRouteImport } from './routes/admin/usuarios'
+import { Route as AdminServicesRouteImport } from './routes/admin/services'
+import { Route as AdminRotinaRouteImport } from './routes/admin/rotina'
+import { Route as AdminRelatoriosRouteImport } from './routes/admin/relatorios'
+import { Route as AdminProdutosRouteImport } from './routes/admin/produtos'
+import { Route as AdminFinanceiroRouteImport } from './routes/admin/financeiro'
+import { Route as AdminDashboardRouteImport } from './routes/admin/dashboard'
+import { Route as AdminConversasRouteImport } from './routes/admin/conversas'
+import { Route as AdminConfiguracoesRouteImport } from './routes/admin/configuracoes'
+import { Route as AdminComissoesRouteImport } from './routes/admin/comissoes'
+import { Route as AdminBarbersRouteImport } from './routes/admin/barbers'
+import { Route as AdminAppointmentsRouteImport } from './routes/admin/appointments'
 
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AdminRoute = AdminRouteImport.update({
-  id: '/admin',
-  path: '/admin',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const BarberRoute = BarberRouteImport.update({
-  id: '/barber',
-  path: '/barber',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LoginRoute = LoginRouteImport.update({
-  id: '/login',
-  path: '/login',
+const SuperadminRoute = SuperadminRouteImport.update({
+  id: '/superadmin',
+  path: '/superadmin',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SignupRoute = SignupRouteImport.update({
@@ -54,64 +47,49 @@ const SignupRoute = SignupRouteImport.update({
   path: '/signup',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminAppointmentsRoute = AdminAppointmentsRouteImport.update({
-  id: '/appointments',
-  path: '/appointments',
-  getParentRoute: () => AdminRoute,
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => rootRouteImport,
 } as any)
-const AdminBarbersRoute = AdminBarbersRouteImport.update({
-  id: '/barbers',
-  path: '/barbers',
-  getParentRoute: () => AdminRoute,
+const BarberRoute = BarberRouteImport.update({
+  id: '/barber',
+  path: '/barber',
+  getParentRoute: () => rootRouteImport,
 } as any)
-const AdminComissoesRoute = AdminComissoesRouteImport.update({
-  id: '/comissoes',
-  path: '/comissoes',
-  getParentRoute: () => AdminRoute,
+const AdminRoute = AdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
+  getParentRoute: () => rootRouteImport,
 } as any)
-const AdminConfiguracoesRoute = AdminConfiguracoesRouteImport.update({
-  id: '/configuracoes',
-  path: '/configuracoes',
-  getParentRoute: () => AdminRoute,
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => rootRouteImport,
 } as any)
-const AdminDashboardRoute = AdminDashboardRouteImport.update({
-  id: '/dashboard',
-  path: '/dashboard',
-  getParentRoute: () => AdminRoute,
+const SuperadminTenantsRoute = SuperadminTenantsRouteImport.update({
+  id: '/tenants',
+  path: '/tenants',
+  getParentRoute: () => SuperadminRoute,
 } as any)
-const AdminFinanceiroRoute = AdminFinanceiroRouteImport.update({
+const SuperadminLogsRoute = SuperadminLogsRouteImport.update({
+  id: '/logs',
+  path: '/logs',
+  getParentRoute: () => SuperadminRoute,
+} as any)
+const SuperadminFinanceiroRoute = SuperadminFinanceiroRouteImport.update({
   id: '/financeiro',
   path: '/financeiro',
-  getParentRoute: () => AdminRoute,
+  getParentRoute: () => SuperadminRoute,
 } as any)
-const AdminMarketingRoute = AdminMarketingRouteImport.update({
-  id: '/marketing',
-  path: '/marketing',
-  getParentRoute: () => AdminRoute,
+const SuperadminDashboardRoute = SuperadminDashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
+  getParentRoute: () => SuperadminRoute,
 } as any)
-const AdminProdutosRoute = AdminProdutosRouteImport.update({
-  id: '/produtos',
-  path: '/produtos',
-  getParentRoute: () => AdminRoute,
-} as any)
-const AdminRelatoriosRoute = AdminRelatoriosRouteImport.update({
-  id: '/relatorios',
-  path: '/relatorios',
-  getParentRoute: () => AdminRoute,
-} as any)
-const AdminServicesRoute = AdminServicesRouteImport.update({
-  id: '/services',
-  path: '/services',
-  getParentRoute: () => AdminRoute,
-} as any)
-const AdminUsuariosRoute = AdminUsuariosRouteImport.update({
-  id: '/usuarios',
-  path: '/usuarios',
-  getParentRoute: () => AdminRoute,
-} as any)
-const BarberAgendaRoute = BarberAgendaRouteImport.update({
-  id: '/agenda',
-  path: '/agenda',
+const BarberLoginRoute = BarberLoginRouteImport.update({
+  id: '/login',
+  path: '/login',
   getParentRoute: () => BarberRoute,
 } as any)
 const BarberDashboardRoute = BarberDashboardRouteImport.update({
@@ -119,10 +97,80 @@ const BarberDashboardRoute = BarberDashboardRouteImport.update({
   path: '/dashboard',
   getParentRoute: () => BarberRoute,
 } as any)
-const BarberLoginRoute = BarberLoginRouteImport.update({
-  id: '/login',
-  path: '/login',
+const BarberAgendaRoute = BarberAgendaRouteImport.update({
+  id: '/agenda',
+  path: '/agenda',
   getParentRoute: () => BarberRoute,
+} as any)
+const AdminWhatsappQrRoute = AdminWhatsappQrRouteImport.update({
+  id: '/whatsapp-qr',
+  path: '/whatsapp-qr',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminWhatsappRoute = AdminWhatsappRouteImport.update({
+  id: '/whatsapp',
+  path: '/whatsapp',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminUsuariosRoute = AdminUsuariosRouteImport.update({
+  id: '/usuarios',
+  path: '/usuarios',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminServicesRoute = AdminServicesRouteImport.update({
+  id: '/services',
+  path: '/services',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminRotinaRoute = AdminRotinaRouteImport.update({
+  id: '/rotina',
+  path: '/rotina',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminRelatoriosRoute = AdminRelatoriosRouteImport.update({
+  id: '/relatorios',
+  path: '/relatorios',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminProdutosRoute = AdminProdutosRouteImport.update({
+  id: '/produtos',
+  path: '/produtos',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminFinanceiroRoute = AdminFinanceiroRouteImport.update({
+  id: '/financeiro',
+  path: '/financeiro',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminDashboardRoute = AdminDashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminConversasRoute = AdminConversasRouteImport.update({
+  id: '/conversas',
+  path: '/conversas',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminConfiguracoesRoute = AdminConfiguracoesRouteImport.update({
+  id: '/configuracoes',
+  path: '/configuracoes',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminComissoesRoute = AdminComissoesRouteImport.update({
+  id: '/comissoes',
+  path: '/comissoes',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminBarbersRoute = AdminBarbersRouteImport.update({
+  id: '/barbers',
+  path: '/barbers',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminAppointmentsRoute = AdminAppointmentsRouteImport.update({
+  id: '/appointments',
+  path: '/appointments',
+  getParentRoute: () => AdminRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
@@ -131,20 +179,28 @@ export interface FileRoutesByFullPath {
   '/barber': typeof BarberRouteWithChildren
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
+  '/superadmin': typeof SuperadminRouteWithChildren
   '/admin/appointments': typeof AdminAppointmentsRoute
   '/admin/barbers': typeof AdminBarbersRoute
   '/admin/comissoes': typeof AdminComissoesRoute
   '/admin/configuracoes': typeof AdminConfiguracoesRoute
+  '/admin/conversas': typeof AdminConversasRoute
   '/admin/dashboard': typeof AdminDashboardRoute
   '/admin/financeiro': typeof AdminFinanceiroRoute
-  '/admin/marketing': typeof AdminMarketingRoute
   '/admin/produtos': typeof AdminProdutosRoute
   '/admin/relatorios': typeof AdminRelatoriosRoute
+  '/admin/rotina': typeof AdminRotinaRoute
   '/admin/services': typeof AdminServicesRoute
   '/admin/usuarios': typeof AdminUsuariosRoute
+  '/admin/whatsapp': typeof AdminWhatsappRoute
+  '/admin/whatsapp-qr': typeof AdminWhatsappQrRoute
   '/barber/agenda': typeof BarberAgendaRoute
   '/barber/dashboard': typeof BarberDashboardRoute
   '/barber/login': typeof BarberLoginRoute
+  '/superadmin/dashboard': typeof SuperadminDashboardRoute
+  '/superadmin/financeiro': typeof SuperadminFinanceiroRoute
+  '/superadmin/logs': typeof SuperadminLogsRoute
+  '/superadmin/tenants': typeof SuperadminTenantsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -152,20 +208,28 @@ export interface FileRoutesByTo {
   '/barber': typeof BarberRouteWithChildren
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
+  '/superadmin': typeof SuperadminRouteWithChildren
   '/admin/appointments': typeof AdminAppointmentsRoute
   '/admin/barbers': typeof AdminBarbersRoute
   '/admin/comissoes': typeof AdminComissoesRoute
   '/admin/configuracoes': typeof AdminConfiguracoesRoute
+  '/admin/conversas': typeof AdminConversasRoute
   '/admin/dashboard': typeof AdminDashboardRoute
   '/admin/financeiro': typeof AdminFinanceiroRoute
-  '/admin/marketing': typeof AdminMarketingRoute
   '/admin/produtos': typeof AdminProdutosRoute
   '/admin/relatorios': typeof AdminRelatoriosRoute
+  '/admin/rotina': typeof AdminRotinaRoute
   '/admin/services': typeof AdminServicesRoute
   '/admin/usuarios': typeof AdminUsuariosRoute
+  '/admin/whatsapp': typeof AdminWhatsappRoute
+  '/admin/whatsapp-qr': typeof AdminWhatsappQrRoute
   '/barber/agenda': typeof BarberAgendaRoute
   '/barber/dashboard': typeof BarberDashboardRoute
   '/barber/login': typeof BarberLoginRoute
+  '/superadmin/dashboard': typeof SuperadminDashboardRoute
+  '/superadmin/financeiro': typeof SuperadminFinanceiroRoute
+  '/superadmin/logs': typeof SuperadminLogsRoute
+  '/superadmin/tenants': typeof SuperadminTenantsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -174,20 +238,28 @@ export interface FileRoutesById {
   '/barber': typeof BarberRouteWithChildren
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
+  '/superadmin': typeof SuperadminRouteWithChildren
   '/admin/appointments': typeof AdminAppointmentsRoute
   '/admin/barbers': typeof AdminBarbersRoute
   '/admin/comissoes': typeof AdminComissoesRoute
   '/admin/configuracoes': typeof AdminConfiguracoesRoute
+  '/admin/conversas': typeof AdminConversasRoute
   '/admin/dashboard': typeof AdminDashboardRoute
   '/admin/financeiro': typeof AdminFinanceiroRoute
-  '/admin/marketing': typeof AdminMarketingRoute
   '/admin/produtos': typeof AdminProdutosRoute
   '/admin/relatorios': typeof AdminRelatoriosRoute
+  '/admin/rotina': typeof AdminRotinaRoute
   '/admin/services': typeof AdminServicesRoute
   '/admin/usuarios': typeof AdminUsuariosRoute
+  '/admin/whatsapp': typeof AdminWhatsappRoute
+  '/admin/whatsapp-qr': typeof AdminWhatsappQrRoute
   '/barber/agenda': typeof BarberAgendaRoute
   '/barber/dashboard': typeof BarberDashboardRoute
   '/barber/login': typeof BarberLoginRoute
+  '/superadmin/dashboard': typeof SuperadminDashboardRoute
+  '/superadmin/financeiro': typeof SuperadminFinanceiroRoute
+  '/superadmin/logs': typeof SuperadminLogsRoute
+  '/superadmin/tenants': typeof SuperadminTenantsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -197,20 +269,28 @@ export interface FileRouteTypes {
     | '/barber'
     | '/login'
     | '/signup'
+    | '/superadmin'
     | '/admin/appointments'
     | '/admin/barbers'
     | '/admin/comissoes'
     | '/admin/configuracoes'
+    | '/admin/conversas'
     | '/admin/dashboard'
     | '/admin/financeiro'
-    | '/admin/marketing'
     | '/admin/produtos'
     | '/admin/relatorios'
+    | '/admin/rotina'
     | '/admin/services'
     | '/admin/usuarios'
+    | '/admin/whatsapp'
+    | '/admin/whatsapp-qr'
     | '/barber/agenda'
     | '/barber/dashboard'
     | '/barber/login'
+    | '/superadmin/dashboard'
+    | '/superadmin/financeiro'
+    | '/superadmin/logs'
+    | '/superadmin/tenants'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -218,20 +298,28 @@ export interface FileRouteTypes {
     | '/barber'
     | '/login'
     | '/signup'
+    | '/superadmin'
     | '/admin/appointments'
     | '/admin/barbers'
     | '/admin/comissoes'
     | '/admin/configuracoes'
+    | '/admin/conversas'
     | '/admin/dashboard'
     | '/admin/financeiro'
-    | '/admin/marketing'
     | '/admin/produtos'
     | '/admin/relatorios'
+    | '/admin/rotina'
     | '/admin/services'
     | '/admin/usuarios'
+    | '/admin/whatsapp'
+    | '/admin/whatsapp-qr'
     | '/barber/agenda'
     | '/barber/dashboard'
     | '/barber/login'
+    | '/superadmin/dashboard'
+    | '/superadmin/financeiro'
+    | '/superadmin/logs'
+    | '/superadmin/tenants'
   id:
     | '__root__'
     | '/'
@@ -239,20 +327,28 @@ export interface FileRouteTypes {
     | '/barber'
     | '/login'
     | '/signup'
+    | '/superadmin'
     | '/admin/appointments'
     | '/admin/barbers'
     | '/admin/comissoes'
     | '/admin/configuracoes'
+    | '/admin/conversas'
     | '/admin/dashboard'
     | '/admin/financeiro'
-    | '/admin/marketing'
     | '/admin/produtos'
     | '/admin/relatorios'
+    | '/admin/rotina'
     | '/admin/services'
     | '/admin/usuarios'
+    | '/admin/whatsapp'
+    | '/admin/whatsapp-qr'
     | '/barber/agenda'
     | '/barber/dashboard'
     | '/barber/login'
+    | '/superadmin/dashboard'
+    | '/superadmin/financeiro'
+    | '/superadmin/logs'
+    | '/superadmin/tenants'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -261,36 +357,16 @@ export interface RootRouteChildren {
   BarberRoute: typeof BarberRouteWithChildren
   LoginRoute: typeof LoginRoute
   SignupRoute: typeof SignupRoute
+  SuperadminRoute: typeof SuperadminRouteWithChildren
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin': {
-      id: '/admin'
-      path: '/admin'
-      fullPath: '/admin'
-      preLoaderRoute: typeof AdminRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/barber': {
-      id: '/barber'
-      path: '/barber'
-      fullPath: '/barber'
-      preLoaderRoute: typeof BarberRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/login': {
-      id: '/login'
-      path: '/login'
-      fullPath: '/login'
-      preLoaderRoute: typeof LoginRouteImport
+    '/superadmin': {
+      id: '/superadmin'
+      path: '/superadmin'
+      fullPath: '/superadmin'
+      preLoaderRoute: typeof SuperadminRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/signup': {
@@ -300,88 +376,67 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SignupRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/appointments': {
-      id: '/admin/appointments'
-      path: '/appointments'
-      fullPath: '/admin/appointments'
-      preLoaderRoute: typeof AdminAppointmentsRouteImport
-      parentRoute: typeof AdminRoute
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/admin/barbers': {
-      id: '/admin/barbers'
-      path: '/barbers'
-      fullPath: '/admin/barbers'
-      preLoaderRoute: typeof AdminBarbersRouteImport
-      parentRoute: typeof AdminRoute
+    '/barber': {
+      id: '/barber'
+      path: '/barber'
+      fullPath: '/barber'
+      preLoaderRoute: typeof BarberRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/admin/comissoes': {
-      id: '/admin/comissoes'
-      path: '/comissoes'
-      fullPath: '/admin/comissoes'
-      preLoaderRoute: typeof AdminComissoesRouteImport
-      parentRoute: typeof AdminRoute
+    '/admin': {
+      id: '/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AdminRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/admin/configuracoes': {
-      id: '/admin/configuracoes'
-      path: '/configuracoes'
-      fullPath: '/admin/configuracoes'
-      preLoaderRoute: typeof AdminConfiguracoesRouteImport
-      parentRoute: typeof AdminRoute
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/admin/dashboard': {
-      id: '/admin/dashboard'
-      path: '/dashboard'
-      fullPath: '/admin/dashboard'
-      preLoaderRoute: typeof AdminDashboardRouteImport
-      parentRoute: typeof AdminRoute
+    '/superadmin/tenants': {
+      id: '/superadmin/tenants'
+      path: '/tenants'
+      fullPath: '/superadmin/tenants'
+      preLoaderRoute: typeof SuperadminTenantsRouteImport
+      parentRoute: typeof SuperadminRoute
     }
-    '/admin/financeiro': {
-      id: '/admin/financeiro'
+    '/superadmin/logs': {
+      id: '/superadmin/logs'
+      path: '/logs'
+      fullPath: '/superadmin/logs'
+      preLoaderRoute: typeof SuperadminLogsRouteImport
+      parentRoute: typeof SuperadminRoute
+    }
+    '/superadmin/financeiro': {
+      id: '/superadmin/financeiro'
       path: '/financeiro'
-      fullPath: '/admin/financeiro'
-      preLoaderRoute: typeof AdminFinanceiroRouteImport
-      parentRoute: typeof AdminRoute
+      fullPath: '/superadmin/financeiro'
+      preLoaderRoute: typeof SuperadminFinanceiroRouteImport
+      parentRoute: typeof SuperadminRoute
     }
-    '/admin/marketing': {
-      id: '/admin/marketing'
-      path: '/marketing'
-      fullPath: '/admin/marketing'
-      preLoaderRoute: typeof AdminMarketingRouteImport
-      parentRoute: typeof AdminRoute
+    '/superadmin/dashboard': {
+      id: '/superadmin/dashboard'
+      path: '/dashboard'
+      fullPath: '/superadmin/dashboard'
+      preLoaderRoute: typeof SuperadminDashboardRouteImport
+      parentRoute: typeof SuperadminRoute
     }
-    '/admin/produtos': {
-      id: '/admin/produtos'
-      path: '/produtos'
-      fullPath: '/admin/produtos'
-      preLoaderRoute: typeof AdminProdutosRouteImport
-      parentRoute: typeof AdminRoute
-    }
-    '/admin/relatorios': {
-      id: '/admin/relatorios'
-      path: '/relatorios'
-      fullPath: '/admin/relatorios'
-      preLoaderRoute: typeof AdminRelatoriosRouteImport
-      parentRoute: typeof AdminRoute
-    }
-    '/admin/services': {
-      id: '/admin/services'
-      path: '/services'
-      fullPath: '/admin/services'
-      preLoaderRoute: typeof AdminServicesRouteImport
-      parentRoute: typeof AdminRoute
-    }
-    '/admin/usuarios': {
-      id: '/admin/usuarios'
-      path: '/usuarios'
-      fullPath: '/admin/usuarios'
-      preLoaderRoute: typeof AdminUsuariosRouteImport
-      parentRoute: typeof AdminRoute
-    }
-    '/barber/agenda': {
-      id: '/barber/agenda'
-      path: '/agenda'
-      fullPath: '/barber/agenda'
-      preLoaderRoute: typeof BarberAgendaRouteImport
+    '/barber/login': {
+      id: '/barber/login'
+      path: '/login'
+      fullPath: '/barber/login'
+      preLoaderRoute: typeof BarberLoginRouteImport
       parentRoute: typeof BarberRoute
     }
     '/barber/dashboard': {
@@ -391,12 +446,110 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof BarberDashboardRouteImport
       parentRoute: typeof BarberRoute
     }
-    '/barber/login': {
-      id: '/barber/login'
-      path: '/login'
-      fullPath: '/barber/login'
-      preLoaderRoute: typeof BarberLoginRouteImport
+    '/barber/agenda': {
+      id: '/barber/agenda'
+      path: '/agenda'
+      fullPath: '/barber/agenda'
+      preLoaderRoute: typeof BarberAgendaRouteImport
       parentRoute: typeof BarberRoute
+    }
+    '/admin/whatsapp-qr': {
+      id: '/admin/whatsapp-qr'
+      path: '/whatsapp-qr'
+      fullPath: '/admin/whatsapp-qr'
+      preLoaderRoute: typeof AdminWhatsappQrRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/whatsapp': {
+      id: '/admin/whatsapp'
+      path: '/whatsapp'
+      fullPath: '/admin/whatsapp'
+      preLoaderRoute: typeof AdminWhatsappRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/usuarios': {
+      id: '/admin/usuarios'
+      path: '/usuarios'
+      fullPath: '/admin/usuarios'
+      preLoaderRoute: typeof AdminUsuariosRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/services': {
+      id: '/admin/services'
+      path: '/services'
+      fullPath: '/admin/services'
+      preLoaderRoute: typeof AdminServicesRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/rotina': {
+      id: '/admin/rotina'
+      path: '/rotina'
+      fullPath: '/admin/rotina'
+      preLoaderRoute: typeof AdminRotinaRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/relatorios': {
+      id: '/admin/relatorios'
+      path: '/relatorios'
+      fullPath: '/admin/relatorios'
+      preLoaderRoute: typeof AdminRelatoriosRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/produtos': {
+      id: '/admin/produtos'
+      path: '/produtos'
+      fullPath: '/admin/produtos'
+      preLoaderRoute: typeof AdminProdutosRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/financeiro': {
+      id: '/admin/financeiro'
+      path: '/financeiro'
+      fullPath: '/admin/financeiro'
+      preLoaderRoute: typeof AdminFinanceiroRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/dashboard': {
+      id: '/admin/dashboard'
+      path: '/dashboard'
+      fullPath: '/admin/dashboard'
+      preLoaderRoute: typeof AdminDashboardRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/conversas': {
+      id: '/admin/conversas'
+      path: '/conversas'
+      fullPath: '/admin/conversas'
+      preLoaderRoute: typeof AdminConversasRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/configuracoes': {
+      id: '/admin/configuracoes'
+      path: '/configuracoes'
+      fullPath: '/admin/configuracoes'
+      preLoaderRoute: typeof AdminConfiguracoesRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/comissoes': {
+      id: '/admin/comissoes'
+      path: '/comissoes'
+      fullPath: '/admin/comissoes'
+      preLoaderRoute: typeof AdminComissoesRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/barbers': {
+      id: '/admin/barbers'
+      path: '/barbers'
+      fullPath: '/admin/barbers'
+      preLoaderRoute: typeof AdminBarbersRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/appointments': {
+      id: '/admin/appointments'
+      path: '/appointments'
+      fullPath: '/admin/appointments'
+      preLoaderRoute: typeof AdminAppointmentsRouteImport
+      parentRoute: typeof AdminRoute
     }
   }
 }
@@ -406,13 +559,16 @@ interface AdminRouteChildren {
   AdminBarbersRoute: typeof AdminBarbersRoute
   AdminComissoesRoute: typeof AdminComissoesRoute
   AdminConfiguracoesRoute: typeof AdminConfiguracoesRoute
+  AdminConversasRoute: typeof AdminConversasRoute
   AdminDashboardRoute: typeof AdminDashboardRoute
   AdminFinanceiroRoute: typeof AdminFinanceiroRoute
-  AdminMarketingRoute: typeof AdminMarketingRoute
   AdminProdutosRoute: typeof AdminProdutosRoute
   AdminRelatoriosRoute: typeof AdminRelatoriosRoute
+  AdminRotinaRoute: typeof AdminRotinaRoute
   AdminServicesRoute: typeof AdminServicesRoute
   AdminUsuariosRoute: typeof AdminUsuariosRoute
+  AdminWhatsappRoute: typeof AdminWhatsappRoute
+  AdminWhatsappQrRoute: typeof AdminWhatsappQrRoute
 }
 
 const AdminRouteChildren: AdminRouteChildren = {
@@ -420,13 +576,16 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminBarbersRoute: AdminBarbersRoute,
   AdminComissoesRoute: AdminComissoesRoute,
   AdminConfiguracoesRoute: AdminConfiguracoesRoute,
+  AdminConversasRoute: AdminConversasRoute,
   AdminDashboardRoute: AdminDashboardRoute,
   AdminFinanceiroRoute: AdminFinanceiroRoute,
-  AdminMarketingRoute: AdminMarketingRoute,
   AdminProdutosRoute: AdminProdutosRoute,
   AdminRelatoriosRoute: AdminRelatoriosRoute,
+  AdminRotinaRoute: AdminRotinaRoute,
   AdminServicesRoute: AdminServicesRoute,
   AdminUsuariosRoute: AdminUsuariosRoute,
+  AdminWhatsappRoute: AdminWhatsappRoute,
+  AdminWhatsappQrRoute: AdminWhatsappQrRoute,
 }
 
 const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
@@ -446,12 +605,31 @@ const BarberRouteChildren: BarberRouteChildren = {
 const BarberRouteWithChildren =
   BarberRoute._addFileChildren(BarberRouteChildren)
 
+interface SuperadminRouteChildren {
+  SuperadminDashboardRoute: typeof SuperadminDashboardRoute
+  SuperadminFinanceiroRoute: typeof SuperadminFinanceiroRoute
+  SuperadminLogsRoute: typeof SuperadminLogsRoute
+  SuperadminTenantsRoute: typeof SuperadminTenantsRoute
+}
+
+const SuperadminRouteChildren: SuperadminRouteChildren = {
+  SuperadminDashboardRoute: SuperadminDashboardRoute,
+  SuperadminFinanceiroRoute: SuperadminFinanceiroRoute,
+  SuperadminLogsRoute: SuperadminLogsRoute,
+  SuperadminTenantsRoute: SuperadminTenantsRoute,
+}
+
+const SuperadminRouteWithChildren = SuperadminRoute._addFileChildren(
+  SuperadminRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRouteWithChildren,
   BarberRoute: BarberRouteWithChildren,
   LoginRoute: LoginRoute,
   SignupRoute: SignupRoute,
+  SuperadminRoute: SuperadminRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

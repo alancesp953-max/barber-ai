@@ -1,8 +1,6 @@
-import { createFileRoute, redirect } from '@tanstack/react-router'
+import { createFileRoute } from '@tanstack/react-router'
+import BarberLogin from '../../pages/barber/Login'
 
-/** Login unificado em /login — barbeiro e admin */
 export const Route = createFileRoute('/barber/login')({
-  beforeLoad: () => {
-    throw redirect({ to: '/login' })
-  },
+  component: BarberLogin,
 })
