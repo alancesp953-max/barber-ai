@@ -66,6 +66,7 @@ export interface Barber {
   intervalo_ativo?: boolean | null
   intervalo_inicio?: string | null
   intervalo_fim?: string | null
+  ordem_rodizio?: number | null
 }
 
 export type CreateBarberInput = {
@@ -84,6 +85,7 @@ export type CreateBarberInput = {
   photoUrl?: string | null
   ativo?: boolean
   active?: boolean
+  ordem_rodizio?: number | null
 }
 
 export interface Service {

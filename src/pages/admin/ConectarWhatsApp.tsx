@@ -1,5 +1,19 @@
 import { useState, useEffect, useRef } from 'react'
-import { QrCode, Smartphone, Wifi, RefreshCw, LogOut, CheckCircle2, AlertCircle, Info, ShieldCheck } from 'lucide-react'
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  Group,
+  List,
+  NativeSelect,
+  SimpleGrid,
+  Stack,
+  Text,
+  ThemeIcon,
+  Title,
+} from '@mantine/core'
+import { IconBrandWhatsapp, IconQrcode, IconRefresh, IconShieldCheck } from '@tabler/icons-react'
 import { PageHeader } from '../../components/PageHeader'
 import { useAuth } from '../../lib/firebaseAuth'
 import { getBotActive, saveBotActive } from '../../lib/api'
@@ -139,236 +153,188 @@ export default function ConectarWhatsApp() {
     }
   }
 
+  const statusLabel =
+    statusData.status === 'connected'
+      ? 'WhatsApp conectado'
+      : statusData.status === 'waiting_qr'
+        ? 'Aguardando leitura do QR Code'
+        : statusData.status === 'connecting'
+          ? 'Iniciando sessão...'
+          : 'WhatsApp desconectado'
+
   return (
-    <div className="space-y-6">
+    <Stack gap="lg">
       <PageHeader
-        title="WhatsApp — Conectar Número"
-        description="Conecte o WhatsApp da barbearia diretamente via QR Code, sem custos de intermediários."
+        title="WhatsApp — Conectar número"
+        description="Pareie o WhatsApp da barbearia pelo Baileys local. O bot ativo fica gravado no Firestore."
       />
 
       {errorMsg && (
-        <div className="flex items-center gap-3 p-4 rounded-xl border border-red-500/30 bg-red-500/10 text-red-400 text-sm">
-          <AlertCircle className="w-5 h-5 shrink-0" />
-          <span>{errorMsg}</span>
-        </div>
+        <Alert color="red" variant="light">
+          {errorMsg}
+        </Alert>
       )}
 
-      {/* Card Principal de Conexão */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Painel Esquerdo: Status e Ações */}
-        <div className="lg:col-span-6 space-y-6">
-          <div className="p-6 rounded-2xl border border-barber-gold/20 bg-barber-gray/50 space-y-5">
-            <h3 className="text-base font-semibold text-barber-white flex items-center gap-2">
-              <Smartphone className="w-5 h-5 text-barber-gold" />
-              Status da Conexão
-            </h3>
+      <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
+        <Stack gap="lg">
+          <Card withBorder padding="lg" radius="lg">
+            <Group gap="sm" mb="md">
+              <ThemeIcon color="gold" variant="light" size="lg" radius="md">
+                <IconBrandWhatsapp size={18} />
+              </ThemeIcon>
+              <Title order={4} c="gold">
+                Status da conexão
+              </Title>
+            </Group>
 
-            {/* Badge de Status */}
-            <div className="flex items-center justify-between p-4 rounded-xl bg-barber-black/60 border border-barber-gold/10">
-              <div className="flex items-center gap-3">
-                {statusData.status === 'connected' ? (
-                  <span className="relative flex h-3.5 w-3.5">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-emerald-500"></span>
-                  </span>
-                ) : statusData.status === 'waiting_qr' ? (
-                  <span className="relative flex h-3.5 w-3.5">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-amber-500"></span>
-                  </span>
-                ) : statusData.status === 'connecting' ? (
-                  <RefreshCw className="w-4 h-4 text-cyan-400 animate-spin" />
-                ) : (
-                  <span className="h-3.5 w-3.5 rounded-full bg-red-500"></span>
-                )}
-
-                <div>
-                  <div className="text-sm font-semibold text-barber-white">
-                    {statusData.status === 'connected' && 'WhatsApp Conectado'}
-                    {statusData.status === 'waiting_qr' && 'Aguardando Leitura do QR Code'}
-                    {statusData.status === 'connecting' && 'Iniciando Sessão...'}
-                    {statusData.status === 'disconnected' && 'WhatsApp Desconectado'}
-                  </div>
-                  <div className="text-xs text-barber-white/60">
-                    {statusData.status === 'connected' && statusData.phoneNumber
-                      ? `Número: +${statusData.phoneNumber}`
-                      : 'Nenhum número pareado no momento'}
-                  </div>
-                </div>
+            <Group justify="space-between" align="center" mb="md">
+              <div>
+                <Text fw={600}>{statusLabel}</Text>
+                <Text size="xs" c="dimmed">
+                  {statusData.status === 'connected' && statusData.phoneNumber
+                    ? `Número: +${statusData.phoneNumber}`
+                    : 'Nenhum número pareado no momento'}
+                </Text>
               </div>
-
               {statusData.status === 'connected' && (
-                <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-medium">
-                  <CheckCircle2 className="w-3.5 h-3.5" />
+                <Badge color="teal" variant="light">
                   Ativo
-                </div>
+                </Badge>
               )}
-            </div>
+            </Group>
 
-            {/* Metadados da conexão */}
             {statusData.status === 'connected' && (
-              <div className="space-y-2 text-xs text-barber-white/70 bg-barber-black/30 p-4 rounded-xl border border-barber-gold/10">
-                <div className="flex justify-between">
-                  <span className="text-barber-white/50">Data da Conexão:</span>
-                  <span className="font-mono text-barber-white">
+              <Stack gap={6} mb="md">
+                <Group justify="space-between">
+                  <Text size="xs" c="dimmed">
+                    Data da conexão
+                  </Text>
+                  <Text size="xs">
                     {statusData.connectedAt ? new Date(statusData.connectedAt).toLocaleString('pt-BR') : 'Hoje'}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-barber-white/50">Dispositivo:</span>
-                  <span className="text-barber-gold font-medium">WhatsApp Web (Sessão Isolada)</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-barber-white/50">IA de Agendamento:</span>
-                  <span className="text-emerald-400 font-medium">Pronta para responder</span>
-                </div>
-              </div>
+                  </Text>
+                </Group>
+                <Group justify="space-between">
+                  <Text size="xs" c="dimmed">
+                    Dispositivo
+                  </Text>
+                  <Text size="xs" c="gold.4">
+                    WhatsApp Web (sessão local)
+                  </Text>
+                </Group>
+              </Stack>
             )}
 
-            <label className="block text-xs text-barber-white/70">
-              Bot ativo
-              <select
-                value={botAtivo ? 'true' : 'false'}
-                disabled={savingBot}
-                onChange={(e) => handleBotChange(e.target.value === 'true')}
-                className="mt-1 w-full rounded-xl border border-barber-gold/30 bg-barber-black px-3 py-2 text-sm text-barber-white"
-              >
-                <option value="false">Não — bot desligado</option>
-                <option value="true">Sim — bot ligado</option>
-              </select>
-            </label>
-            {botMsg && <p className="text-xs text-barber-gold">{botMsg}</p>}
+            <NativeSelect
+              label="Bot ativo"
+              value={botAtivo ? 'true' : 'false'}
+              disabled={savingBot}
+              onChange={(e) => handleBotChange(e.currentTarget.value === 'true')}
+              data={[
+                { value: 'false', label: 'Não — bot desligado' },
+                { value: 'true', label: 'Sim — bot ligado' },
+              ]}
+              maw={360}
+            />
+            {botMsg && (
+              <Text size="xs" c="gold.4" mt="xs">
+                {botMsg}
+              </Text>
+            )}
 
-            {/* Botões de Ação */}
-            <div className="flex flex-wrap gap-3 pt-2">
+            <Group gap="sm" mt="lg">
               {statusData.status === 'disconnected' && (
-                <button
-                  onClick={handleConnect}
-                  disabled={actionLoading}
-                  className="flex-1 flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-barber-gold text-barber-black font-semibold hover:bg-barber-gold/90 transition shadow-lg shadow-barber-gold/10 disabled:opacity-50 cursor-pointer"
-                >
-                  {actionLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Wifi className="w-4 h-4" />}
+                <Button color="gold" c="dark.9" onClick={handleConnect} loading={actionLoading}>
                   Conectar WhatsApp
-                </button>
+                </Button>
               )}
-
-              {statusData.status === 'waiting_qr' && (
-                <button
-                  onClick={handleReconnect}
-                  disabled={actionLoading}
-                  className="flex-1 flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-barber-gold text-barber-black font-semibold hover:bg-barber-gold/90 transition shadow-lg shadow-barber-gold/10 disabled:opacity-50 cursor-pointer"
-                >
-                  <RefreshCw className={`w-4 h-4 ${actionLoading ? 'animate-spin' : ''}`} />
-                  Gerar Novo QR Code
-                </button>
+              {(statusData.status === 'waiting_qr' || statusData.status === 'connecting') && (
+                <Button color="gold" c="dark.9" onClick={handleReconnect} loading={actionLoading} leftSection={<IconRefresh size={16} />}>
+                  Gerar novo QR Code
+                </Button>
               )}
-
               {statusData.status === 'connected' && (
                 <>
-                  <button
-                    onClick={handleReconnect}
-                    disabled={actionLoading}
-                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-barber-gold/30 text-barber-gold hover:bg-barber-gold/10 transition text-sm font-medium cursor-pointer"
-                  >
-                    <RefreshCw className="w-4 h-4" />
+                  <Button variant="outline" color="gold" onClick={handleReconnect} loading={actionLoading}>
                     Reconectar
-                  </button>
-                  <button
-                    onClick={handleDisconnect}
-                    disabled={actionLoading}
-                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-red-500/30 text-red-400 hover:bg-red-500/10 transition text-sm font-medium cursor-pointer"
-                  >
-                    <LogOut className="w-4 h-4" />
+                  </Button>
+                  <Button variant="outline" color="red" onClick={handleDisconnect} loading={actionLoading}>
                     Desconectar WhatsApp
-                  </button>
+                  </Button>
                 </>
               )}
-            </div>
-          </div>
+            </Group>
+          </Card>
 
-          {/* Card Informativo de Segurança */}
-          <div className="p-5 rounded-2xl border border-barber-gold/15 bg-barber-black/40 space-y-3">
-            <div className="flex items-center gap-2 text-barber-gold text-sm font-semibold">
-              <ShieldCheck className="w-4 h-4" />
-              Isolamento e Segurança Multi-Tenant
-            </div>
-            <p className="text-xs text-barber-white/70 leading-relaxed">
-              A sessão deste WhatsApp fica isolada exclusivamente no servidor da sua barbearia. As credenciais nunca
-              são expostas no navegador e não há compartilhamento de dados com outros estabelecimentos.
-            </p>
-          </div>
-        </div>
+          <Card withBorder padding="lg" radius="lg">
+            <Group gap="sm" mb="xs">
+              <ThemeIcon color="gold" variant="light" radius="md">
+                <IconShieldCheck size={16} />
+              </ThemeIcon>
+              <Text fw={600} c="gold.4">
+                Sessão local
+              </Text>
+            </Group>
+            <Text size="sm" c="dimmed">
+              A sessão fica no servidor desta barbearia. O estado do bot é gravado no Firestore e a Diva só responde quando ele está ligado.
+            </Text>
+          </Card>
+        </Stack>
 
-        {/* Painel Direito: Exibição do QR Code ou Instruções */}
-        <div className="lg:col-span-6">
-          <div className="p-6 rounded-2xl border border-barber-gold/20 bg-barber-gray/50 flex flex-col items-center justify-center min-h-[420px] text-center space-y-5">
+        <Card withBorder padding="lg" radius="lg">
+          <Stack align="center" gap="md" mih={420} justify="center">
             {statusData.status === 'waiting_qr' && statusData.qrCode ? (
-              <div className="space-y-5 flex flex-col items-center">
-                <div className="p-4 rounded-2xl bg-white shadow-2xl border-4 border-barber-gold/40 inline-block animate-fadeIn">
-                  <img
-                    src={statusData.qrCode}
-                    alt="QR Code WhatsApp Web"
-                    className="w-64 h-64 object-contain rounded-lg"
-                  />
+              <>
+                <div style={{ padding: 16, background: '#fff', borderRadius: 12 }}>
+                  <img src={statusData.qrCode} alt="QR Code WhatsApp Baileys" style={{ width: 256, height: 256, display: 'block' }} />
                 </div>
-
-                <div className="space-y-1.5 max-w-sm">
-                  <p className="text-sm font-medium text-barber-white">
-                    Escaneie este código com a câmera do seu WhatsApp
-                  </p>
-                  <p className="text-xs text-barber-white/50">
-                    O QR Code atualiza automaticamente em caso de expiração. Mantenha esta tela aberta.
-                  </p>
-                </div>
-              </div>
+                <Text fw={600} ta="center">
+                  Escaneie este código com a câmera do WhatsApp
+                </Text>
+                <Text size="xs" c="dimmed" ta="center" maw={360}>
+                  O QR atualiza sozinho se expirar. Mantenha esta tela aberta.
+                </Text>
+              </>
             ) : statusData.status === 'connected' ? (
-              <div className="space-y-4 max-w-sm">
-                <div className="w-20 h-20 mx-auto rounded-full bg-emerald-500/10 border-2 border-emerald-500/40 flex items-center justify-center">
-                  <CheckCircle2 className="w-10 h-10 text-emerald-400" />
-                </div>
-                <h4 className="text-lg font-semibold text-barber-white">WhatsApp Conectado e Operando</h4>
-                <p className="text-xs text-barber-white/60">
-                  Todas as conversas recebidas por este número estão sendo sincronizadas na aba{' '}
-                  <strong className="text-barber-gold">Conversas Reais</strong> e atendidas pela IA.
-                </p>
-              </div>
+              <>
+                <ThemeIcon color="teal" variant="light" size={72} radius="xl">
+                  <IconBrandWhatsapp size={36} />
+                </ThemeIcon>
+                <Title order={4}>WhatsApp conectado</Title>
+                <Text size="sm" c="dimmed" ta="center" maw={360}>
+                  As mensagens deste número passam pelo Baileys local e a Diva responde quando o bot está ligado.
+                </Text>
+              </>
             ) : statusData.status === 'connecting' ? (
-              <div className="space-y-4 max-w-sm">
-                <RefreshCw className="w-12 h-12 text-barber-gold mx-auto animate-spin" />
-                <h4 className="text-base font-semibold text-barber-white">Inicializando motor WhatsApp...</h4>
-                <p className="text-xs text-barber-white/60">
-                  Aguarde enquanto preparamos a sessão para gerar seu QR Code de autenticação.
-                </p>
-              </div>
+              <>
+                <ThemeIcon color="gold" variant="light" size={72} radius="xl">
+                  <IconRefresh size={36} />
+                </ThemeIcon>
+                <Title order={4}>Inicializando WhatsApp</Title>
+                <Text size="sm" c="dimmed" ta="center" maw={360}>
+                  Aguarde a sessão local gerar o QR Code.
+                </Text>
+              </>
             ) : (
-              <div className="space-y-4 max-w-sm">
-                <div className="w-20 h-20 mx-auto rounded-full bg-barber-gold/10 border border-barber-gold/20 flex items-center justify-center">
-                  <QrCode className="w-10 h-10 text-barber-gold" />
-                </div>
-                <h4 className="text-lg font-semibold text-barber-white">Conexão Pronta para Iniciar</h4>
-                <p className="text-xs text-barber-white/60">
-                  Clique no botão <strong className="text-barber-gold">Conectar WhatsApp</strong> ao lado para gerar o
-                  código QR e parear o número da barbearia.
-                </p>
-              </div>
+              <>
+                <ThemeIcon color="gold" variant="light" size={72} radius="xl">
+                  <IconQrcode size={36} />
+                </ThemeIcon>
+                <Title order={4}>Conexão pronta para iniciar</Title>
+                <Text size="sm" c="dimmed" ta="center" maw={360}>
+                  Clique em Conectar WhatsApp para gerar o QR e parear o número da barbearia.
+                </Text>
+              </>
             )}
 
-            {/* Passo a Passo para o Dono da Barbearia */}
-            <div className="w-full text-left pt-4 border-t border-barber-gold/10">
-              <h5 className="text-xs font-semibold uppercase tracking-wider text-barber-gold mb-2.5 flex items-center gap-1.5">
-                <Info className="w-3.5 h-3.5" />
-                Instruções no Celular
-              </h5>
-              <ol className="text-xs text-barber-white/70 space-y-1.5 list-decimal list-inside">
-                <li>Abra o aplicativo do WhatsApp no celular.</li>
-                <li>Toque em <strong className="text-barber-white">Configurações</strong> ou nos <strong className="text-barber-white">3 pontos</strong> no topo.</li>
-                <li>Selecione <strong className="text-barber-white">Aparelhos conectados</strong> e clique em <strong className="text-barber-white">Conectar um aparelho</strong>.</li>
-                <li>Aponte a câmera para o QR Code exibido nesta tela.</li>
-              </ol>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+            <List size="sm" c="dimmed" spacing={4} w="100%" maw={420}>
+              <List.Item>Abra o WhatsApp no celular.</List.Item>
+              <List.Item>Toque em Configurações ou nos três pontos.</List.Item>
+              <List.Item>Escolha Aparelhos conectados e depois Conectar um aparelho.</List.Item>
+              <List.Item>Aponte a câmera para o QR Code desta tela.</List.Item>
+            </List>
+          </Stack>
+        </Card>
+      </SimpleGrid>
+    </Stack>
   )
 }

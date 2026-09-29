@@ -1,14 +1,41 @@
-import { Plus, Star, UserPlus } from 'lucide-react'
+import {
+  Alert,
+  Button,
+  Code,
+  Group,
+  Loader,
+  Modal,
+  NumberInput,
+  Paper,
+  PasswordInput,
+  Stack,
+  Table,
+  Text,
+  TextInput,
+  Title,
+} from '@mantine/core'
+import { KeyRound, Plus, Star, UserPlus } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { createBarberUser, getUsers } from '../../lib/api'
+import { createBarberUser, getUsers, resetBarberPassword } from '../../lib/api'
 import type { Barber } from '../../types/database'
+import { PageHeader } from '../../components/PageHeader'
+
+const inputStyles = {
+  input: { background: '#0d0d0d', borderColor: 'rgba(197,160,89,0.2)', color: '#f5f5f5' },
+  label: { color: '#cfcfcf' },
+}
+
+type BarberUser = Barber & { senha_temporaria?: string | null }
 
 export default function Usuarios() {
-  const [usuarios, setUsuarios] = useState<Barber[]>([])
+  const [usuarios, setUsuarios] = useState<BarberUser[]>([])
   const [loading, setLoading] = useState(true)
   const [modalAberto, setModalAberto] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [createdInfo, setCreatedInfo] = useState<{ email: string; senha: string } | null>(null)
+  const [resettingId, setResettingId] = useState<string | null>(null)
+  const [lastReset, setLastReset] = useState<{ nome: string; senha: string } | null>(null)
 
   const [formNome, setFormNome] = useState('')
   const [formEmail, setFormEmail] = useState('')
@@ -18,7 +45,7 @@ export default function Usuarios() {
   async function loadUsuarios() {
     try {
       const data = await getUsers()
-      setUsuarios(data)
+      setUsuarios(data as BarberUser[])
     } catch (err) {
       console.error(err)
     } finally {
@@ -32,6 +59,7 @@ export default function Usuarios() {
 
   function abrirModal() {
     setError(null)
+    setCreatedInfo(null)
     setModalAberto(true)
     setFormNome('')
     setFormEmail('')
@@ -66,7 +94,7 @@ export default function Usuarios() {
         senha: formSenha,
         avaliacao: formAvaliacao,
       })
-      fecharModal()
+      setCreatedInfo({ email: formEmail.trim().toLowerCase(), senha: formSenha })
       await loadUsuarios()
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Erro ao criar usuário')
@@ -75,216 +103,202 @@ export default function Usuarios() {
     }
   }
 
-  const inputStyle: React.CSSProperties = {
-    backgroundColor: '#0d0d0d',
-    border: '1px solid #333',
-    borderRadius: '6px',
-    padding: '10px 12px',
-    color: '#f5f5f5',
-    fontSize: '14px',
-    outline: 'none',
-    width: '100%',
-    boxSizing: 'border-box',
+  async function handleResetSenha(usuario: BarberUser) {
+    setResettingId(usuario.id)
+    setLastReset(null)
+    try {
+      const result = await resetBarberPassword(usuario.id)
+      setLastReset({ nome: usuario.nome, senha: result.senha })
+      await loadUsuarios()
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Erro ao redefinir senha')
+    } finally {
+      setResettingId(null)
+    }
   }
 
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#0d0d0d', color: '#f5f5f5', padding: '32px' }}>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: '24px',
-          borderBottom: '1px solid #222',
-          paddingBottom: '12px',
-        }}
-      >
-        <div>
-          <h1 style={{ fontSize: '28px', fontWeight: 700, color: '#D4AF37', margin: 0 }}>Usuários</h1>
-          <p style={{ color: '#888', fontSize: '13px', marginTop: '6px' }}>
-            Barbeiros com conta de login no sistema
-          </p>
-        </div>
-        <button
-          onClick={abrirModal}
-          style={{
-            backgroundColor: '#D4AF37',
-            color: '#0d0d0d',
-            border: 'none',
-            borderRadius: '6px',
-            padding: '10px 20px',
-            fontSize: '14px',
-            fontWeight: 700,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-          }}
-        >
-          <Plus size={18} /> Novo Usuário
-        </button>
-      </div>
+    <Stack gap="md">
+      <PageHeader
+        title="Usuários"
+        description="Barbeiros com conta de login — entram em /login e vão direto para a agenda"
+        action={
+          <Button color="gold" c="#0A0A0A" leftSection={<Plus size={16} />} onClick={abrirModal}>
+            Novo Usuário
+          </Button>
+        }
+      />
+
+      <Alert color="gold" variant="light">
+        A coluna <strong>Senha</strong> mostra a senha temporária cadastrada. O barbeiro entra em{' '}
+        <Text span fw={700} component="a" href="/login" c="gold.4">
+          /login
+        </Text>
+        . Use “Nova senha” para gerar outra.
+      </Alert>
+
+      {lastReset && (
+        <Alert color="teal" variant="light" title={`Nova senha — ${lastReset.nome}`}>
+          Senha temporária: <Code>{lastReset.senha}</Code>
+        </Alert>
+      )}
 
       {loading ? (
-        <p style={{ color: '#aaa' }}>Carregando...</p>
+        <Group justify="center" py="xl">
+          <Loader color="gold" />
+        </Group>
       ) : (
-        <div style={{ backgroundColor: '#161616', border: '1px solid #222', borderRadius: '8px', padding: '24px' }}>
-          {usuarios.length === 0 && (
-            <p style={{ color: '#aaa', textAlign: 'center', padding: '20px' }}>
+        <Paper withBorder p="lg" radius="lg">
+          {usuarios.length === 0 ? (
+            <Text c="dimmed" ta="center" py="md">
               Nenhum usuário com login cadastrado.
-            </p>
-          )}
-          {usuarios.length > 0 && (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
-                <thead>
-                  <tr>
-                    <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #333', color: '#aaa', fontWeight: 600 }}>Nome</th>
-                    <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #333', color: '#aaa', fontWeight: 600 }}>E-mail</th>
-                    <th style={{ textAlign: 'center', padding: '10px 12px', borderBottom: '1px solid #333', color: '#aaa', fontWeight: 600 }}>Avaliação</th>
-                    <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #333', color: '#aaa', fontWeight: 600 }}>Cadastro</th>
-                  </tr>
-                </thead>
-                <tbody>
+            </Text>
+          ) : (
+            <Table.ScrollContainer minWidth={640}>
+              <Table highlightOnHover verticalSpacing="sm">
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>Nome</Table.Th>
+                    <Table.Th>E-mail</Table.Th>
+                    <Table.Th>Senha</Table.Th>
+                    <Table.Th ta="center">Avaliação</Table.Th>
+                    <Table.Th>Ações</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
                   {usuarios.map((usuario) => (
-                    <tr key={usuario.id}>
-                      <td style={{ padding: '10px 12px', borderBottom: '1px solid #222', fontWeight: 500 }}>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <UserPlus size={16} color="#D4AF37" />
-                          {usuario.nome}
-                        </span>
-                      </td>
-                      <td style={{ padding: '10px 12px', borderBottom: '1px solid #222', color: '#aaa' }}>
-                        {usuario.email || '—'}
-                      </td>
-                      <td style={{ padding: '10px 12px', borderBottom: '1px solid #222', textAlign: 'center' }}>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#ff9800' }}>
-                          <Star size={14} fill="#ff9800" /> {usuario.avaliacao?.toFixed(1) || '5.0'}
-                        </span>
-                      </td>
-                      <td style={{ padding: '10px 12px', borderBottom: '1px solid #222', color: '#888', fontSize: '13px' }}>
-                        {usuario.created_at
-                          ? new Date(usuario.created_at).toLocaleDateString('pt-BR')
-                          : '—'}
-                      </td>
-                    </tr>
+                    <Table.Tr key={usuario.id}>
+                      <Table.Td>
+                        <Group gap="xs">
+                          <UserPlus size={16} color="#c5a059" />
+                          <Text fw={500}>{usuario.nome}</Text>
+                        </Group>
+                      </Table.Td>
+                      <Table.Td c="dimmed">{usuario.email || '—'}</Table.Td>
+                      <Table.Td>
+                        {usuario.senha_temporaria ? (
+                          <Code>{usuario.senha_temporaria}</Code>
+                        ) : (
+                          <Text size="sm" c="dimmed">
+                            —
+                          </Text>
+                        )}
+                      </Table.Td>
+                      <Table.Td ta="center">
+                        <Group gap={4} justify="center" c="orange.4">
+                          <Star size={14} fill="#ff9800" />
+                          <Text size="sm">{usuario.avaliacao?.toFixed(1) || '5.0'}</Text>
+                        </Group>
+                      </Table.Td>
+                      <Table.Td>
+                        <Button
+                          size="xs"
+                          variant="light"
+                          color="gold"
+                          leftSection={<KeyRound size={14} />}
+                          loading={resettingId === usuario.id}
+                          onClick={() => void handleResetSenha(usuario)}
+                        >
+                          Nova senha
+                        </Button>
+                      </Table.Td>
+                    </Table.Tr>
                   ))}
-                </tbody>
-              </table>
-            </div>
+                </Table.Tbody>
+              </Table>
+            </Table.ScrollContainer>
           )}
-        </div>
+        </Paper>
       )}
 
-      {modalAberto && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0,0,0,0.7)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-          }}
-          onClick={fecharModal}
-        >
-          <div
-            style={{
-              backgroundColor: '#1a1a1a',
-              border: '1px solid #333',
-              borderRadius: '8px',
-              padding: '32px',
-              width: '90%',
-              maxWidth: '480px',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 style={{ fontSize: '18px', color: '#D4AF37', marginBottom: '4px', fontWeight: 600 }}>
-              Novo Usuário
-            </h2>
-            <p style={{ color: '#888', fontSize: '13px', marginBottom: '20px' }}>
-              Cria conta de login e vincula ao cadastro de barbeiro.
-            </p>
+      <Modal
+        opened={modalAberto}
+        onClose={fecharModal}
+        title={
+          <Title order={4} c="gold">
+            {createdInfo ? 'Usuário criado' : 'Novo Usuário'}
+          </Title>
+        }
+        centered
+        styles={{
+          content: { background: '#1a1a1a', border: '1px solid rgba(197,160,89,0.2)' },
+          header: { background: '#1a1a1a' },
+          body: { background: '#1a1a1a' },
+        }}
+      >
+        <Stack gap="md">
+          {createdInfo ? (
+            <>
+              <Alert color="teal" variant="light">
+                Conta criada. Anote os dados de acesso:
+              </Alert>
+              <Text size="sm">
+                E-mail: <Code>{createdInfo.email}</Code>
+              </Text>
+              <Text size="sm">
+                Senha: <Code>{createdInfo.senha}</Code>
+              </Text>
+              <Button color="gold" c="#0A0A0A" onClick={fecharModal}>
+                Fechar
+              </Button>
+            </>
+          ) : (
+            <>
+              <Text size="sm" c="dimmed">
+                Cria conta de login e vincula ao cadastro de barbeiro. A senha fica visível na lista.
+              </Text>
 
-            {error && (
-              <div
-                style={{
-                  backgroundColor: '#3a1a1a',
-                  color: '#ff6b6b',
-                  padding: '10px',
-                  borderRadius: '4px',
-                  marginBottom: '16px',
-                  fontSize: '13px',
-                }}
-              >
-                {error}
-              </div>
-            )}
+              {error && (
+                <Alert color="red" variant="light">
+                  {error}
+                </Alert>
+              )}
 
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '14px', color: '#cfcfcf', marginBottom: '16px' }}>
-              Nome *
-              <input style={inputStyle} value={formNome} onChange={(e) => setFormNome(e.target.value)} placeholder="Nome do barbeiro" />
-            </label>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '14px', color: '#cfcfcf', marginBottom: '16px' }}>
-              E-mail *
-              <input style={inputStyle} type="email" value={formEmail} onChange={(e) => setFormEmail(e.target.value)} placeholder="email@exemplo.com" />
-            </label>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '14px', color: '#cfcfcf', marginBottom: '16px' }}>
-              Senha *
-              <input style={inputStyle} type="password" value={formSenha} onChange={(e) => setFormSenha(e.target.value)} placeholder="Mínimo 6 caracteres" />
-            </label>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '14px', color: '#cfcfcf', marginBottom: '24px' }}>
-              Avaliação inicial
-              <input
-                style={inputStyle}
-                type="number"
-                value={formAvaliacao}
-                onChange={(e) => setFormAvaliacao(Number(e.target.value))}
-                min="0"
-                max="5"
-                step="0.1"
+              <TextInput
+                label="Nome *"
+                value={formNome}
+                onChange={(e) => setFormNome(e.currentTarget.value)}
+                placeholder="Nome do barbeiro"
+                styles={inputStyles}
               />
-            </label>
+              <TextInput
+                label="E-mail *"
+                type="email"
+                value={formEmail}
+                onChange={(e) => setFormEmail(e.currentTarget.value)}
+                placeholder="email@exemplo.com"
+                styles={inputStyles}
+              />
+              <PasswordInput
+                label="Senha *"
+                value={formSenha}
+                onChange={(e) => setFormSenha(e.currentTarget.value)}
+                placeholder="Mínimo 6 caracteres"
+                styles={inputStyles}
+              />
+              <NumberInput
+                label="Avaliação inicial"
+                value={formAvaliacao}
+                onChange={(v) => setFormAvaliacao(Number(v) || 0)}
+                min={0}
+                max={5}
+                step={0.1}
+                decimalScale={1}
+                styles={inputStyles}
+              />
 
-            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-              <button
-                onClick={fecharModal}
-                style={{
-                  backgroundColor: 'transparent',
-                  color: '#aaa',
-                  border: '1px solid #444',
-                  borderRadius: '6px',
-                  padding: '10px 20px',
-                  fontSize: '14px',
-                  cursor: 'pointer',
-                }}
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleSalvar}
-                disabled={saving}
-                style={{
-                  backgroundColor: '#D4AF37',
-                  color: '#0d0d0d',
-                  border: 'none',
-                  borderRadius: '6px',
-                  padding: '10px 20px',
-                  fontSize: '14px',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                }}
-              >
-                {saving ? 'Criando...' : 'Criar usuário'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+              <Group justify="flex-end">
+                <Button variant="outline" color="gray" onClick={fecharModal}>
+                  Cancelar
+                </Button>
+                <Button color="gold" c="#0A0A0A" onClick={handleSalvar} loading={saving}>
+                  Criar usuário
+                </Button>
+              </Group>
+            </>
+          )}
+        </Stack>
+      </Modal>
+    </Stack>
   )
 }

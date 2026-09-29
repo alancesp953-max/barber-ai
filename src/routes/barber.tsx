@@ -1,3 +1,4 @@
+import { Box } from '@mantine/core'
 import { createFileRoute, Outlet, redirect } from '@tanstack/react-router'
 import { getBarbeiroByUserId, requireSession } from '../lib/api'
 import { signOut } from 'firebase/auth'
@@ -19,8 +20,8 @@ export const Route = createFileRoute('/barber')({
     }
   },
   component: () => (
-    <div className="min-h-screen bg-barber-black p-8 text-barber-white">
+    <Box mih="100vh" bg="dark.8" p="xl" c="white">
       <Outlet />
-    </div>
+    </Box>
   ),
 })

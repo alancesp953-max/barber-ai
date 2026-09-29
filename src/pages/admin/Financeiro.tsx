@@ -1,189 +1,49 @@
-import { useEffect, useState } from 'react'
-import { getPagamentos, getAppointments, getClients, createPagamento, deletePagamento, getResumoFinanceiro } from '../../lib/api'
+import {
+  Badge,
+  Button,
+  Card,
+  Group,
+  Loader,
+  Modal,
+  NativeSelect,
+  SimpleGrid,
+  Stack,
+  Table,
+  Text,
+  TextInput,
+  Title,
+} from '@mantine/core'
+import { useEffect, useMemo, useState } from 'react'
+import {
+  getPagamentos,
+  getAgendamentosPendentesPagamento,
+  getClients,
+  createPagamento,
+  deletePagamento,
+  getResumoFinanceiro,
+  getPagamentosDoAgendamento,
+} from '../../lib/api'
+import { PageHeader } from '../../components/PageHeader'
+import { KPICard } from '../../components/KPICard'
+import { DollarSign, CreditCard } from 'lucide-react'
 
-const containerStyle: React.CSSProperties = {
-  minHeight: '100vh',
-  backgroundColor: '#0d0d0d',
-  color: '#f5f5f5',
-  padding: '32px',
-  fontFamily: 'Arial, Helvetica, sans-serif',
+const inputStyles = {
+  input: { background: '#0d0d0d', borderColor: 'rgba(197,160,89,0.2)', color: '#f5f5f5' },
+  label: { color: '#cfcfcf' },
 }
 
-const titleStyle: React.CSSProperties = {
-  fontSize: '28px',
-  fontWeight: 700,
-  color: '#D4AF37',
-  marginBottom: '24px',
-  borderBottom: '1px solid #222',
-  paddingBottom: '12px',
+type SplitLine = { forma: string; valor: string }
+
+function parseMoney(raw: string): number {
+  const valorLimpo = raw.replace(/\./g, '').replace(',', '.')
+  return Number(valorLimpo)
 }
 
-const cardStyle: React.CSSProperties = {
-  backgroundColor: '#161616',
-  border: '1px solid #222',
-  borderRadius: '8px',
-  padding: '24px',
-  marginBottom: '24px',
-}
-
-const resumoGrid: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-  gap: '16px',
-  marginBottom: '24px',
-}
-
-const resumoCard: React.CSSProperties = {
-  backgroundColor: '#1a1a1a',
-  border: '1px solid #333',
-  borderRadius: '8px',
-  padding: '20px',
-  textAlign: 'center',
-}
-
-const resumoValor: React.CSSProperties = {
-  fontSize: '24px',
-  fontWeight: 700,
-  color: '#4caf50',
-  marginTop: '8px',
-}
-
-const sectionTitle: React.CSSProperties = {
-  fontSize: '18px',
-  color: '#D4AF37',
-  marginBottom: '16px',
-  fontWeight: 600,
-}
-
-const tableStyle: React.CSSProperties = {
-  width: '100%',
-  borderCollapse: 'collapse',
-  fontSize: '14px',
-}
-
-const thStyle: React.CSSProperties = {
-  textAlign: 'left',
-  padding: '10px 12px',
-  borderBottom: '1px solid #333',
-  color: '#aaa',
-  fontWeight: 600,
-}
-
-const tdStyle: React.CSSProperties = {
-  padding: '10px 12px',
-  borderBottom: '1px solid #222',
-}
-
-const statusPago: React.CSSProperties = {
-  backgroundColor: '#1a3a1a',
-  color: '#4caf50',
-  padding: '4px 10px',
-  borderRadius: '4px',
-  fontSize: '12px',
-  fontWeight: 600,
-}
-
-const statusPendente: React.CSSProperties = {
-  backgroundColor: '#3a2a1a',
-  color: '#ff9800',
-  padding: '4px 10px',
-  borderRadius: '4px',
-  fontSize: '12px',
-  fontWeight: 600,
-}
-
-const btnNovo: React.CSSProperties = {
-  backgroundColor: '#D4AF37',
-  color: '#0d0d0d',
-  border: 'none',
-  borderRadius: '6px',
-  padding: '10px 20px',
-  fontSize: '14px',
-  fontWeight: 700,
-  cursor: 'pointer',
-  marginBottom: '16px',
-}
-
-const btnExcluir: React.CSSProperties = {
-  backgroundColor: 'transparent',
-  color: '#ff6b6b',
-  border: '1px solid #ff6b6b',
-  borderRadius: '4px',
-  padding: '4px 10px',
-  fontSize: '12px',
-  cursor: 'pointer',
-}
-
-const btnSalvar: React.CSSProperties = {
-  backgroundColor: '#D4AF37',
-  color: '#0d0d0d',
-  border: 'none',
-  borderRadius: '6px',
-  padding: '10px 24px',
-  fontSize: '14px',
-  fontWeight: 700,
-  cursor: 'pointer',
-}
-
-const btnCancelar: React.CSSProperties = {
-  backgroundColor: 'transparent',
-  color: '#aaa',
-  border: '1px solid #444',
-  borderRadius: '6px',
-  padding: '10px 24px',
-  fontSize: '14px',
-  cursor: 'pointer',
-}
-
-const modalOverlay: React.CSSProperties = {
-  position: 'fixed',
-  top: 0,
-  left: 0,
-  right: 0,
-  bottom: 0,
-  backgroundColor: 'rgba(0,0,0,0.7)',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  zIndex: 1000,
-}
-
-const modalContent: React.CSSProperties = {
-  backgroundColor: '#1a1a1a',
-  border: '1px solid #333',
-  borderRadius: '8px',
-  padding: '32px',
-  width: '90%',
-  maxWidth: '500px',
-}
-
-const inputStyle: React.CSSProperties = {
-  backgroundColor: '#0d0d0d',
-  border: '1px solid #333',
-  borderRadius: '6px',
-  padding: '10px 12px',
-  color: '#f5f5f5',
-  fontSize: '14px',
-  outline: 'none',
-  width: '100%',
-  boxSizing: 'border-box',
-}
-
-const labelStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '6px',
-  fontSize: '14px',
-  color: '#cfcfcf',
-  marginBottom: '16px',
-}
-
-const selectStyle: React.CSSProperties = {
-  ...inputStyle,
-  appearance: 'auto',
-}
-
-export default function Financeiro() {
+export default function Financeiro({
+  initialAgendamentoId,
+}: {
+  initialAgendamentoId?: string
+}) {
   const [pagamentos, setPagamentos] = useState<any[]>([])
   const [resumo, setResumo] = useState({ total: 0, porForma: {} as Record<string, number>, quantidade: 0 })
   const [agendamentos, setAgendamentos] = useState<any[]>([])
@@ -193,31 +53,40 @@ export default function Financeiro() {
   const [saving, setSaving] = useState(false)
 
   const [formAgendamento, setFormAgendamento] = useState('')
-  const [formValor, setFormValor] = useState('')
-  const [formForma, setFormForma] = useState('Dinheiro')
+  const [lines, setLines] = useState<SplitLine[]>([{ forma: 'Dinheiro', valor: '' }])
+  const [paidBefore, setPaidBefore] = useState(0)
 
   async function loadData() {
     try {
       const [p, r, a, c] = await Promise.all([
         getPagamentos(),
         getResumoFinanceiro(),
-        getAppointments(),
+        getAgendamentosPendentesPagamento(),
         getClients(),
       ])
       setPagamentos(p)
       setResumo(r)
       setAgendamentos(a)
       setClientes(c)
+      return a
     } catch (err) {
       console.error(err)
+      return []
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    loadData()
-  }, [])
+    void (async () => {
+      const a = await loadData()
+      if (initialAgendamentoId) {
+        setShowModal(true)
+        await handleSelectAgendamento(initialAgendamentoId, a)
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialAgendamentoId])
 
   function getClienteNome(clienteId: string) {
     return clientes.find((c) => c.id === clienteId)?.nome || 'Cliente'
@@ -225,62 +94,85 @@ export default function Financeiro() {
 
   function getAgendamentoInfo(agendamentoId: string) {
     const ag = agendamentos.find((a) => a.id === agendamentoId)
-    if (!ag) return { servico: 'N/A', barbeiro: 'N/A' }
+    if (!ag) {
+      const fromHist = pagamentos.find((p) => p.agendamento_id === agendamentoId)?.agendamentos
+      return {
+        servico: fromHist?.servicos?.nome || 'N/A',
+        barbeiro: fromHist?.barbeiros?.nome || 'N/A',
+      }
+    }
     return {
-      servico: ag.servico || ag.servico_nome || 'Serviço',
-      barbeiro: ag.barbeiro || ag.barbeiro_nome || 'Barbeiro',
+      servico: ag.servico || ag.servico_nome || ag.servicos?.nome || 'Serviço',
+      barbeiro: ag.barbeiro || ag.barbeiro_nome || ag.barbeiros?.nome || 'Barbeiro',
     }
   }
 
-  // 🔥 Quando seleciona o agendamento, já preenche o valor automaticamente
-  function handleSelectAgendamento(id: string) {
+  async function handleSelectAgendamento(id: string, list?: any[]) {
     setFormAgendamento(id)
-    const ag = agendamentos.find((a) => a.id === id)
-    if (ag) {
-      const preco = ag.preco || ag.valor || ag.servico_preco || 0
-      setFormValor(preco.toString().replace('.', ','))
+    const source = list || agendamentos
+    const ag = source.find((a) => a.id === id)
+    const total = Number(ag?.restante ?? ag?.total_comanda ?? ag?.valor ?? ag?.servicos?.preco ?? 0)
+    const pago = Number(ag?.total_pago ?? 0)
+    setPaidBefore(pago)
+    try {
+      const prev = await getPagamentosDoAgendamento(id)
+      const sum = prev
+        .filter((p: { status?: string | null }) => !p.status || p.status === 'Pago')
+        .reduce((s: number, p: { valor?: number | null }) => s + Number(p.valor || 0), 0)
+      setPaidBefore(sum)
+      const restante = Math.max(0, Number(ag?.total_comanda ?? total + sum) - sum)
+      setLines([{ forma: 'Dinheiro', valor: restante > 0 ? restante.toFixed(2).replace('.', ',') : '' }])
+    } catch {
+      setLines([{ forma: 'Dinheiro', valor: total > 0 ? total.toFixed(2).replace('.', ',') : '' }])
     }
   }
+
+  const selectedAg = useMemo(
+    () => agendamentos.find((a) => a.id === formAgendamento),
+    [agendamentos, formAgendamento],
+  )
+
+  const totalComanda = Number(
+    selectedAg?.total_comanda ?? selectedAg?.valor ?? selectedAg?.servicos?.preco ?? 0,
+  )
+  const linesSum = lines.reduce((s, l) => {
+    const n = parseMoney(l.valor || '0')
+    return s + (isNaN(n) ? 0 : n)
+  }, 0)
+  const restanteApos = Math.round((totalComanda - paidBefore - linesSum) * 100) / 100
+  const canClose = formAgendamento && lines.every((l) => parseMoney(l.valor) > 0) && Math.abs(restanteApos) < 0.01
 
   async function handleCriarPagamento() {
-    if (!formAgendamento || !formValor) {
-      alert('Preencha todos os campos!')
+    if (!formAgendamento) {
+      alert('Selecione o agendamento')
       return
     }
-
-    // 🔥 Converte vírgula para ponto antes de salvar
-    const valorLimpo = formValor.replace(/\./g, '').replace(',', '.')
-    const valorNumerico = Number(valorLimpo)
-
-    if (isNaN(valorNumerico) || valorNumerico <= 0) {
-      alert('Valor inválido!')
+    if (!canClose) {
+      alert('A soma das formas deve fechar exatamente o valor restante da comanda.')
       return
     }
 
     setSaving(true)
     try {
       const ag = agendamentos.find((a) => a.id === formAgendamento)
-
-      const dadosPagamento = {
-        agendamento_id: formAgendamento,
-        cliente_id: ag?.cliente_id || '',
-        valor: valorNumerico,
-        forma_pagamento: formForma,
-        status: 'Pago',
+      for (const line of lines) {
+        const valorNumerico = parseMoney(line.valor)
+        await createPagamento({
+          agendamento_id: formAgendamento,
+          cliente_id: ag?.cliente_id || '',
+          valor: valorNumerico,
+          forma_pagamento: line.forma,
+          status: 'Pago',
+        })
       }
-
-      console.log('📤 Enviando pagamento:', JSON.stringify(dadosPagamento, null, 2))
-
-      await createPagamento(dadosPagamento)
 
       setShowModal(false)
       setFormAgendamento('')
-      setFormValor('')
-      setFormForma('Dinheiro')
+      setLines([{ forma: 'Dinheiro', valor: '' }])
+      setPaidBefore(0)
       await loadData()
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : JSON.stringify(err)
-      console.error('❌ Erro completo ao criar pagamento:', err)
       alert('Erro ao criar pagamento: ' + message)
     } finally {
       setSaving(false)
@@ -292,157 +184,213 @@ export default function Financeiro() {
     try {
       await deletePagamento(id)
       await loadData()
-    } catch (err) {
+    } catch {
       alert('Erro ao excluir pagamento')
     }
   }
 
   if (loading) {
     return (
-      <div style={containerStyle}>
-        <p>Carregando financeiro...</p>
-      </div>
+      <Group justify="center" py="xl">
+        <Loader color="gold" />
+        <Text c="dimmed">Carregando financeiro...</Text>
+      </Group>
     )
   }
 
   return (
-    <div style={containerStyle}>
-      <h1 style={titleStyle}>💰 Financeiro</h1>
+    <Stack gap="lg">
+      <PageHeader
+        title="Financeiro"
+        description="Pagamentos e resumo de receitas"
+        action={
+          <Button color="gold" c="#0A0A0A" onClick={() => setShowModal(true)}>
+            + Novo Pagamento
+          </Button>
+        }
+      />
 
-      <div style={resumoGrid}>
-        <div style={resumoCard}>
-          <p>Total Recebido</p>
-          <p style={resumoValor}>R$ {resumo.total.toFixed(2)}</p>
-        </div>
-        <div style={resumoCard}>
-          <p>Pagamentos Hoje</p>
-          <p style={resumoValor}>{resumo.quantidade}</p>
-        </div>
+      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
+        <KPICard title="Total Recebido" value={`R$ ${resumo.total.toFixed(2)}`} icon={DollarSign} />
+        <KPICard title="Pagamentos Hoje" value={resumo.quantidade} icon={CreditCard} />
         {Object.entries(resumo.porForma).map(([forma, valor]) => (
-          <div key={forma} style={resumoCard}>
-            <p>{forma}</p>
-            <p style={resumoValor}>R$ {Number(valor).toFixed(2)}</p>
-          </div>
+          <KPICard
+            key={forma}
+            title={forma}
+            value={`R$ ${Number(valor).toFixed(2)}`}
+            icon={CreditCard}
+          />
         ))}
-      </div>
+      </SimpleGrid>
 
-      <button onClick={() => setShowModal(true)} style={btnNovo}>
-        + Novo Pagamento
-      </button>
-
-      <div style={cardStyle}>
-        <h2 style={sectionTitle}>Histórico de Pagamentos</h2>
-        {pagamentos.length === 0 && (
-          <p>Nenhum pagamento registrado.</p>
+      <Card withBorder padding="lg" radius="lg">
+        <Title order={4} c="gold" mb="md">
+          Histórico de Pagamentos
+        </Title>
+        {pagamentos.length === 0 ? (
+          <Text c="dimmed">Nenhum pagamento registrado.</Text>
+        ) : (
+          <Table.ScrollContainer minWidth={800}>
+            <Table highlightOnHover verticalSpacing="sm">
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Cliente</Table.Th>
+                  <Table.Th>Serviço</Table.Th>
+                  <Table.Th>Barbeiro</Table.Th>
+                  <Table.Th>Valor</Table.Th>
+                  <Table.Th>Forma</Table.Th>
+                  <Table.Th>Status</Table.Th>
+                  <Table.Th>Data</Table.Th>
+                  <Table.Th />
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {pagamentos.map((p) => {
+                  const info = getAgendamentoInfo(p.agendamento_id)
+                  return (
+                    <Table.Tr key={p.id}>
+                      <Table.Td>{getClienteNome(p.cliente_id)}</Table.Td>
+                      <Table.Td>{info.servico}</Table.Td>
+                      <Table.Td>{info.barbeiro}</Table.Td>
+                      <Table.Td>R$ {Number(p.valor).toFixed(2)}</Table.Td>
+                      <Table.Td>{p.forma_pagamento}</Table.Td>
+                      <Table.Td>
+                        <Badge color={p.status === 'Pago' ? 'teal' : 'orange'} variant="light">
+                          {p.status}
+                        </Badge>
+                      </Table.Td>
+                      <Table.Td>
+                        {p.created_at ? new Date(p.created_at).toLocaleDateString('pt-BR') : '-'}
+                      </Table.Td>
+                      <Table.Td>
+                        <Button size="xs" variant="outline" color="red" onClick={() => handleExcluir(p.id)}>
+                          Excluir
+                        </Button>
+                      </Table.Td>
+                    </Table.Tr>
+                  )
+                })}
+              </Table.Tbody>
+            </Table>
+          </Table.ScrollContainer>
         )}
-        {pagamentos.length > 0 && (
-          <table style={tableStyle}>
-            <thead>
-              <tr>
-                <th style={thStyle}>Cliente</th>
-                <th style={thStyle}>Serviço</th>
-                <th style={thStyle}>Barbeiro</th>
-                <th style={thStyle}>Valor</th>
-                <th style={thStyle}>Forma</th>
-                <th style={thStyle}>Status</th>
-                <th style={thStyle}>Data</th>
-                <th style={thStyle}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {pagamentos.map((p) => {
-                const info = getAgendamentoInfo(p.agendamento_id)
-                return (
-                  <tr key={p.id}>
-                    <td style={tdStyle}>{getClienteNome(p.cliente_id)}</td>
-                    <td style={tdStyle}>{info.servico}</td>
-                    <td style={tdStyle}>{info.barbeiro}</td>
-                    <td style={tdStyle}>R$ {Number(p.valor).toFixed(2)}</td>
-                    <td style={tdStyle}>{p.forma_pagamento}</td>
-                    <td style={tdStyle}>
-                      <span style={p.status === 'Pago' ? statusPago : statusPendente}>
-                        {p.status}
-                      </span>
-                    </td>
-                    <td style={tdStyle}>
-                      {p.created_at
-                        ? new Date(p.created_at).toLocaleDateString('pt-BR')
-                        : '-'}
-                    </td>
-                    <td style={tdStyle}>
-                      <button onClick={() => handleExcluir(p.id)} style={btnExcluir}>
-                        Excluir
-                      </button>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
+      </Card>
 
-      {showModal && (
-        <div style={modalOverlay} onClick={() => setShowModal(false)}>
-          <div style={modalContent} onClick={(e) => e.stopPropagation()}>
-            <h2 style={sectionTitle}>Novo Pagamento</h2>
+      <Modal
+        opened={showModal}
+        onClose={() => setShowModal(false)}
+        title={
+          <Title order={4} c="gold">
+            Baixar comanda
+          </Title>
+        }
+        centered
+        size="lg"
+        styles={{
+          content: { background: '#1a1a1a', border: '1px solid rgba(197,160,89,0.2)' },
+          header: { background: '#1a1a1a' },
+          body: { background: '#1a1a1a' },
+        }}
+      >
+        <Stack gap="md">
+          <NativeSelect
+            label="Agendamento"
+            value={formAgendamento}
+            onChange={(e) => void handleSelectAgendamento(e.currentTarget.value)}
+            data={[
+              { value: '', label: 'Selecione…' },
+              ...agendamentos.map((a) => ({
+                value: a.id,
+                label: `${a.clientes?.nome || 'Cliente'} — ${a.servicos?.nome || 'Serviço'} — R$ ${Number(a.restante ?? a.total_comanda ?? a.servicos?.preco ?? 0).toFixed(2)}`,
+              })),
+            ]}
+            styles={inputStyles}
+          />
 
-            <label style={labelStyle}>
-              Agendamento
-              <select
-                style={selectStyle}
-                value={formAgendamento}
-                onChange={(e) => handleSelectAgendamento(e.target.value)}
-              >
-                <option value="">Selecione um agendamento...</option>
-                {agendamentos
-                  .filter((a) => a.status !== 'Cancelado')
-                  .map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {getClienteNome(a.cliente_id)} - {a.servico || a.servico_nome} ({new Date(a.data || a.created_at).toLocaleDateString('pt-BR')})
-                    </option>
-                  ))}
-              </select>
-            </label>
+          {selectedAg && (
+            <Card withBorder padding="sm" radius="md">
+              <Text size="sm">
+                Cliente: <strong>{selectedAg.clientes?.nome || '—'}</strong>
+              </Text>
+              <Text size="sm">
+                Total da comanda: <strong>R$ {totalComanda.toFixed(2)}</strong>
+              </Text>
+              {paidBefore > 0 && (
+                <Text size="sm" c="dimmed">
+                  Já pago: R$ {paidBefore.toFixed(2)}
+                </Text>
+              )}
+              <Text size="sm" c="gold">
+                Restante: R$ {(totalComanda - paidBefore).toFixed(2)}
+              </Text>
+            </Card>
+          )}
 
-            <label style={labelStyle}>
-              Valor (R$)
-              <input
-                style={inputStyle}
-                type="text"
-                inputMode="decimal"
-                value={formValor}
-                onChange={(e) => setFormValor(e.target.value)}
-                placeholder="59,90"
+          <Text size="sm" fw={600} c="gold">
+            Formas de pagamento
+          </Text>
+          {lines.map((line, idx) => (
+            <Group key={idx} align="flex-end" grow>
+              <NativeSelect
+                label={idx === 0 ? 'Forma' : undefined}
+                value={line.forma}
+                onChange={(e) => {
+                  const next = [...lines]
+                  next[idx] = { ...next[idx], forma: e.currentTarget.value }
+                  setLines(next)
+                }}
+                data={['Dinheiro', 'Pix', 'Cartão Débito', 'Cartão Crédito', 'Outro']}
+                styles={inputStyles}
               />
-            </label>
-
-            <label style={labelStyle}>
-              Forma de Pagamento
-              <select
-                style={selectStyle}
-                value={formForma}
-                onChange={(e) => setFormForma(e.target.value)}
+              <TextInput
+                label={idx === 0 ? 'Valor' : undefined}
+                value={line.valor}
+                onChange={(e) => {
+                  const next = [...lines]
+                  next[idx] = { ...next[idx], valor: e.currentTarget.value }
+                  setLines(next)
+                }}
+                placeholder="0,00"
+                styles={inputStyles}
+              />
+              <Button
+                variant="outline"
+                color="red"
+                disabled={lines.length <= 1}
+                onClick={() => setLines(lines.filter((_, i) => i !== idx))}
               >
-                <option value="Dinheiro">Dinheiro</option>
-                <option value="Cartão Débito">Cartão Débito</option>
-                <option value="Cartão Crédito">Cartão Crédito</option>
-                <option value="PIX">PIX</option>
-                <option value="Outro">Outro</option>
-              </select>
-            </label>
+                Remover
+              </Button>
+            </Group>
+          ))}
 
-            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '24px' }}>
-              <button onClick={() => setShowModal(false)} style={btnCancelar}>
-                Cancelar
-              </button>
-              <button onClick={handleCriarPagamento} style={btnSalvar} disabled={saving}>
-                {saving ? 'Salvando...' : 'Registrar Pagamento'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+          <Group>
+            <Button
+              variant="outline"
+              color="gold"
+              onClick={() => setLines([...lines, { forma: 'Pix', valor: '' }])}
+            >
+              + Outra forma
+            </Button>
+            <Text size="sm" c={Math.abs(restanteApos) < 0.01 ? 'teal' : 'orange'}>
+              Soma lançamentos: R$ {linesSum.toFixed(2)}
+              {formAgendamento
+                ? ` · Diferença: R$ ${restanteApos.toFixed(2)}`
+                : ''}
+            </Text>
+          </Group>
+
+          <Button
+            color="gold"
+            c="#0A0A0A"
+            loading={saving}
+            disabled={!canClose}
+            onClick={() => void handleCriarPagamento()}
+          >
+            Baixar comanda
+          </Button>
+        </Stack>
+      </Modal>
+    </Stack>
   )
 }

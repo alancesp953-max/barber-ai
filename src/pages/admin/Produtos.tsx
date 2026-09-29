@@ -1,4 +1,29 @@
-import { Plus, Trash2, Package, ArrowDownToLine, ArrowUpFromLine, History, AlertTriangle } from 'lucide-react'
+import {
+  ActionIcon,
+  Alert,
+  Badge,
+  Button,
+  Group,
+  Loader,
+  Modal,
+  NativeSelect,
+  NumberInput,
+  Paper,
+  Stack,
+  Table,
+  Text,
+  TextInput,
+  Title,
+} from '@mantine/core'
+import {
+  Plus,
+  Trash2,
+  Package,
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  History,
+  AlertTriangle,
+} from 'lucide-react'
 import { useEffect, useState } from 'react'
 import {
   getProdutos,
@@ -12,6 +37,19 @@ import {
 } from '../../lib/api'
 import type { Produto, MovimentacaoEstoque } from '../../lib/api'
 import type { Barber } from '../../types/database'
+import { PageHeader } from '../../components/PageHeader'
+
+
+const inputStyles = {
+  input: { background: '#0d0d0d', borderColor: 'rgba(197,160,89,0.2)', color: '#f5f5f5' },
+  label: { color: '#cfcfcf' },
+}
+
+const modalStyles = {
+  content: { background: '#1a1a1a', border: '1px solid rgba(197,160,89,0.2)' },
+  header: { background: '#1a1a1a' },
+  body: { background: '#1a1a1a' },
+}
 
 export default function Produtos() {
   const [produtos, setProdutos] = useState<Produto[]>([])
@@ -25,9 +63,9 @@ export default function Produtos() {
   const [filtroProduto, setFiltroProduto] = useState('')
   const [formNome, setFormNome] = useState('')
   const [formPreco, setFormPreco] = useState('')
-  const [formEstoque, setFormEstoque] = useState('0')
-  const [formEstoqueMinimo, setFormEstoqueMinimo] = useState('5')
-  const [movQuantidade, setMovQuantidade] = useState('1')
+  const [formEstoque, setFormEstoque] = useState<number | string>('0')
+  const [formEstoqueMinimo, setFormEstoqueMinimo] = useState<number | string>('5')
+  const [movQuantidade, setMovQuantidade] = useState<number | string>('1')
   const [movObservacao, setMovObservacao] = useState('')
   const [movBarbeiroId, setMovBarbeiroId] = useState('')
   const [movComissao, setMovComissao] = useState(0)
@@ -47,17 +85,24 @@ export default function Produtos() {
       const [data, barbeirosData] = await Promise.all([getProdutos(), getBarbers()])
       setProdutos(data)
       setBarbeiros(barbeirosData)
-    } catch (err) { console.error(err) }
-    finally { setLoading(false) }
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setLoading(false)
+    }
   }
 
-  useEffect(() => { loadProdutos() }, [])
+  useEffect(() => {
+    loadProdutos()
+  }, [])
 
   async function loadMovimentacoes(produtoId?: string) {
     try {
       const data = await getMovimentacoes(produtoId)
       setMovimentacoes(data)
-    } catch (err) { console.error(err) }
+    } catch (err) {
+      console.error(err)
+    }
   }
 
   function abrirModal(tipo: string, produto?: Produto) {
@@ -72,8 +117,8 @@ export default function Produtos() {
     if (tipo === 'produto') {
       setFormNome(produto?.nome || '')
       setFormPreco(String(produto?.preco_venda || ''))
-      setFormEstoque(String(produto?.estoque_atual ?? '0'))
-      setFormEstoqueMinimo(String(produto?.estoque_minimo ?? '5'))
+      setFormEstoque(produto?.estoque_atual ?? 0)
+      setFormEstoqueMinimo(produto?.estoque_minimo ?? 5)
     }
   }
 
@@ -87,12 +132,15 @@ export default function Produtos() {
 
   function handleBarbeiroChange(id: string) {
     setMovBarbeiroId(id)
-    const barbeiro = barbeiros.find(b => b.id === id)
+    const barbeiro = barbeiros.find((b) => b.id === id)
     setMovComissao(barbeiro?.percentual_produto ?? 0)
   }
 
   async function handleSalvarProduto() {
-    if (!formNome.trim()) { setError('Nome é obrigatório'); return }
+    if (!formNome.trim()) {
+      setError('Nome é obrigatório')
+      return
+    }
     setSaving(true)
     try {
       if (produtoSelecionado) {
@@ -110,15 +158,22 @@ export default function Produtos() {
           estoque_minimo: Number(formEstoqueMinimo) || 5,
         })
       }
-      fecharModal(); await loadProdutos()
-    } catch (err: any) { setError(err.message) }
-    finally { setSaving(false) }
+      fecharModal()
+      await loadProdutos()
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
   }
 
   async function handleEntrada() {
     if (!produtoSelecionado) return
     const qtd = Number(movQuantidade)
-    if (!qtd || qtd <= 0) { setError('Quantidade inválida'); return }
+    if (!qtd || qtd <= 0) {
+      setError('Quantidade inválida')
+      return
+    }
     setSaving(true)
     try {
       await registrarEntradaEstoque({
@@ -127,15 +182,22 @@ export default function Produtos() {
         motivo: 'compra',
         observacao: movObservacao || undefined,
       })
-      fecharModal(); await loadProdutos()
-    } catch (err: any) { setError(err.message) }
-    finally { setSaving(false) }
+      fecharModal()
+      await loadProdutos()
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
   }
 
   async function handleSaida() {
     if (!produtoSelecionado) return
     const qtd = Number(movQuantidade)
-    if (!qtd || qtd <= 0) { setError('Quantidade inválida'); return }
+    if (!qtd || qtd <= 0) {
+      setError('Quantidade inválida')
+      return
+    }
     setSaving(true)
     try {
       await registrarSaidaEstoque({
@@ -145,475 +207,450 @@ export default function Produtos() {
         observacao: movObservacao || undefined,
         barbeiro_id: movBarbeiroId || undefined,
       })
-      fecharModal(); await loadProdutos()
-    } catch (err: any) { setError(err.message) }
-    finally { setSaving(false) }
+      fecharModal()
+      await loadProdutos()
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
   }
 
   async function handleExcluir(id: string) {
     if (!confirm('Excluir permanentemente?')) return
-    try { await deleteProduto(id); await loadProdutos() }
-    catch (err: any) { alert(err.message) }
+    try {
+      await deleteProduto(id)
+      await loadProdutos()
+    } catch (err: any) {
+      alert(err.message)
+    }
   }
 
-  const produtosFiltrados = produtos.filter(p =>
-    p.nome.toLowerCase().includes(filtroProduto.toLowerCase())
+  const produtosFiltrados = produtos.filter((p) =>
+    p.nome.toLowerCase().includes(filtroProduto.toLowerCase()),
   )
 
-  // 🔧 FIX: converte explicitamente para número para evitar TS2367
   const getStatus = (p: Produto) => {
     const estoque = Number(p.estoque_atual)
     const minimo = Number(p.estoque_minimo)
-    if (estoque === 0) return { cor: '#ff6b6b', texto: 'Sem estoque' }
-    if (estoque <= minimo) return { cor: '#ff9800', texto: 'Estoque baixo' }
-    return { cor: '#4caf50', texto: 'OK' }
+    if (estoque === 0) return { color: 'red', texto: 'Sem estoque' }
+    if (estoque <= minimo) return { color: 'orange', texto: 'Estoque baixo' }
+    return { color: 'teal', texto: 'OK' }
   }
 
-  // 🔧 FIX: helpers para comparar com número convertido
   const estoqueZero = (p: Produto) => Number(p.estoque_atual) === 0
   const estoqueBaixo = (p: Produto) => Number(p.estoque_atual) <= Number(p.estoque_minimo)
 
-  const inputStyle: React.CSSProperties = {
-    backgroundColor: '#0d0d0d', border: '1px solid #333', borderRadius: '6px',
-    padding: '10px 12px', color: '#f5f5f5', fontSize: '14px', outline: 'none',
-    width: '100%', boxSizing: 'border-box',
-  }
-
-  const selectStyle: React.CSSProperties = {
-    ...inputStyle, appearance: 'none', cursor: 'pointer',
-  }
-
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#0d0d0d', color: '#f5f5f5', padding: '32px' }}>
-      {/* Título + Botão Novo Produto */}
-      <div style={{
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        marginBottom: '24px', borderBottom: '1px solid #222', paddingBottom: '12px'
-      }}>
-        <h1 style={{ fontSize: '28px', fontWeight: 700, color: '#D4AF37' }}>📦 Produtos</h1>
-        <button onClick={() => abrirModal('produto')} style={{
-          backgroundColor: '#D4AF37', color: '#0d0d0d', border: 'none', borderRadius: '6px',
-          padding: '10px 20px', fontSize: '14px', fontWeight: 700, cursor: 'pointer',
-          display: 'flex', alignItems: 'center', gap: '8px'
-        }}>
-          <Plus size={18} /> Novo Produto
-        </button>
-      </div>
+    <Stack gap="md">
+      <PageHeader
+        title="Produtos"
+        description="Estoque e movimentações"
+        action={
+          <Button color="gold" c="#0A0A0A" leftSection={<Plus size={16} />} onClick={() => abrirModal('produto')}>
+            Novo Produto
+          </Button>
+        }
+      />
 
-      {/* Filtro */}
-      <div style={{ marginBottom: '16px' }}>
-        <input style={inputStyle} placeholder="Buscar produto..."
-          value={filtroProduto} onChange={e => setFiltroProduto(e.target.value)} />
-      </div>
+      <TextInput
+        placeholder="Buscar produto..."
+        value={filtroProduto}
+        onChange={(e) => setFiltroProduto(e.currentTarget.value)}
+        styles={inputStyles}
+        maw={400}
+      />
 
       {loading ? (
-        <p style={{ color: '#aaa' }}>Carregando...</p>
+        <Group justify="center" py="xl">
+          <Loader color="gold" />
+        </Group>
       ) : (
-        <div style={{
-          backgroundColor: '#161616', border: '1px solid #222', borderRadius: '8px',
-          padding: '24px', marginBottom: '24px'
-        }}>
-          {produtosFiltrados.length === 0 && (
-            <p style={{ color: '#aaa', textAlign: 'center', padding: '20px' }}>
+        <Paper withBorder p="lg" radius="lg">
+          {produtosFiltrados.length === 0 ? (
+            <Text c="dimmed" ta="center" py="md">
               {filtroProduto ? 'Nenhum produto encontrado.' : 'Nenhum produto cadastrado.'}
-            </p>
-          )}
-          {produtosFiltrados.length > 0 && (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
-                <thead>
-                  <tr>
-                    <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #333', color: '#aaa', fontWeight: 600 }}>Produto</th>
-                    <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #333', color: '#aaa', fontWeight: 600 }}>Preço</th>
-                    <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #333', color: '#aaa', fontWeight: 600 }}>Estoque</th>
-                    <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #333', color: '#aaa', fontWeight: 600 }}>Mínimo</th>
-                    <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #333', color: '#aaa', fontWeight: 600 }}>Status</th>
-                    <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #333', color: '#aaa', fontWeight: 600 }}>Ações</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {produtosFiltrados.map(p => {
+            </Text>
+          ) : (
+            <Table.ScrollContainer minWidth={800}>
+              <Table highlightOnHover verticalSpacing="sm">
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>Produto</Table.Th>
+                    <Table.Th>Preço</Table.Th>
+                    <Table.Th>Estoque</Table.Th>
+                    <Table.Th>Mínimo</Table.Th>
+                    <Table.Th>Status</Table.Th>
+                    <Table.Th>Ações</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {produtosFiltrados.map((p) => {
                     const st = getStatus(p)
                     return (
-                      <tr key={p.id} style={{
-                        backgroundColor: estoqueZero(p) ? '#1a0a0a' : undefined
-                      }}>
-                        <td style={{ padding: '10px 12px', borderBottom: '1px solid #222' }}>
-                          <Package size={16} color="#D4AF37" style={{ marginRight: '8px', verticalAlign: 'middle' }} />
-                          <span style={{ fontWeight: 500 }}>{p.nome}</span>
-                        </td>
-                        <td style={{ padding: '10px 12px', borderBottom: '1px solid #222' }}>
-                          R$ {Number(p.preco_venda).toFixed(2)}
-                        </td>
-                        <td style={{ padding: '10px 12px', borderBottom: '1px solid #222' }}>
-                          <span style={{
-                            fontWeight: 700, fontSize: '16px',
-                            color: estoqueZero(p) ? '#ff6b6b' : estoqueBaixo(p) ? '#ff9800' : '#4caf50'
-                          }}>
+                      <Table.Tr
+                        key={p.id}
+                        style={{ background: estoqueZero(p) ? 'rgba(40,10,10,0.4)' : undefined }}
+                      >
+                        <Table.Td>
+                          <Group gap="xs">
+                            <Package size={16} color="#c5a059" />
+                            <Text fw={500}>{p.nome}</Text>
+                          </Group>
+                        </Table.Td>
+                        <Table.Td>R$ {Number(p.preco_venda).toFixed(2)}</Table.Td>
+                        <Table.Td>
+                          <Text
+                            fw={700}
+                            c={estoqueZero(p) ? 'red.4' : estoqueBaixo(p) ? 'orange.4' : 'teal.4'}
+                          >
                             {p.estoque_atual}
-                          </span>
-                        </td>
-                        <td style={{ padding: '10px 12px', borderBottom: '1px solid #222' }}>{p.estoque_minimo}</td>
-                        <td style={{ padding: '10px 12px', borderBottom: '1px solid #222' }}>
-                          <span style={{
-                            display: 'inline-flex', alignItems: 'center', gap: '4px',
-                            backgroundColor: st.cor + '20', color: st.cor,
-                            padding: '2px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 600
-                          }}>
-                            {estoqueBaixo(p) && <AlertTriangle size={12} />}
+                          </Text>
+                        </Table.Td>
+                        <Table.Td>{p.estoque_minimo}</Table.Td>
+                        <Table.Td>
+                          <Badge
+                            color={st.color}
+                            variant="light"
+                            leftSection={estoqueBaixo(p) ? <AlertTriangle size={12} /> : undefined}
+                          >
                             {st.texto}
-                          </span>
-                        </td>
-                        <td style={{ padding: '10px 12px', borderBottom: '1px solid #222' }}>
-                          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                            <button onClick={() => abrirModal('entrada', p)} style={{
-                              backgroundColor: '#D4AF37', color: '#0d0d0d', border: 'none',
-                              borderRadius: '6px', padding: '4px 8px', fontSize: '11px',
-                              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px'
-                            }}>
-                              <ArrowDownToLine size={14} /> Entrada
-                            </button>
-                            <button onClick={() => abrirModal('saida', p)}
+                          </Badge>
+                        </Table.Td>
+                        <Table.Td>
+                          <Group gap={6} wrap="wrap">
+                            <Button
+                              size="compact-xs"
+                              color="gold"
+                              c="#0A0A0A"
+                              leftSection={<ArrowDownToLine size={12} />}
+                              onClick={() => abrirModal('entrada', p)}
+                            >
+                              Entrada
+                            </Button>
+                            <Button
+                              size="compact-xs"
+                              color="orange"
+                              c="#0A0A0A"
+                              leftSection={<ArrowUpFromLine size={12} />}
                               disabled={estoqueZero(p)}
-                              style={{
-                                backgroundColor: '#ff9800', color: '#0d0d0d', border: 'none',
-                                borderRadius: '6px', padding: '4px 8px', fontSize: '11px',
-                                cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px',
-                                opacity: estoqueZero(p) ? 0.5 : 1
-                              }}>
-                              <ArrowUpFromLine size={14} /> Saída
-                            </button>
-                            <button onClick={() => abrirModal('movimentacoes', p)} style={{
-                              backgroundColor: 'transparent', color: '#aaa', border: '1px solid #444',
-                              borderRadius: '6px', padding: '4px 8px', fontSize: '11px',
-                              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px'
-                            }}>
-                              <History size={14} /> Histórico
-                            </button>
-                            <button onClick={() => abrirModal('produto', p)} style={{
-                              backgroundColor: 'transparent', color: '#aaa', border: '1px solid #444',
-                              borderRadius: '6px', padding: '4px 8px', fontSize: '11px', cursor: 'pointer'
-                            }}>
+                              onClick={() => abrirModal('saida', p)}
+                            >
+                              Saída
+                            </Button>
+                            <Button
+                              size="compact-xs"
+                              variant="outline"
+                              color="gray"
+                              leftSection={<History size={12} />}
+                              onClick={() => abrirModal('movimentacoes', p)}
+                            >
+                              Histórico
+                            </Button>
+                            <Button
+                              size="compact-xs"
+                              variant="outline"
+                              color="gray"
+                              onClick={() => abrirModal('produto', p)}
+                            >
                               Editar
-                            </button>
-                            <button onClick={() => handleExcluir(p.id)} style={{
-                              backgroundColor: 'transparent', color: '#ff6b6b', border: '1px solid #ff6b6b',
-                              borderRadius: '4px', padding: '4px 10px', fontSize: '12px', cursor: 'pointer'
-                            }}>
+                            </Button>
+                            <ActionIcon
+                              variant="outline"
+                              color="red"
+                              size="sm"
+                              onClick={() => handleExcluir(p.id)}
+                            >
                               <Trash2 size={14} />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
+                            </ActionIcon>
+                          </Group>
+                        </Table.Td>
+                      </Table.Tr>
                     )
                   })}
-                </tbody>
-              </table>
-            </div>
+                </Table.Tbody>
+              </Table>
+            </Table.ScrollContainer>
           )}
-        </div>
+        </Paper>
       )}
 
-      {/* Modal Novo/Editar Produto */}
-      {modalAberto === 'produto' && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center',
-          justifyContent: 'center', zIndex: 1000
-        }} onClick={fecharModal}>
-          <div style={{
-            backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '8px',
-            padding: '32px', width: '90%', maxWidth: '500px'
-          }} onClick={e => e.stopPropagation()}>
-            <h2 style={{ fontSize: '18px', color: '#D4AF37', marginBottom: '16px', fontWeight: 600 }}>
-              {produtoSelecionado ? 'Editar Produto' : 'Novo Produto'}
-            </h2>
-            {error && (
-              <div style={{
-                backgroundColor: '#3a1a1a', color: '#ff6b6b', padding: '10px',
-                borderRadius: '4px', marginBottom: '16px', fontSize: '13px'
-              }}>{error}</div>
-            )}
-            <label style={{
-              display: 'flex', flexDirection: 'column', gap: '6px',
-              fontSize: '14px', color: '#cfcfcf', marginBottom: '16px'
-            }}>
-              Nome * <input style={inputStyle} value={formNome}
-                onChange={e => setFormNome(e.target.value)} placeholder="Ex: Shampoo" />
-            </label>
-            <label style={{
-              display: 'flex', flexDirection: 'column', gap: '6px',
-              fontSize: '14px', color: '#cfcfcf', marginBottom: '16px'
-            }}>
-              Preço (R$) <input style={inputStyle} value={formPreco}
-                onChange={e => setFormPreco(e.target.value)} placeholder="39,90" />
-            </label>
-            <label style={{
-              display: 'flex', flexDirection: 'column', gap: '6px',
-              fontSize: '14px', color: '#cfcfcf', marginBottom: '16px'
-            }}>
-              Estoque Inicial <input style={inputStyle} type="number"
-                value={formEstoque} onChange={e => setFormEstoque(e.target.value)} min="0" />
-            </label>
-            <label style={{
-              display: 'flex', flexDirection: 'column', gap: '6px',
-              fontSize: '14px', color: '#cfcfcf', marginBottom: '16px'
-            }}>
-              Estoque Mínimo <input style={inputStyle} type="number"
-                value={formEstoqueMinimo} onChange={e => setFormEstoqueMinimo(e.target.value)} min="0" />
-            </label>
-            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '24px' }}>
-              <button onClick={fecharModal} style={{
-                backgroundColor: 'transparent', color: '#aaa', border: '1px solid #444',
-                borderRadius: '6px', padding: '10px 20px', fontSize: '14px', cursor: 'pointer'
-              }}>Cancelar</button>
-              <button onClick={handleSalvarProduto} disabled={saving} style={{
-                backgroundColor: '#D4AF37', color: '#0d0d0d', border: 'none',
-                borderRadius: '6px', padding: '10px 20px', fontSize: '14px', fontWeight: 700,
-                cursor: 'pointer'
-              }}>
-                {saving ? 'Salvando...' : 'Salvar'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Modal
+        opened={modalAberto === 'produto'}
+        onClose={fecharModal}
+        title={
+          <Title order={4} c="gold">
+            {produtoSelecionado ? 'Editar Produto' : 'Novo Produto'}
+          </Title>
+        }
+        centered
+        styles={modalStyles}
+      >
+        <Stack gap="md">
+          {error && (
+            <Alert color="red" variant="light">
+              {error}
+            </Alert>
+          )}
+          <TextInput
+            label="Nome *"
+            value={formNome}
+            onChange={(e) => setFormNome(e.currentTarget.value)}
+            placeholder="Ex: Shampoo"
+            styles={inputStyles}
+          />
+          <TextInput
+            label="Preço (R$)"
+            value={formPreco}
+            onChange={(e) => setFormPreco(e.currentTarget.value)}
+            placeholder="39,90"
+            styles={inputStyles}
+          />
+          <NumberInput
+            label="Estoque Inicial"
+            value={formEstoque}
+            onChange={setFormEstoque}
+            min={0}
+            styles={inputStyles}
+          />
+          <NumberInput
+            label="Estoque Mínimo"
+            value={formEstoqueMinimo}
+            onChange={setFormEstoqueMinimo}
+            min={0}
+            styles={inputStyles}
+          />
+          <Group justify="flex-end">
+            <Button variant="outline" color="gray" onClick={fecharModal}>
+              Cancelar
+            </Button>
+            <Button color="gold" c="#0A0A0A" onClick={handleSalvarProduto} loading={saving}>
+              Salvar
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
 
-      {/* Modal Entrada */}
-      {modalAberto === 'entrada' && produtoSelecionado && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center',
-          justifyContent: 'center', zIndex: 1000
-        }} onClick={fecharModal}>
-          <div style={{
-            backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '8px',
-            padding: '32px', width: '90%', maxWidth: '500px'
-          }} onClick={e => e.stopPropagation()}>
-            <h2 style={{ fontSize: '18px', color: '#D4AF37', marginBottom: '16px', fontWeight: 600 }}>
-              📥 Registrar Entrada
-            </h2>
-            <p style={{ color: '#aaa', marginBottom: '16px' }}>
-              Produto: <strong style={{ color: '#D4AF37' }}>{produtoSelecionado.nome}</strong><br />
+      <Modal
+        opened={modalAberto === 'entrada' && !!produtoSelecionado}
+        onClose={fecharModal}
+        title={
+          <Title order={4} c="gold">
+            Registrar Entrada
+          </Title>
+        }
+        centered
+        styles={modalStyles}
+      >
+        {produtoSelecionado && (
+          <Stack gap="md">
+            <Text c="dimmed" size="sm">
+              Produto:{' '}
+              <Text span c="gold" fw={600}>
+                {produtoSelecionado.nome}
+              </Text>
+              <br />
               Estoque atual: <strong>{produtoSelecionado.estoque_atual}</strong>
-            </p>
+            </Text>
             {error && (
-              <div style={{
-                backgroundColor: '#3a1a1a', color: '#ff6b6b', padding: '10px',
-                borderRadius: '4px', marginBottom: '16px', fontSize: '13px'
-              }}>{error}</div>
+              <Alert color="red" variant="light">
+                {error}
+              </Alert>
             )}
-            <label style={{
-              display: 'flex', flexDirection: 'column', gap: '6px',
-              fontSize: '14px', color: '#cfcfcf', marginBottom: '16px'
-            }}>
-              Quantidade * <input style={inputStyle} type="number"
-                value={movQuantidade} onChange={e => setMovQuantidade(e.target.value)} min="1" />
-            </label>
-            <label style={{
-              display: 'flex', flexDirection: 'column', gap: '6px',
-              fontSize: '14px', color: '#cfcfcf', marginBottom: '16px'
-            }}>
-              Observação <input style={inputStyle} value={movObservacao}
-                onChange={e => setMovObservacao(e.target.value)} placeholder="Compra do fornecedor" />
-            </label>
-            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '24px' }}>
-              <button onClick={fecharModal} style={{
-                backgroundColor: 'transparent', color: '#aaa', border: '1px solid #444',
-                borderRadius: '6px', padding: '10px 20px', fontSize: '14px', cursor: 'pointer'
-              }}>Cancelar</button>
-              <button onClick={handleEntrada} disabled={saving} style={{
-                backgroundColor: '#D4AF37', color: '#0d0d0d', border: 'none',
-                borderRadius: '6px', padding: '10px 20px', fontSize: '14px', fontWeight: 700,
-                cursor: 'pointer'
-              }}>
-                {saving ? 'Registrando...' : 'Registrar Entrada'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+            <NumberInput
+              label="Quantidade *"
+              value={movQuantidade}
+              onChange={setMovQuantidade}
+              min={1}
+              styles={inputStyles}
+            />
+            <TextInput
+              label="Observação"
+              value={movObservacao}
+              onChange={(e) => setMovObservacao(e.currentTarget.value)}
+              placeholder="Compra do fornecedor"
+              styles={inputStyles}
+            />
+            <Group justify="flex-end">
+              <Button variant="outline" color="gray" onClick={fecharModal}>
+                Cancelar
+              </Button>
+              <Button color="gold" c="#0A0A0A" onClick={handleEntrada} loading={saving}>
+                Registrar Entrada
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </Modal>
 
-      {/* Modal Saída */}
-      {modalAberto === 'saida' && produtoSelecionado && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center',
-          justifyContent: 'center', zIndex: 1000
-        }} onClick={fecharModal}>
-          <div style={{
-            backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '8px',
-            padding: '32px', width: '90%', maxWidth: '500px'
-          }} onClick={e => e.stopPropagation()}>
-            <h2 style={{ fontSize: '18px', color: '#D4AF37', marginBottom: '16px', fontWeight: 600 }}>
-              📤 Registrar Saída (Venda)
-            </h2>
-            <p style={{ color: '#aaa', marginBottom: '16px' }}>
-              Produto: <strong style={{ color: '#D4AF37' }}>{produtoSelecionado.nome}</strong><br />
-              Estoque atual: <strong>{produtoSelecionado.estoque_atual}</strong><br />
-              Preço unitário: <strong style={{ color: '#D4AF37' }}>
-                R$ {Number(produtoSelecionado.preco_venda).toFixed(2)}</strong>
-            </p>
+      <Modal
+        opened={modalAberto === 'saida' && !!produtoSelecionado}
+        onClose={fecharModal}
+        title={
+          <Title order={4} c="gold">
+            Registrar Saída (Venda)
+          </Title>
+        }
+        centered
+        styles={modalStyles}
+      >
+        {produtoSelecionado && (
+          <Stack gap="md">
+            <Text c="dimmed" size="sm">
+              Produto:{' '}
+              <Text span c="gold" fw={600}>
+                {produtoSelecionado.nome}
+              </Text>
+              <br />
+              Estoque atual: <strong>{produtoSelecionado.estoque_atual}</strong>
+              <br />
+              Preço unitário:{' '}
+              <Text span c="gold" fw={600}>
+                R$ {Number(produtoSelecionado.preco_venda).toFixed(2)}
+              </Text>
+            </Text>
             {error && (
-              <div style={{
-                backgroundColor: '#3a1a1a', color: '#ff6b6b', padding: '10px',
-                borderRadius: '4px', marginBottom: '16px', fontSize: '13px'
-              }}>{error}</div>
+              <Alert color="red" variant="light">
+                {error}
+              </Alert>
             )}
-            <label style={{
-              display: 'flex', flexDirection: 'column', gap: '6px',
-              fontSize: '14px', color: '#cfcfcf', marginBottom: '16px'
-            }}>
-              Barbeiro que vendeu *
-              <select style={selectStyle} value={movBarbeiroId}
-                onChange={e => handleBarbeiroChange(e.target.value)}>
-                <option value="">Selecione um barbeiro</option>
-                {barbeiros.map(b => (
-                  <option key={b.id} value={b.id}>{b.nome}</option>
-                ))}
-              </select>
-            </label>
+            <NativeSelect
+              label="Barbeiro que vendeu *"
+              value={movBarbeiroId}
+              onChange={(e) => handleBarbeiroChange(e.currentTarget.value)}
+              data={[
+                { value: '', label: 'Selecione um barbeiro' },
+                ...barbeiros.map((b) => ({ value: b.id, label: b.nome })),
+              ]}
+              styles={inputStyles}
+            />
             {movBarbeiroId && (
-              <div style={{
-                backgroundColor: '#D4AF3715', border: '1px solid #D4AF3740',
-                borderRadius: '6px', padding: '12px', marginBottom: '16px'
-              }}>
-                <p style={{ color: '#D4AF37', fontSize: '13px', margin: 0 }}>
-                  💰 Comissão do barbeiro: <strong>{movComissao}%</strong>
-                  {valorTotal > 0 && (
-                    <span> — R$ {(valorTotal * movComissao / 100).toFixed(2)}</span>
-                  )}
-                </p>
-              </div>
+              <Alert color="gold" variant="light">
+                Comissão do barbeiro: <strong>{movComissao}%</strong>
+                {valorTotal > 0 && (
+                  <span> — R$ {((valorTotal * movComissao) / 100).toFixed(2)}</span>
+                )}
+              </Alert>
             )}
-            <label style={{
-              display: 'flex', flexDirection: 'column', gap: '6px',
-              fontSize: '14px', color: '#cfcfcf', marginBottom: '16px'
-            }}>
-              Quantidade * <input style={inputStyle} type="number"
-                value={movQuantidade} onChange={e => setMovQuantidade(e.target.value)}
-                min="1" max={produtoSelecionado.estoque_atual} />
-            </label>
-            <label style={{
-              display: 'flex', flexDirection: 'column', gap: '6px',
-              fontSize: '14px', color: '#cfcfcf', marginBottom: '16px'
-            }}>
-              Valor Total (R$)
-              <div style={{
-                backgroundColor: '#0d0d0d', border: '1px solid #333', borderRadius: '6px',
-                padding: '10px 12px', color: '#D4AF37', fontSize: '16px', fontWeight: 700,
-              }}>
-                R$ {valorTotal.toFixed(2)}
-              </div>
-            </label>
-            <label style={{
-              display: 'flex', flexDirection: 'column', gap: '6px',
-              fontSize: '14px', color: '#cfcfcf', marginBottom: '16px'
-            }}>
-              Observação <input style={inputStyle} value={movObservacao}
-                onChange={e => setMovObservacao(e.target.value)} placeholder="Venda avulsa" />
-            </label>
-            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '24px' }}>
-              <button onClick={fecharModal} style={{
-                backgroundColor: 'transparent', color: '#aaa', border: '1px solid #444',
-                borderRadius: '6px', padding: '10px 20px', fontSize: '14px', cursor: 'pointer'
-              }}>Cancelar</button>
-              <button onClick={handleSaida} disabled={saving || !movBarbeiroId} style={{
-                backgroundColor: '#ff9800', color: '#0d0d0d', border: 'none',
-                borderRadius: '6px', padding: '10px 20px', fontSize: '14px', fontWeight: 700,
-                cursor: 'pointer', opacity: saving || !movBarbeiroId ? 0.5 : 1
-              }}>
-                {saving ? 'Registrando...' : 'Registrar Saída'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+            <NumberInput
+              label="Quantidade *"
+              value={movQuantidade}
+              onChange={setMovQuantidade}
+              min={1}
+              max={produtoSelecionado.estoque_atual}
+              styles={inputStyles}
+            />
+            <TextInput
+              label="Valor Total (R$)"
+              value={`R$ ${valorTotal.toFixed(2)}`}
+              readOnly
+              styles={{
+                ...inputStyles,
+                input: { ...inputStyles.input, color: '#c5a059', fontWeight: 700 },
+              }}
+            />
+            <TextInput
+              label="Observação"
+              value={movObservacao}
+              onChange={(e) => setMovObservacao(e.currentTarget.value)}
+              placeholder="Venda avulsa"
+              styles={inputStyles}
+            />
+            <Group justify="flex-end">
+              <Button variant="outline" color="gray" onClick={fecharModal}>
+                Cancelar
+              </Button>
+              <Button
+                color="orange"
+                c="#0A0A0A"
+                onClick={handleSaida}
+                loading={saving}
+                disabled={!movBarbeiroId}
+              >
+                Registrar Saída
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </Modal>
 
-      {/* Modal Histórico */}
-      {modalAberto === 'movimentacoes' && produtoSelecionado && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center',
-          justifyContent: 'center', zIndex: 1000
-        }} onClick={fecharModal}>
-          <div style={{
-            backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '8px',
-            padding: '32px', width: '90%', maxWidth: '700px',
-            maxHeight: '90vh', overflowY: 'auto'
-          }} onClick={e => e.stopPropagation()}>
-            <h2 style={{ fontSize: '18px', color: '#D4AF37', marginBottom: '16px', fontWeight: 600 }}>
-              📊 Histórico — {produtoSelecionado.nome}
-            </h2>
-            {movimentacoes.length === 0 && (
-              <p style={{ color: '#aaa', textAlign: 'center', padding: '20px' }}>
+      <Modal
+        opened={modalAberto === 'movimentacoes' && !!produtoSelecionado}
+        onClose={fecharModal}
+        title={
+          <Title order={4} c="gold">
+            Histórico — {produtoSelecionado?.nome}
+          </Title>
+        }
+        centered
+        size="xl"
+        styles={modalStyles}
+      >
+        {produtoSelecionado && (
+          <Stack gap="md">
+            {movimentacoes.length === 0 ? (
+              <Text c="dimmed" ta="center" py="md">
                 Nenhuma movimentação.
-              </p>
-            )}
-            {movimentacoes.length > 0 && (
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
-                  <thead>
-                    <tr>
-                      <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #333', color: '#aaa', fontWeight: 600 }}>Data</th>
-                      <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #333', color: '#aaa', fontWeight: 600 }}>Tipo</th>
-                      <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #333', color: '#aaa', fontWeight: 600 }}>Qtd</th>
-                      <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #333', color: '#aaa', fontWeight: 600 }}>Barbeiro</th>
-                      <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #333', color: '#aaa', fontWeight: 600 }}>Comissão</th>
-                      <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #333', color: '#aaa', fontWeight: 600 }}>Motivo</th>
-                      <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #333', color: '#aaa', fontWeight: 600 }}>Obs</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {movimentacoes.map(m => (
-                      <tr key={m.id}>
-                        <td style={{ padding: '10px 12px', borderBottom: '1px solid #222' }}>
-                          {new Date(m.created_at).toLocaleDateString('pt-BR')}
-                        </td>
-                        <td style={{ padding: '10px 12px', borderBottom: '1px solid #222' }}>
-                          <span style={{
-                            display: 'inline-flex', padding: '2px 8px', borderRadius: '4px',
-                            fontSize: '12px', fontWeight: 600,
-                            backgroundColor: m.tipo === 'entrada' ? '#1a3a1a' : '#3a1a1a',
-                            color: m.tipo === 'entrada' ? '#4caf50' : '#ff6b6b'
-                          }}>
-                            {m.tipo === 'entrada' ? '📥 Entrada' : '📤 Saída'}
-                          </span>
-                        </td>
-                        <td style={{
-                          padding: '10px 12px', borderBottom: '1px solid #222',
-                          fontWeight: 700, fontSize: '16px',
-                          color: m.tipo === 'entrada' ? '#4caf50' : '#ff6b6b'
-                        }}>
-                          {m.tipo === 'entrada' ? '+' : '-'}{m.quantidade}
-                        </td>
-                        <td style={{ padding: '10px 12px', borderBottom: '1px solid #222', color: '#aaa' }}>
-                          {m.barbeiros?.nome || '-'}
-                        </td>
-                        <td style={{ padding: '10px 12px', borderBottom: '1px solid #222', color: '#aaa' }}>
+              </Text>
+            ) : (
+              <Table.ScrollContainer minWidth={600}>
+                <Table verticalSpacing="sm" fz="sm">
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Data</Table.Th>
+                      <Table.Th>Tipo</Table.Th>
+                      <Table.Th>Qtd</Table.Th>
+                      <Table.Th>Barbeiro</Table.Th>
+                      <Table.Th>Comissão</Table.Th>
+                      <Table.Th>Motivo</Table.Th>
+                      <Table.Th>Obs</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {movimentacoes.map((m) => (
+                      <Table.Tr key={m.id}>
+                        <Table.Td>{new Date(m.created_at).toLocaleDateString('pt-BR')}</Table.Td>
+                        <Table.Td>
+                          <Badge color={m.tipo === 'entrada' ? 'teal' : 'red'} variant="light">
+                            {m.tipo === 'entrada' ? 'Entrada' : 'Saída'}
+                          </Badge>
+                        </Table.Td>
+                        <Table.Td>
+                          <Text fw={700} c={m.tipo === 'entrada' ? 'teal.4' : 'red.4'}>
+                            {m.tipo === 'entrada' ? '+' : '-'}
+                            {m.quantidade}
+                          </Text>
+                        </Table.Td>
+                        <Table.Td c="dimmed">{m.barbeiros?.nome || '-'}</Table.Td>
+                        <Table.Td c="dimmed">
                           {m.comissao_percentual != null ? `${m.comissao_percentual}%` : '-'}
-                        </td>
-                        <td style={{ padding: '10px 12px', borderBottom: '1px solid #222', color: '#aaa', textTransform: 'capitalize' }}>
-                          {m.motivo === 'venda' ? 'Venda' : m.motivo === 'compra' ? 'Compra' : m.motivo === 'ajuste' ? 'Ajuste' : 'Perda'}
-                        </td>
-                        <td style={{ padding: '10px 12px', borderBottom: '1px solid #222', color: '#888', fontSize: '12px' }}>
+                        </Table.Td>
+                        <Table.Td c="dimmed" tt="capitalize">
+                          {m.motivo === 'venda'
+                            ? 'Venda'
+                            : m.motivo === 'compra'
+                              ? 'Compra'
+                              : m.motivo === 'ajuste'
+                                ? 'Ajuste'
+                                : 'Perda'}
+                        </Table.Td>
+                        <Table.Td c="dimmed" fz="xs">
                           {m.observacao || '-'}
-                        </td>
-                      </tr>
+                        </Table.Td>
+                      </Table.Tr>
                     ))}
-                  </tbody>
-                </table>
-              </div>
+                  </Table.Tbody>
+                </Table>
+              </Table.ScrollContainer>
             )}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '16px' }}>
-              <button onClick={fecharModal} style={{
-                backgroundColor: 'transparent', color: '#aaa', border: '1px solid #444',
-                borderRadius: '6px', padding: '10px 20px', fontSize: '14px', cursor: 'pointer'
-              }}>Fechar</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+            <Group justify="flex-end">
+              <Button variant="outline" color="gray" onClick={fecharModal}>
+                Fechar
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </Modal>
+    </Stack>
   )
 }

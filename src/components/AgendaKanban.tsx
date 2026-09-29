@@ -15,27 +15,27 @@ import type { Appointment, AppointmentStatus, Barber } from '../types/database'
 import { formatCurrency } from '../lib/format'
 
 const statusColors: Record<AppointmentStatus, string> = {
+  pendente: 'blue',
+  confirmado: 'gold',
+  concluido: 'teal',
+  cancelado: 'red',
   scheduled: 'blue',
   confirmed: 'gold',
   completed: 'teal',
   cancelled: 'red',
   no_show: 'gray',
-  pendente: 'blue',
-  confirmado: 'gold',
-  concluido: 'teal',
-  cancelado: 'red',
 }
 
 const statusLabel: Record<AppointmentStatus, string> = {
-  scheduled: 'Agendado',
-  confirmed: 'Confirmado',
-  completed: 'Concluído',
-  cancelled: 'Cancelado',
-  no_show: 'Não compareceu',
   pendente: 'Pendente',
   confirmado: 'Confirmado',
   concluido: 'Concluído',
   cancelado: 'Cancelado',
+  scheduled: 'Pendente',
+  confirmed: 'Confirmado',
+  completed: 'Concluído',
+  cancelled: 'Cancelado',
+  no_show: 'Faltou',
 }
 
 type Props = {

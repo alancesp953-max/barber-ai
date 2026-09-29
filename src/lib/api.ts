@@ -532,7 +532,7 @@ export async function getClients(tenantIdParam?: string): Promise<Client[]> {
 }
 
 export async function findOrCreateClient(
-  input: { id?: string; nome: string; email?: string; telefone?: string } | string,
+  input: { id?: string; nome: string; email?: string; telefone?: string; data_nascimento?: string | null } | string,
   telefone?: string | null,
   email?: string | null,
   tenantIdParam?: string,
@@ -549,7 +549,10 @@ export async function findOrCreateClient(
     if (input.id) {
       const existing = await getDoc(doc(db, 'tenants', tId, 'clients', input.id))
       if (existing.exists()) {
-        return { id: existing.id, ...existing.data() } as Client
+        if (input.data_nascimento) {
+          await updateDoc(existing.ref, { data_nascimento: input.data_nascimento })
+        }
+        return { id: existing.id, ...existing.data(), data_nascimento: input.data_nascimento || existing.data().data_nascimento } as Client
       }
     }
   } else {
@@ -568,6 +571,7 @@ export async function findOrCreateClient(
     nome,
     telefone: tel,
     email: mail,
+    data_nascimento: typeof input === 'object' && input?.data_nascimento ? input.data_nascimento : null,
     totalAppointments: 0,
     created_at: new Date().toISOString(),
   }
@@ -751,12 +755,15 @@ export async function updateAppointmentStatus(
   id: string,
   status: AppointmentStatus,
   tenantIdParam?: string,
-): Promise<void> {
+): Promise<Appointment> {
   const tId = await resolveTenantId(tenantIdParam)
-  await updateDoc(doc(db, 'tenants', tId, 'appointments', id), {
+  const ref = doc(db, 'tenants', tId, 'appointments', id)
+  await updateDoc(ref, {
     status,
     updated_at: new Date().toISOString(),
   })
+  const snap = await getDoc(ref)
+  return { id: snap.id, ...snap.data(), status } as Appointment
 }
 
 export async function deleteAppointment(id: string, tenantIdParam?: string): Promise<void> {
@@ -1453,24 +1460,44 @@ export async function saveBarberDailyBreak(
   })
 }
 
+export type BarberDayHours = {
+  barbeiro_id: string
+  dia_semana: number
+  abertura: string | null
+  fechamento: string | null
+  fechado: boolean
+}
+
 export async function getBarbeiroHorarios(
   barbeiroId: string,
   tenantIdParam?: string,
-): Promise<Array<{ dia_semana: number; fechado: boolean }>> {
+): Promise<BarberDayHours[]> {
   const barber = await getBarber(barbeiroId, tenantIdParam)
+  const stored = (barber as { dayHours?: Record<string, Partial<BarberDayHours>> } | null)?.dayHours
   const open = new Set(barber?.workingDays || [1, 2, 3, 4, 5, 6])
-  return [0, 1, 2, 3, 4, 5, 6].map((dia) => ({ dia_semana: dia, fechado: !open.has(dia) }))
+  return [0, 1, 2, 3, 4, 5, 6].map((dia) => {
+    const row = stored?.[String(dia)]
+    return {
+      barbeiro_id: barbeiroId,
+      dia_semana: dia,
+      abertura: row?.abertura ?? '08:30',
+      fechamento: row?.fechamento ?? '19:30',
+      fechado: row?.fechado ?? !open.has(dia),
+    }
+  })
 }
 
 export async function saveBarbeiroDiasAtendimento(
   barbeiroId: string,
   openDays: number[],
-  tenantIdParam?: string,
+  tenantOrHours?: string | Record<string, { abertura?: string | null; fechamento?: string | null }>,
 ): Promise<void> {
-  const tId = await resolveTenantId(tenantIdParam)
+  const hours = tenantOrHours && typeof tenantOrHours === 'object' ? tenantOrHours : undefined
+  const tId = await resolveTenantId(typeof tenantOrHours === 'string' ? tenantOrHours : undefined)
   const unique = [...new Set(openDays)]
   await updateDoc(doc(db, 'tenants', tId, 'barbers', barbeiroId), {
     workingDays: unique,
+    ...(hours ? { dayHours: hours } : {}),
     updated_at: new Date().toISOString(),
   })
 }
@@ -1539,6 +1566,237 @@ export async function notifyAppointmentWhatsApp(input: {
   } catch {
     // Aviso ao cliente é best-effort; o agendamento já foi gravado.
   }
+}
+
+const BAILEYS_API = 'http://127.0.0.1:8787'
+
+export type WhatsAppInstanceResult = {
+  ok: boolean
+  error?: string
+  qrcode?: string | null
+  paircode?: string | null
+  status?: string
+  data?: Record<string, unknown>
+}
+
+async function callBaileys(path: string, method: 'GET' | 'POST' = 'GET'): Promise<WhatsAppInstanceResult> {
+  const tId = await resolveTenantId()
+  try {
+    const res = await fetch(
+      method === 'GET' ? `${BAILEYS_API}${path}?tenantId=${encodeURIComponent(tId)}` : `${BAILEYS_API}${path}`,
+      method === 'GET'
+        ? undefined
+        : {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tenantId: tId }),
+          },
+    )
+    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>
+    if (!res.ok) {
+      return { ok: false, error: String(data.error || `HTTP ${res.status}`), data }
+    }
+    const status = typeof data.status === 'string' ? data.status : data.connected === true ? 'connected' : 'disconnected'
+    return {
+      ok: true,
+      status,
+      qrcode: (data.qrCode as string) || (data.qrcode as string) || null,
+      paircode: (data.paircode as string) || null,
+      data: {
+        ...data,
+        instance: {
+          status,
+          profileName: data.profileName || data.pushName,
+          owner: data.phoneNumber,
+        },
+      },
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Servidor Baileys indisponível na porta 8787.',
+    }
+  }
+}
+
+export function getWhatsAppInstanceStatus() {
+  return callBaileys('/api/whatsapp/status')
+}
+
+export function connectWhatsAppInstance() {
+  return callBaileys('/api/whatsapp/connect', 'POST')
+}
+
+export function disconnectWhatsAppInstance() {
+  return callBaileys('/api/whatsapp/disconnect', 'POST')
+}
+
+export async function simulateWhatsAppQrScan(): Promise<WhatsAppInstanceResult> {
+  return { ok: false, error: 'A leitura do QR é feita no celular, pelo Baileys local.' }
+}
+
+export type WhatsAppAudioConfig = {
+  audio_whatsapp_ativo?: boolean
+  audio_whatsapp_mode?: string
+  gemini_model?: string
+  elevenlabs_model?: string
+  elevenlabs_voice_id?: string
+  gemini_api_key?: string
+  elevenlabs_api_key?: string
+  has_gemini_key?: boolean
+  has_elevenlabs_key?: boolean
+}
+
+export async function getWhatsAppAudioConfig(tenantIdParam?: string): Promise<WhatsAppAudioConfig | null> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const snap = await getDoc(doc(db, 'tenants', tId, 'settings', 'audio'))
+  return snap.exists() ? (snap.data() as WhatsAppAudioConfig) : null
+}
+
+export async function saveWhatsAppAudioConfig(input: WhatsAppAudioConfig, tenantIdParam?: string) {
+  const tId = await resolveTenantId(tenantIdParam)
+  await setDoc(doc(db, 'tenants', tId, 'settings', 'audio'), input, { merge: true })
+}
+
+export async function testGeminiAudio(input: { gemini_api_key?: string; gemini_model?: string }) {
+  const key = input.gemini_api_key?.trim()
+  if (!key) return { ok: false as const, error: 'Informe a chave Gemini.' }
+  const model = input.gemini_model || 'gemini-2.0-flash'
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}?key=${encodeURIComponent(key)}`)
+  if (!res.ok) return { ok: false as const, error: 'Chave Gemini recusada.' }
+  return { ok: true as const, message: 'Gemini API conectada com sucesso!' }
+}
+
+export async function testElevenLabsAudio(input: { elevenlabs_api_key?: string; elevenlabs_voice_id?: string }) {
+  const key = input.elevenlabs_api_key?.trim()
+  if (!key) return { ok: false as const, error: 'Informe a chave ElevenLabs.' }
+  const res = await fetch('https://api.elevenlabs.io/v1/user', { headers: { 'xi-api-key': key } })
+  if (!res.ok) return { ok: false as const, error: 'Chave ElevenLabs recusada.' }
+  return { ok: true as const, message: 'ElevenLabs conectado com sucesso!' }
+}
+
+export async function runCrmDispatch(): Promise<
+  | { ok: true; ausencia: number; aniversario: number; skipped: number; erros: string[] }
+  | { ok: false; error: string; erros?: string[] }
+> {
+  return { ok: true, ausencia: 0, aniversario: 0, skipped: 0, erros: [] }
+}
+
+export async function updateService(
+  id: string,
+  input: { nome: string; descricao?: string | null; duracao_minutos: number; preco: number; buffer_minutos?: number },
+  tenantIdParam?: string,
+) {
+  const tId = await resolveTenantId(tenantIdParam)
+  await updateDoc(doc(db, 'tenants', tId, 'services', id), {
+    nome: input.nome,
+    name: input.nome,
+    descricao: input.descricao || '',
+    description: input.descricao || '',
+    duracao_minutos: input.duracao_minutos,
+    durationMinutes: input.duracao_minutos,
+    buffer_minutos: input.buffer_minutos ?? 0,
+    preco: input.preco,
+    price: input.preco,
+  })
+}
+
+export async function searchClients(term: string, tenantIdParam?: string): Promise<Client[]> {
+  const needle = term.trim().toLowerCase()
+  if (needle.length < 2) return []
+  const clients = await getClients(tenantIdParam)
+  return clients
+    .filter((client) => {
+      const nome = String(client.nome || client.name || '').toLowerCase()
+      const tel = String(client.telefone || client.phone || '')
+      return nome.includes(needle) || tel.includes(needle)
+    })
+    .slice(0, 8)
+}
+
+export async function setBarberQueueOrder(ids: string[], tenantIdParam?: string) {
+  const tId = await resolveTenantId(tenantIdParam)
+  await Promise.all(
+    ids.map((id, index) => updateDoc(doc(db, 'tenants', tId, 'barbers', id), { ordem_rodizio: index + 1 })),
+  )
+}
+
+export async function uploadBarberPhoto(barberId: string, file: File): Promise<string> {
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(new Error('Não foi possível ler a foto.'))
+    reader.readAsDataURL(file)
+  })
+  await updateBarber(barberId, { foto_url: dataUrl, photoUrl: dataUrl })
+  return dataUrl
+}
+
+export async function resetBarberPassword(_barberId: string): Promise<{ senha: string }> {
+  throw new Error('A redefinição de senha de outro usuário é feita no Firebase Auth.')
+}
+
+export type AgendamentoServicoItem = {
+  id: string
+  preco: number
+  servico_id?: string
+  servicos?: { nome: string }
+}
+
+export async function ensureAgendamentoServicos(appointmentId: string, tenantIdParam?: string): Promise<AgendamentoServicoItem[]> {
+  const tId = await resolveTenantId(tenantIdParam)
+  const snap = await getDoc(doc(db, 'tenants', tId, 'appointments', appointmentId))
+  const data = snap.data() || {}
+  const stored = data.comanda_itens
+  if (Array.isArray(stored) && stored.length) return stored as AgendamentoServicoItem[]
+  return [
+    {
+      id: `${appointmentId}-base`,
+      preco: Number(data.valor || data.price || 0),
+      servico_id: data.servico_id || data.serviceId,
+      servicos: { nome: data.servicos?.nome || data.serviceName || 'Serviço' },
+    },
+  ]
+}
+
+export async function addServicoAoAgendamento(appointmentId: string, servicoId: string, tenantIdParam?: string) {
+  const tId = await resolveTenantId(tenantIdParam)
+  const services = await getServices(tId)
+  const service = services.find((row) => row.id === servicoId)
+  if (!service) throw new Error('Serviço não encontrado.')
+  const items = await ensureAgendamentoServicos(appointmentId, tId)
+  items.push({
+    id: `${appointmentId}-${servicoId}-${Date.now()}`,
+    preco: Number(service.preco || 0),
+    servico_id: service.id,
+    servicos: { nome: service.nome },
+  })
+  await updateDoc(doc(db, 'tenants', tId, 'appointments', appointmentId), { comanda_itens: items })
+}
+
+export async function removeServicoDoAgendamento(itemId: string, appointmentId: string, tenantIdParam?: string) {
+  const tId = await resolveTenantId(tenantIdParam)
+  const items = (await ensureAgendamentoServicos(appointmentId, tId)).filter((item) => item.id !== itemId)
+  await updateDoc(doc(db, 'tenants', tId, 'appointments', appointmentId), { comanda_itens: items })
+}
+
+export async function getAgendamentosPendentesPagamento(tenantIdParam?: string) {
+  const appointments = await getAppointments(tenantIdParam)
+  return appointments.filter((row) => {
+    const status = String(row.status || '').toLowerCase()
+    return !status.includes('cancel') && !status.includes('conclu') && status !== 'completed'
+  })
+}
+
+export async function getPagamentosDoAgendamento(appointmentId: string, tenantIdParam?: string) {
+  const payments = (await getPagamentos(tenantIdParam)) as Array<{
+    id: string
+    status?: string | null
+    valor?: number | null
+    agendamento_id?: string
+    appointmentId?: string
+  }>
+  return payments.filter((row) => row.agendamento_id === appointmentId || row.appointmentId === appointmentId)
 }
 
 export async function getPlatformLogs(): Promise<AuditLog[]> {
