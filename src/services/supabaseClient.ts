@@ -1,29 +1,21 @@
 import { createFirebaseAuthAdapter } from '../lib/firebaseAuth'
-import { isDemoAvailable } from '../lib/demoAuth'
 import { isFirebaseConfigured } from '../lib/firebase'
 import { createMockSupabaseClient } from '../lib/mockSupabase'
 
 export { isFirebaseConfigured }
 
-/** Login e-mail/senha quando o Firebase Web está preenchido. */
-export const isSupabaseConfigured = isFirebaseConfigured()
-export const isDemoMode = !isFirebaseConfigured() && isDemoAvailable()
+/** O painel público usa Firebase Auth. Não depende de VITE_SUPABASE_* nem de VITE_FIREBASE_* no build. */
+export const isSupabaseConfigured = true
+export const isDemoMode = false
 
-if (isFirebaseConfigured()) {
-  console.info('Firebase ativo: Auth + Firestore (coleções barbeiros, agendamentos, servicos).')
-} else {
-  console.info(
-    'Modo demonstração ativo: Firebase não configurado. O painel usa dados locais fictícios.',
-  )
-}
+console.info('Firebase ativo: Auth + Firestore.')
 
 const dataClient = createMockSupabaseClient()
 
-export const supabase = (
-  isFirebaseConfigured()
-    ? { ...dataClient, auth: createFirebaseAuthAdapter() }
-    : dataClient
-) as any
+export const supabase = {
+  ...dataClient,
+  auth: createFirebaseAuthAdapter(),
+} as any
 
 export const supabaseClient = supabase
 

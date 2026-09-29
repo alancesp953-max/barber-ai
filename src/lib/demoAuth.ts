@@ -35,16 +35,9 @@ function userForRole(role: DemoRole): DemoUser {
   return role === 'barber' ? DEMO_BARBER_USER : DEMO_ADMIN_USER
 }
 
+/** Login público é sempre Firebase Auth. Ausência de VITE_* no build da Vercel não abre o modo demonstração. */
 export function isDemoAvailable() {
-  const firebaseOn = Boolean(
-    String(import.meta.env.VITE_FIREBASE_API_KEY ?? '').trim() &&
-      String(import.meta.env.VITE_FIREBASE_PROJECT_ID ?? '').trim() &&
-      String(import.meta.env.VITE_FIREBASE_APP_ID ?? '').trim(),
-  )
-  if (firebaseOn) return false
-  const url = String(import.meta.env.VITE_SUPABASE_URL ?? '').trim()
-  const key = String(import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim()
-  return !url || !key
+  return false
 }
 
 export function buildDemoSession(role: DemoRole): DemoSession {
