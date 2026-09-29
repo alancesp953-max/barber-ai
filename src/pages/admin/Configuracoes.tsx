@@ -121,7 +121,7 @@ export default function Configuracoes() {
     setForm((prev) => ({ ...prev, bot_ativo: ligado }))
     try {
       const saved = await saveBotActive(ligado)
-      const ativo = saved?.whatsapp_bot_ativo === true
+      const ativo = saved?.bot_ativo === true
       setBotAtivo(ativo)
       setMessage({
         tipo: 'sucesso',
