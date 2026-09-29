@@ -1,16 +1,15 @@
 import { GoogleGenAI } from '@google/genai'
-import dotenv from 'dotenv'
+import '../lib/loadEnv.mjs'
+import { isTimeoutError, withTimeout } from '../lib/withTimeout.mjs'
 
-dotenv.config()
-
-const apiKey = process.env.GEMINI_API_KEY
-
-let ai = null
-if (apiKey) {
+function geminiClient() {
+  const apiKey = String(process.env.GEMINI_API_KEY || '').trim()
+  if (!apiKey) return null
   try {
-    ai = new GoogleGenAI({ apiKey })
+    return new GoogleGenAI({ apiKey })
   } catch (err) {
-    console.warn('Falha ao inicializar GoogleGenAI:', err.message)
+    console.warn('[Gemini] Falha ao inicializar cliente:', err.message)
+    return null
   }
 }
 
@@ -24,8 +23,9 @@ export async function interpretUserIntent({
   activeBarbers = [],
   availableSlots = [],
 }) {
-  if (!ai || !apiKey) {
-    // Fallback heurístico inteligente sem API externa
+  const ai = geminiClient()
+  if (!ai) {
+    console.warn('[Gemini] GEMINI_API_KEY ausente em .env/.env.local. Usando leitura local da mensagem.')
     return fallbackIntentParsing({ messageText, currentStep, activeServices, activeBarbers, availableSlots })
   }
 
@@ -103,4 +103,60 @@ function fallbackIntentParsing({ messageText, currentStep, activeServices, activ
   }
 
   return { intent: 'OTHER' }
+}
+
+const AUDIO_MODELS = [
+  process.env.GEMINI_AUDIO_MODEL,
+  'gemini-2.5-flash',
+  'gemini-3.8-flash',
+].filter(Boolean)
+
+/**
+ * Transcreve um áudio do WhatsApp. Não lança: devolve { text } ou { text: '', error }.
+ */
+export async function transcribeAudioBuffer({ buffer, mimeType, timeoutMs = 12000 }) {
+  const ai = geminiClient()
+  if (!ai) {
+    console.error('[WhatsApp Áudio] etapa=transcricao_sem_chave GEMINI_API_KEY ausente em .env e .env.local')
+    return { text: '', error: 'sem_chave' }
+  }
+
+  const models = [...new Set(AUDIO_MODELS)]
+  let lastError = 'vazio'
+  for (const model of models) {
+    try {
+      console.log(`[WhatsApp Áudio] etapa=transcricao_inicio modelo=${model} mime=${mimeType} bytes=${buffer.length} timeoutMs=${timeoutMs}`)
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model,
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                { inlineData: { mimeType, data: buffer.toString('base64') } },
+                {
+                  text: 'Transcreva o áudio em português do Brasil. Responda apenas com as palavras ditas, sem comentário, sem aspas e sem tradução.',
+                },
+              ],
+            },
+          ],
+        }),
+        timeoutMs,
+        `transcricao_${model}`,
+      )
+      const text = String(response.text || '').trim()
+      if (!text) {
+        lastError = `modelo_${model}_texto_vazio`
+        console.warn(`[WhatsApp Áudio] etapa=transcricao_vazia modelo=${model}`)
+        continue
+      }
+      console.log(`[WhatsApp Áudio] etapa=transcricao_ok modelo=${model} chars=${text.length} texto=${JSON.stringify(text)}`)
+      return { text }
+    } catch (err) {
+      lastError = err?.message || String(err)
+      console.error(`[WhatsApp Áudio] etapa=transcricao_erro modelo=${model} ${lastError}`)
+      if (isTimeoutError(err)) break
+    }
+  }
+  return { text: '', error: lastError }
 }

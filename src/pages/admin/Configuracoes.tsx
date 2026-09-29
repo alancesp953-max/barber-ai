@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getConfiguracoes, updateConfiguracoes } from '../../lib/api'
+import { getBotActive, getConfiguracoes, saveBotActive, updateConfiguracoes } from '../../lib/api'
 
 const containerStyle: React.CSSProperties = {
   minHeight: '100vh',
@@ -92,15 +92,19 @@ const errorMsgStyle: React.CSSProperties = {
 
 export default function Configuracoes() {
   const [form, setForm] = useState<Record<string, any>>({})
+  const [botAtivo, setBotAtivo] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [savingBot, setSavingBot] = useState(false)
   const [message, setMessage] = useState<{ tipo: 'sucesso' | 'erro'; texto: string } | null>(null)
 
   useEffect(() => {
     async function load() {
       try {
-        const data = await getConfiguracoes()
-        setForm(data || {})
+        const [data, bot] = await Promise.all([getConfiguracoes(), getBotActive()])
+        const ativo = bot?.bot_ativo === true
+        setBotAtivo(ativo)
+        setForm({ ...(data || {}), bot_ativo: ativo })
       } catch (err) {
         setMessage({ tipo: 'erro', texto: 'Erro ao carregar configurações.' })
       } finally {
@@ -109,6 +113,26 @@ export default function Configuracoes() {
     }
     load()
   }, [])
+
+  async function handleBotChange(ligado: boolean) {
+    setSavingBot(true)
+    setMessage(null)
+    setBotAtivo(ligado)
+    setForm((prev) => ({ ...prev, bot_ativo: ligado }))
+    try {
+      const saved = await saveBotActive(ligado)
+      const ativo = saved?.whatsapp_bot_ativo === true
+      setBotAtivo(ativo)
+      setMessage({
+        tipo: 'sucesso',
+        texto: ativo ? 'Bot ativo gravado: Sim — bot ligado.' : 'Bot ativo gravado: Não — bot desligado.',
+      })
+    } catch (err) {
+      setMessage({ tipo: 'erro', texto: 'Não foi possível gravar o bot ativo.' })
+    } finally {
+      setSavingBot(false)
+    }
+  }
 
   function handleChange(campo: string, valor: any) {
     setForm((prev) => ({ ...prev, [campo]: valor }))
@@ -144,6 +168,25 @@ export default function Configuracoes() {
           {message.texto}
         </div>
       )}
+
+      <div style={cardStyle}>
+        <h2 style={sectionTitleStyle}>Bot WhatsApp</h2>
+        <label style={labelStyle}>
+          Bot ativo
+          <select
+            style={inputStyle}
+            value={botAtivo ? 'true' : 'false'}
+            disabled={savingBot}
+            onChange={(e) => handleBotChange(e.target.value === 'true')}
+          >
+            <option value="false">Não — bot desligado</option>
+            <option value="true">Sim — bot ligado</option>
+          </select>
+        </label>
+        <p style={{ color: '#888', fontSize: '13px', marginTop: '8px' }}>
+          Com o bot ligado, só a Diva responde pelo WhatsApp conectado neste servidor.
+        </p>
+      </div>
 
       <div style={cardStyle}>
         <h2 style={sectionTitleStyle}>Informações da Barbearia</h2>

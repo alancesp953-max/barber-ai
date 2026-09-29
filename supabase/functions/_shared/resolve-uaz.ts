@@ -77,7 +77,7 @@ export async function resolveUazConfig(
   }
   if (isUuidHost(baseUrl)) {
     return {
-      error: `UAZAPI_BASE_URL inválida (${baseUrl}). Use https://barberai.uazapi.com`,
+      error: `UAZAPI_BASE_URL inválida (${baseUrl}).`,
     }
   }
 

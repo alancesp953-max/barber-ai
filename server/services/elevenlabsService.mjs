@@ -1,10 +1,6 @@
 import axios from 'axios'
-import dotenv from 'dotenv'
+import '../lib/loadEnv.mjs'
 import { adminStorage } from '../lib/firebaseAdmin.mjs'
-
-dotenv.config()
-
-const defaultApiKey = process.env.ELEVENLABS_API_KEY
 
 /**
  * Gera arquivo de áudio a partir de um texto utilizando a API do ElevenLabs.
@@ -12,12 +8,13 @@ const defaultApiKey = process.env.ELEVENLABS_API_KEY
  */
 export async function generateAudioMessage({
   text,
-  voiceId = '21m00Tcm4TlvDq8ikWAM',
-  apiKey = defaultApiKey,
+  voiceId = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM',
+  apiKey,
   tenantId = 'default',
 }) {
-  if (!apiKey) {
-    console.warn('⚠️ ELEVENLABS_API_KEY não configurada no backend. Geração de áudio ignorada.')
+  const resolvedKey = String(apiKey || process.env.ELEVENLABS_API_KEY || '').trim()
+  if (!resolvedKey) {
+    console.warn('[ElevenLabs] ELEVENLABS_API_KEY ausente em .env e .env.local. Resposta por voz não gerada.')
     return null
   }
 
@@ -35,7 +32,7 @@ export async function generateAudioMessage({
       },
       {
         headers: {
-          'xi-api-key': apiKey,
+          'xi-api-key': resolvedKey,
           'Content-Type': 'application/json',
           Accept: 'audio/mpeg',
         },
@@ -44,6 +41,7 @@ export async function generateAudioMessage({
     )
 
     const buffer = Buffer.from(response.data)
+    console.log(`[ElevenLabs] etapa=voz_gerada bytes=${buffer.length} voiceId=${voiceId}`)
 
     // Se Firebase Storage estiver configurado, salva o arquivo de áudio
     try {
@@ -61,7 +59,7 @@ export async function generateAudioMessage({
       return { buffer }
     }
   } catch (err) {
-    console.error('Erro na API do ElevenLabs:', err.response?.data?.toString() || err.message)
+    console.error('[ElevenLabs] etapa=voz_falha', err.response?.data?.toString?.() || err.message)
     return null
   }
 }

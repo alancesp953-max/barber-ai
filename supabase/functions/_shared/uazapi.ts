@@ -26,7 +26,7 @@ export function getUazapiConfig(overrides?: Partial<UazapiConfig>): UazapiConfig
     const host = new URL(baseUrl).hostname
     if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(host)) {
       throw new Error(
-        `UAZAPI_BASE_URL inválida (${host}). Use a URL do servidor, ex: https://barberai.uazapi.com`,
+        `UAZAPI_BASE_URL inválida (${host}).`,
       )
     }
   } catch (e) {

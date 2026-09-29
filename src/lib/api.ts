@@ -1009,6 +1009,23 @@ export async function updateConfiguracoes(data: any, tenantIdParam?: string) {
   await setDoc(doc(db, 'tenants', tId, 'settings', 'general'), data, { merge: true })
 }
 
+export async function getBotActive(tenantIdParam?: string) {
+  const tId = await resolveTenantId(tenantIdParam)
+  const snap = await getDoc(doc(db, 'tenants', tId, 'settings', 'general'))
+  const ativo = snap.exists() && snap.data()?.bot_ativo === true
+  return { tenantId: tId, bot_ativo: ativo }
+}
+
+export async function saveBotActive(ativo: boolean, tenantIdParam?: string) {
+  const tId = await resolveTenantId(tenantIdParam)
+  await setDoc(
+    doc(db, 'tenants', tId, 'settings', 'general'),
+    { bot_ativo: ativo, updatedAt: new Date().toISOString() },
+    { merge: true },
+  )
+  return { tenantId: tId, bot_ativo: ativo }
+}
+
 // =====================
 // Gestão de Usuários
 // =====================

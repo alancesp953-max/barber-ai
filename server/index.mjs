@@ -1,6 +1,6 @@
+import './lib/loadEnv.mjs'
 import express from 'express'
 import cors from 'cors'
-import dotenv from 'dotenv'
 import webhookRoutes from './routes/webhook.mjs'
 import whatsappQrRoutes from './routes/whatsappQr.mjs'
 import conversationRoutes from './routes/conversations.mjs'
@@ -9,8 +9,6 @@ import { restoreAllSessions } from './services/whatsappBaileysManager.mjs'
 import { processConversationMessage } from './services/stateMachine.mjs'
 import { calculateAvailableSlots } from './services/availability.mjs'
 import { adminDb } from './lib/firebaseAdmin.mjs'
-
-dotenv.config()
 
 process.on('unhandledRejection', (reason) => {
   console.warn('[Process Server Warning] Unhandled Rejection:', reason?.message || reason)

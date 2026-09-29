@@ -1,7 +1,5 @@
 import axios from 'axios'
-import dotenv from 'dotenv'
-
-dotenv.config()
+import '../lib/loadEnv.mjs'
 
 /**
  * Envia uma mensagem de texto pelo WhatsApp Cloud API da Meta.

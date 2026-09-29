@@ -152,12 +152,12 @@ async function resolveUazConfig(): Promise<{ config?: UazapiConfig; error?: stri
   if (!baseUrl) {
     return {
       error:
-        'UAZAPI_BASE_URL ausente. Configure secret ou Configurações / whatsapp_secrets (ex: https://barberai.uazapi.com).',
+        'UAZAPI_BASE_URL ausente. A conexão do painel é o Baileys local, não este host.',
     }
   }
   if (isUuidHost(baseUrl)) {
     return {
-      error: `UAZAPI_BASE_URL inválida (${baseUrl}): parece UUID. Use https://barberai.uazapi.com`,
+      error: `UAZAPI_BASE_URL inválida (${baseUrl}): parece UUID.`,
     }
   }
 

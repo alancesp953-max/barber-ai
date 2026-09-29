@@ -11,7 +11,6 @@ import {
   Settings,
   UserPlus,
   Users,
-  MessageSquareCode,
   ShieldAlert,
   MessageSquare,
   QrCode,
@@ -33,7 +32,6 @@ const navItems = [
   { to: '/admin/financeiro', label: 'Financeiro', icon: DollarSign },
   { to: '/admin/comissoes', label: 'Comissões', icon: Percent },
   { to: '/admin/relatorios', label: 'Relatórios', icon: BarChart3 },
-  { to: '/admin/whatsapp', label: 'WhatsApp e IA', icon: MessageSquareCode },
   { to: '/admin/configuracoes', label: 'Configurações', icon: Settings },
 ] as const
 

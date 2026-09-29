@@ -1,7 +1,7 @@
-/** Local lab: never contact the official UAZAPI / shop WhatsApp number. */
+/** Laboratório local: o envio ativo fica no Baileys, não num provedor externo. */
 export const LOCAL_WHATSAPP_LOCK = true
 
-export const OFFICIAL_INSTANCE_BLOCKED = 'uazapi_oficial_bloqueada_no_laboratorio'
+export const OFFICIAL_INSTANCE_BLOCKED = 'envio_externo_bloqueado_no_laboratorio'
 
 export function sendWhatsAppOfficial(_payload) {
   return {

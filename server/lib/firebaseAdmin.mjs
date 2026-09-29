@@ -4,9 +4,7 @@ import { getAuth } from 'firebase-admin/auth'
 import { getStorage } from 'firebase-admin/storage'
 import fs from 'fs'
 import path from 'path'
-import dotenv from 'dotenv'
-
-dotenv.config()
+import './loadEnv.mjs'
 
 const projectId = process.env.FIREBASE_PROJECT_ID || 'barberai-6369a'
 const serviceAccountPath = path.resolve(process.cwd(), 'serviceAccountKey.json')
@@ -241,4 +239,25 @@ export const adminDb = {
 
 export const adminAuth = realAuth
 export const adminStorage = realStorage
+
+export function initFirebaseAdmin() {
+  return app
+}
+
+export function getFirebaseMode() {
+  return 'admin'
+}
+
+export function getAdminDb() {
+  return adminDb
+}
+
+export function readWebConfig() {
+  return {
+    apiKey: process.env.VITE_FIREBASE_API_KEY || '',
+    projectId: process.env.VITE_FIREBASE_PROJECT_ID || projectId,
+    appId: process.env.VITE_FIREBASE_APP_ID || '',
+  }
+}
+
 export default app

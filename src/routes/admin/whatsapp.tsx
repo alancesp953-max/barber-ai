@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
-import WhatsAppIA from '../../pages/admin/WhatsAppIA'
+import ConectarWhatsApp from '../../pages/admin/ConectarWhatsApp'
 
 export const Route = createFileRoute('/admin/whatsapp')({
-  component: WhatsAppIA,
+  component: ConectarWhatsApp,
 })

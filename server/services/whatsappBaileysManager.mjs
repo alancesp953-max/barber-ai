@@ -2,13 +2,18 @@ import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
+  normalizeMessageContent,
+  getContentType,
 } from '@whiskeysockets/baileys'
 import pino from 'pino'
 import qrcode from 'qrcode'
 import fs from 'fs'
 import path from 'path'
 import { adminDb } from '../lib/firebaseAdmin.mjs'
-import { processConversationMessage } from './stateMachine.mjs'
+import { handleDivaMessage } from '../agent/divaLocal.mjs'
+import { readBotActive } from '../routes/settings.mjs'
+import { generateAudioMessage } from './elevenlabsService.mjs'
+import { transcribeWhatsAppAudio } from './whatsappAudio.mjs'
 
 // Pasta segura local para armazenamento das sessões por tenant
 const SESSIONS_DIR = path.resolve(process.cwd(), 'server', 'sessions')
@@ -20,6 +25,27 @@ if (!fs.existsSync(SESSIONS_DIR)) {
 const activeSessions = new Map()
 
 const logger = pino({ level: 'silent' })
+const chatLanes = new Map()
+const seenMessageIds = new Set()
+const AUDIO_FAIL_REPLY = 'Não consegui ouvir o seu áudio, poderia escrever?'
+
+function enqueueChat(jid, task) {
+  const previous = chatLanes.get(jid) || Promise.resolve()
+  const run = previous
+    .catch((err) => {
+      console.error(`[WhatsApp] fila liberada após erro em ${jid}: ${err?.message || err}`)
+    })
+    .then(task)
+  chatLanes.set(jid, run)
+  return run
+}
+
+function rememberMessage(id) {
+  if (!id || seenMessageIds.has(id)) return false
+  seenMessageIds.add(id)
+  if (seenMessageIds.size > 500) seenMessageIds.delete(seenMessageIds.values().next().value)
+  return true
+}
 
 /**
  * Atualiza o documento de conexão do WhatsApp da barbearia no Firestore
@@ -52,6 +78,19 @@ async function updateTenantConnectionDoc(tenantId, data) {
 function cleanPhoneNumber(phone) {
   if (!phone) return ''
   return phone.replace(/\D/g, '')
+}
+
+function expectedBusinessPhone() {
+  return cleanPhoneNumber(process.env.WHATSAPP_BUSINESS_NUMBER || '')
+}
+
+function phoneFromCredsFile(credsFile) {
+  try {
+    const creds = JSON.parse(fs.readFileSync(credsFile, 'utf8'))
+    return cleanPhoneNumber(String(creds?.me?.id || '').split(':')[0].split('@')[0])
+  } catch {
+    return ''
+  }
 }
 
 /**
@@ -135,6 +174,20 @@ export async function initSession(tenantId) {
 
     // Novo QR Code gerado para autenticação
     if (qr) {
+      const expectedPhone = expectedBusinessPhone()
+      if (expectedPhone && session && !session.pairingRequested) {
+        session.pairingRequested = true
+        try {
+          const pairingCode = await sock.requestPairingCode(expectedPhone)
+          session.pairingCode = pairingCode
+          console.log(
+            `[WhatsApp Baileys] Código para parear ${expectedPhone}: ${pairingCode}. No celular: Aparelhos conectados > Conectar aparelho > Conectar com número de telefone.`,
+          )
+        } catch (pairErr) {
+          session.pairingRequested = false
+          console.error(`[WhatsApp Baileys] Falha ao pedir código de pareamento para ${expectedPhone}: ${pairErr.message}`)
+        }
+      }
       try {
         const qrDataUrl = await qrcode.toDataURL(qr, { margin: 2, scale: 7 })
         if (session) {
@@ -158,6 +211,21 @@ export async function initSession(tenantId) {
     if (connection === 'open') {
       const rawJid = sock.user?.id || ''
       const phoneNumber = cleanPhoneNumber(rawJid.replace(/:.*@/, '@').split('@')[0])
+      const expectedPhone = expectedBusinessPhone()
+
+      if (expectedPhone && phoneNumber && phoneNumber !== expectedPhone) {
+        console.warn(
+          `[WhatsApp Baileys] Sessão do número ${phoneNumber} descartada. O número ativo deve ser ${expectedPhone}.`,
+        )
+        try {
+          await sock.logout()
+        } catch (err) {
+          try {
+            sock.end(undefined)
+          } catch (e) {}
+        }
+        return
+      }
 
       if (session) {
         session.status = 'connected'
@@ -177,6 +245,7 @@ export async function initSession(tenantId) {
       })
 
       console.log(`[WhatsApp Baileys] ✅ Conectado com sucesso! Barbearia: "${tenantId}", Número: ${phoneNumber}`)
+      console.log(`[WhatsApp] listener ativo para texto e audioMessage no número ${phoneNumber}`)
     }
 
     // Conexão encerrada ou com falha
@@ -246,58 +315,96 @@ export async function initSession(tenantId) {
   })
 
   // 3. Monitor de Mensagens (Recebimento e Envio)
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return
+  sock.ev.on('messages.upsert', ({ messages, type }) => {
+    const batch = Array.isArray(messages) ? messages : []
+    console.log(`[WhatsApp] upsert type=${type} mensagens=${batch.length} tenant=${tenantId}`)
 
-    for (const msg of messages) {
-      try {
-        if (!msg.message) continue
-        const remoteJid = msg.key.remoteJid || ''
+    for (const msg of batch) {
+      const remoteJid = msg.key?.remoteJid || ''
+      const messageId = msg.key?.id || ''
+      const content = msg.message ? normalizeMessageContent(msg.message) || msg.message : null
+      const contentType = content ? getContentType(content) || 'desconhecido' : 'sem_message'
+      const isAudio = contentType === 'audioMessage' || Boolean(content?.audioMessage)
+      const ageSec = msg.messageTimestamp
+        ? Math.floor(Date.now() / 1000) - Number(msg.messageTimestamp)
+        : 0
+      const preview =
+        content?.conversation ||
+        content?.extendedTextMessage?.text ||
+        (isAudio ? '[audio]' : '')
+      console.log(
+        `[WhatsApp] item id=${messageId || '?'} type=${type} conteudo=${contentType} fromMe=${!!msg.key?.fromMe} idade=${ageSec}s jid=${remoteJid} texto=${JSON.stringify(String(preview).slice(0, 80))}`,
+      )
 
-        // Ignora mensagens de grupos (@g.us) e transmissões de status para manter a central limpa
-        if (remoteJid.endsWith('@g.us') || remoteJid === 'status@broadcast') {
-          continue
-        }
-
-        const contactPhone = cleanPhoneNumber(remoteJid.replace('@s.whatsapp.net', ''))
-        if (!contactPhone) continue
-
-        const isFromMe = !!msg.key.fromMe
-
-        // Extrai texto da mensagem
-        const text =
-          msg.message.conversation ||
-          msg.message.extendedTextMessage?.text ||
-          msg.message.imageMessage?.caption ||
-          msg.message.videoMessage?.caption ||
-          (msg.message.audioMessage ? '🎵 [Mensagem de Áudio]' : '') ||
-          (msg.message.imageMessage ? '📷 [Foto]' : '') ||
-          (msg.message.documentMessage ? '📄 [Documento]' : '') ||
-          ''
-
-        const contactName = msg.pushName || contactPhone
-        const timestamp = new Date((Number(msg.messageTimestamp) || Math.floor(Date.now() / 1000)) * 1000).toISOString()
-        const externalMessageId = msg.key.id || `msg_${Date.now()}`
-        const direction = isFromMe ? 'outgoing' : 'incoming'
-        const sender = isFromMe ? 'human' : 'client'
-        const messageType = msg.message.audioMessage ? 'audio' : msg.message.imageMessage ? 'image' : 'text'
-
-        // Executa pipeline de persistência e inteligência artificial
-        await handleMessagePipeline(tenantId, {
-          externalMessageId,
-          contactPhone,
-          contactName,
-          text,
-          direction,
-          sender,
-          timestamp,
-          messageType,
-          sock,
-          remoteJid,
-        })
-      } catch (msgErr) {
-        console.error(`[WhatsApp Baileys] Erro no processamento de mensagem para "${tenantId}":`, msgErr)
+      if (!content) continue
+      if (remoteJid.endsWith('@g.us') || remoteJid === 'status@broadcast') continue
+      if (msg.key?.fromMe) continue
+      if (type !== 'notify' && ageSec > 180) {
+        console.log(`[WhatsApp] ignorada id=${messageId || '?'} motivo=historico type=${type} idade=${ageSec}s`)
+        continue
       }
+      if (messageId && !rememberMessage(messageId)) {
+        console.log(`[WhatsApp] ignorada id=${messageId} motivo=duplicada`)
+        continue
+      }
+
+      const contactPhone = cleanPhoneNumber(remoteJid.replace(/@.*/, '').replace(/:\d+$/, ''))
+      if (!contactPhone) {
+        console.log(`[WhatsApp] ignorada id=${messageId || '?'} motivo=jid_sem_telefone jid=${remoteJid}`)
+        continue
+      }
+
+      void enqueueChat(remoteJid, async () => {
+        try {
+          let text =
+            content.conversation ||
+            content.extendedTextMessage?.text ||
+            content.imageMessage?.caption ||
+            content.videoMessage?.caption ||
+            ''
+          let transcriptionFailed = false
+
+          if (isAudio) {
+            console.log(`[WhatsApp Áudio] etapa=fila id=${messageId || '?'} a transcrição não bloqueia as próximas mensagens além do timeout`)
+            const heard = await transcribeWhatsAppAudio({ sock, msg, content, logger })
+            if (heard.text) {
+              text = heard.text
+              console.log(`[WhatsApp Áudio] etapa=texto_para_diva chars=${text.length}`)
+            } else {
+              transcriptionFailed = true
+              text = '[áudio não transcrito]'
+              console.error(`[WhatsApp Áudio] etapa=transcricao_encerrada motivo=${heard.error || 'desconhecido'}`)
+            }
+          } else if (!text) {
+            text = content.imageMessage ? '📷 [Foto]' : content.documentMessage ? '📄 [Documento]' : ''
+          }
+
+          await handleMessagePipeline(tenantId, {
+            externalMessageId: messageId || `msg_${Date.now()}`,
+            contactPhone,
+            contactName: msg.pushName || contactPhone,
+            text,
+            direction: 'incoming',
+            sender: 'client',
+            timestamp: new Date((Number(msg.messageTimestamp) || Math.floor(Date.now() / 1000)) * 1000).toISOString(),
+            messageType: isAudio ? 'audio' : content.imageMessage ? 'image' : 'text',
+            sock,
+            remoteJid,
+            transcriptionFailed,
+            incomingAudio: isAudio,
+          })
+        } catch (msgErr) {
+          console.error(`[WhatsApp Baileys] Erro no processamento de mensagem para "${tenantId}":`, msgErr)
+          if (isAudio) {
+            try {
+              await sock.sendMessage(remoteJid, { text: AUDIO_FAIL_REPLY })
+              console.log('[WhatsApp Áudio] etapa=resposta_fallback_erro fila liberada')
+            } catch (sendErr) {
+              console.error(`[WhatsApp Áudio] etapa=fallback_envio_falha ${sendErr.message}`)
+            }
+          }
+        }
+      })
     }
   })
 
@@ -312,8 +419,20 @@ export async function initSession(tenantId) {
  * Pipeline de armazenamento no Firestore e decisão de resposta da IA
  */
 async function handleMessagePipeline(tenantId, data) {
-  const { externalMessageId, contactPhone, contactName, text, direction, sender, timestamp, messageType, sock, remoteJid } =
-    data
+  const {
+    externalMessageId,
+    contactPhone,
+    contactName,
+    text,
+    direction,
+    sender,
+    timestamp,
+    messageType,
+    sock,
+    remoteJid,
+    transcriptionFailed = false,
+    incomingAudio = false,
+  } = data
 
   // 1. Atualiza ou cria contato em tenants/{tenantId}/contacts/{contactPhone}
   const contactRef = adminDb.collection('tenants').doc(tenantId).collection('contacts').doc(contactPhone)
@@ -380,23 +499,53 @@ async function handleMessagePipeline(tenantId, data) {
     { merge: true },
   )
 
-  // 4. Se a mensagem for recebida (incoming), verifica se a IA deve intervir
-  if (isIncoming && convPayload.aiEnabled && convPayload.assignedTo !== 'human') {
+  // 4. Mensagens do Baileys são respondidas só pela Diva. A UAZAPI não é chamada neste processo.
+  if (isIncoming && convPayload.assignedTo !== 'human') {
     try {
-      console.log(`[IA Barber] Processando mensagem recebida de ${contactPhone} para barbearia "${tenantId}"...`)
+      const { botAtivo } = await readBotActive(tenantId)
+      if (!botAtivo) {
+        console.log(`[Diva] bot desligado tenant=${tenantId} telefone=${contactPhone}. Nenhuma resposta automática.`)
+        return
+      }
+      console.log(`[Diva] mensagem exclusiva para divaLocal tenant=${tenantId} telefone=${contactPhone}. UAZAPI não é encaminhada.`)
+      let replyText = ''
+      if (transcriptionFailed) {
+        replyText = AUDIO_FAIL_REPLY
+        console.log(`[WhatsApp Áudio] etapa=resposta_fallback telefone=${contactPhone}`)
+      } else if (!String(text || '').trim()) {
+        console.log(`[WhatsApp Áudio] etapa=parar motivo=texto_vazio telefone=${contactPhone}`)
+        return
+      } else {
+        if (incomingAudio) {
+          console.log(`[WhatsApp Áudio] etapa=texto_entregue_a_diva chars=${String(text).length} texto=${JSON.stringify(String(text).slice(0, 180))}`)
+        }
+        const aiResult = await handleDivaMessage({
+          tenantId,
+          sessionId: `${tenantId}:${contactPhone}`,
+          telefone: contactPhone,
+          nome: existingConv?.divaMemory?.nome || contactName,
+          text,
+          memory: existingConv?.divaMemory || null,
+        })
+        replyText = aiResult?.replyText || aiResult?.reply || ''
+        await convRef.set(
+          {
+            divaMemory: {
+              nome: aiResult?.nome || existingConv?.divaMemory?.nome || '',
+              pedido: aiResult?.pedido || {},
+              history: aiResult?.history || [],
+            },
+          },
+          { merge: true },
+        )
+      }
 
-      // Aciona máquina de estados do Barber AI
-      const aiResult = await processConversationMessage({
-        tenantId,
-        clientPhone: contactPhone,
-        messageText: text,
-        phoneNumberId: null, // indica uso local/Baileys
-        accessToken: null,
-      })
-
-      if (aiResult?.replyText) {
-        // Envia resposta automática pelo WhatsApp conectado
-        await sock.sendMessage(remoteJid, { text: aiResult.replyText })
+      if (replyText) {
+        await sock.sendMessage(remoteJid, { text: replyText })
+        if (incomingAudio) {
+          console.log(`[WhatsApp Áudio] etapa=resposta_texto enviada chars=${replyText.length}`)
+          await maybeSendVoiceReply({ tenantId, sock, remoteJid, replyText })
+        }
 
         const botMsgId = `bot_${Date.now()}`
         const botTimestamp = new Date().toISOString()
@@ -411,7 +560,7 @@ async function handleMessagePipeline(tenantId, data) {
           sender: 'bot',
           direction: 'outgoing',
           messageType: 'text',
-          text: aiResult.replyText,
+          text: replyText,
           timestamp: botTimestamp,
           deliveryStatus: 'sent',
           createdAt: botTimestamp,
@@ -420,7 +569,7 @@ async function handleMessagePipeline(tenantId, data) {
         // Atualiza a conversa com a última mensagem enviada pela IA
         await convRef.set(
           {
-            lastMessage: aiResult.replyText,
+            lastMessage: replyText,
             lastMessageAt: botTimestamp,
             lastMessageDirection: 'outgoing',
             lastInteractionDate: botTimestamp.slice(0, 10),
@@ -428,10 +577,58 @@ async function handleMessagePipeline(tenantId, data) {
           },
           { merge: true },
         )
+      } else if (incomingAudio) {
+        console.warn('[WhatsApp Áudio] etapa=parar motivo=diva_sem_replyText')
       }
     } catch (aiErr) {
       console.error(`[IA Barber] Erro ao responder automaticamente para ${contactPhone}:`, aiErr)
     }
+  }
+}
+
+async function maybeSendVoiceReply({ tenantId, sock, remoteJid, replyText }) {
+  let audioEnabled = false
+  let voiceId = String(process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM').trim() || '21m00Tcm4TlvDq8ikWAM'
+  let tenantKey = ''
+  try {
+    const snap = await adminDb.collection('tenants').doc(tenantId).collection('aiSettings').doc('primary').get()
+    const data = snap.exists ? snap.data() : {}
+    audioEnabled = data.audioEnabled === true
+    voiceId = data.elevenlabsVoiceId || voiceId
+    tenantKey = String(data.elevenlabsApiKey || '').trim()
+  } catch (err) {
+    console.error(`[WhatsApp Áudio] etapa=voz_config_erro ${err.message}`)
+  }
+
+  const envKey = Boolean(String(process.env.ELEVENLABS_API_KEY || '').trim())
+  if (!audioEnabled) {
+    console.log(
+      `[WhatsApp Áudio] etapa=voz_condicionada audioEnabled=false. Resposta falada não enviada. Texto já foi enviado. ELEVENLABS_API_KEY ${envKey || tenantKey ? 'presente' : 'ausente'}.`,
+    )
+    return
+  }
+
+  console.log(`[WhatsApp Áudio] etapa=voz_inicio voiceId=${voiceId} chaveTenant=${tenantKey ? 'sim' : 'nao'} chaveEnv=${envKey ? 'sim' : 'nao'}`)
+  const audio = await generateAudioMessage({
+    text: replyText,
+    voiceId,
+    apiKey: tenantKey || undefined,
+    tenantId,
+  })
+  if (!audio?.buffer) {
+    console.error('[WhatsApp Áudio] etapa=voz_falha ElevenLabs não devolveu áudio. A resposta em texto permanece.')
+    return
+  }
+
+  try {
+    await sock.sendMessage(remoteJid, {
+      audio: audio.buffer,
+      mimetype: 'audio/mpeg',
+      ptt: true,
+    })
+    console.log(`[WhatsApp Áudio] etapa=voz_enviada bytes=${audio.buffer.length}`)
+  } catch (err) {
+    console.error(`[WhatsApp Áudio] etapa=voz_envio_falha ${err.message}. A resposta em texto permanece.`)
   }
 }
 
@@ -564,6 +761,18 @@ export async function restoreAllSessions() {
       if (fs.statSync(fullPath).isDirectory()) {
         const credsFile = path.join(fullPath, 'creds.json')
         if (fs.existsSync(credsFile)) {
+          const savedPhone = phoneFromCredsFile(credsFile)
+          const expectedPhone = expectedBusinessPhone()
+          if (expectedPhone && savedPhone && savedPhone !== expectedPhone) {
+            console.warn(
+              `[WhatsApp Baileys] Removendo sessão salva do número ${savedPhone}. A conexão ativa fica só com ${expectedPhone}.`,
+            )
+            fs.rmSync(fullPath, { recursive: true, force: true })
+            initSession(tenantId).catch((err) => {
+              console.error(`[WhatsApp Baileys] Falha ao abrir sessão nova para "${tenantId}":`, err.message)
+            })
+            continue
+          }
           console.log(`[WhatsApp Baileys] Restaurando sessão salva para a barbearia "${tenantId}"...`)
           initSession(tenantId).catch((err) => {
             console.error(`[WhatsApp Baileys] Falha ao restaurar sessão "${tenantId}":`, err.message)

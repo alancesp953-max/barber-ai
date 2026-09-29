@@ -2,6 +2,9 @@ import { useState, useEffect, useRef } from 'react'
 import { QrCode, Smartphone, Wifi, RefreshCw, LogOut, CheckCircle2, AlertCircle, Info, ShieldCheck } from 'lucide-react'
 import { PageHeader } from '../../components/PageHeader'
 import { useAuth } from '../../lib/firebaseAuth'
+import { getBotActive, saveBotActive } from '../../lib/api'
+
+const BAILEYS_API = 'http://127.0.0.1:8787'
 
 interface WhatsAppStatus {
   status: 'connected' | 'waiting_qr' | 'connecting' | 'disconnected'
@@ -23,12 +26,15 @@ export default function ConectarWhatsApp() {
   })
   const [actionLoading, setActionLoading] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [botAtivo, setBotAtivo] = useState(false)
+  const [botMsg, setBotMsg] = useState<string | null>(null)
+  const [savingBot, setSavingBot] = useState(false)
   const pollTimerRef = useRef<any>(null)
 
   // Consulta status do backend
   const fetchStatus = async () => {
     try {
-      const res = await fetch(`/api/whatsapp/status?tenantId=${tenantId}`)
+      const res = await fetch(`${BAILEYS_API}/api/whatsapp/status?tenantId=${tenantId}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       setStatusData(data)
@@ -39,6 +45,9 @@ export default function ConectarWhatsApp() {
   }
 
   useEffect(() => {
+    getBotActive(tenantId)
+      .then((bot) => setBotAtivo(bot?.bot_ativo === true))
+      .catch(() => setBotAtivo(false))
     fetchStatus()
     // Polling contínuo para atualizar o QR Code e detectar leitura
     pollTimerRef.current = setInterval(fetchStatus, 3000)
@@ -52,7 +61,7 @@ export default function ConectarWhatsApp() {
     setActionLoading(true)
     setErrorMsg(null)
     try {
-      const res = await fetch('/api/whatsapp/connect', {
+      const res = await fetch(`${BAILEYS_API}/api/whatsapp/connect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tenantId }),
@@ -75,7 +84,7 @@ export default function ConectarWhatsApp() {
     setActionLoading(true)
     setErrorMsg(null)
     try {
-      const res = await fetch('/api/whatsapp/disconnect', {
+      const res = await fetch(`${BAILEYS_API}/api/whatsapp/disconnect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tenantId }),
@@ -99,7 +108,7 @@ export default function ConectarWhatsApp() {
     setActionLoading(true)
     setErrorMsg(null)
     try {
-      const res = await fetch('/api/whatsapp/reconnect', {
+      const res = await fetch(`${BAILEYS_API}/api/whatsapp/reconnect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tenantId }),
@@ -112,6 +121,21 @@ export default function ConectarWhatsApp() {
       setErrorMsg(err.message)
     } finally {
       setActionLoading(false)
+    }
+  }
+
+  const handleBotChange = async (ligado: boolean) => {
+    setSavingBot(true)
+    setBotMsg(null)
+    setBotAtivo(ligado)
+    try {
+      const saved = await saveBotActive(ligado, tenantId)
+      setBotAtivo(saved?.bot_ativo === true)
+      setBotMsg(saved?.bot_ativo ? 'Bot gravado: Sim — bot ligado.' : 'Bot gravado: Não — bot desligado.')
+    } catch (err: any) {
+      setBotMsg(err.message || 'Não foi possível gravar o bot ativo.')
+    } finally {
+      setSavingBot(false)
     }
   }
 
@@ -200,6 +224,20 @@ export default function ConectarWhatsApp() {
                 </div>
               </div>
             )}
+
+            <label className="block text-xs text-barber-white/70">
+              Bot ativo
+              <select
+                value={botAtivo ? 'true' : 'false'}
+                disabled={savingBot}
+                onChange={(e) => handleBotChange(e.target.value === 'true')}
+                className="mt-1 w-full rounded-xl border border-barber-gold/30 bg-barber-black px-3 py-2 text-sm text-barber-white"
+              >
+                <option value="false">Não — bot desligado</option>
+                <option value="true">Sim — bot ligado</option>
+              </select>
+            </label>
+            {botMsg && <p className="text-xs text-barber-gold">{botMsg}</p>}
 
             {/* Botões de Ação */}
             <div className="flex flex-wrap gap-3 pt-2">

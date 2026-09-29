@@ -16,7 +16,7 @@ ALTER TABLE whatsapp_secrets ENABLE ROW LEVEL SECURITY;
 INSERT INTO whatsapp_secrets (id, base_url, mimo_base_url, mimo_model)
 VALUES (
   1,
-  'https://barberai.uazapi.com',
+  '',
   'https://token-plan-sgp.xiaomimimo.com/v1',
   'mimo-v2.5-pro'
 )

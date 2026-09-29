@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { adminDb } from '../lib/firebaseAdmin.mjs'
-import { processConversationMessage } from '../services/stateMachine.mjs'
+import { handleDivaMessage } from '../agent/divaLocal.mjs'
+import { readBotActive } from './settings.mjs'
 
 const router = Router()
 
@@ -40,6 +41,7 @@ router.post('/whatsapp', async (req, res) => {
   res.status(200).send('EVENT_RECEIVED')
 
   if (body.object !== 'whatsapp_business_account') {
+    console.log('[WhatsApp] evento ignorado neste servidor. A UAZAPI não é encaminhada daqui; o Baileys responde só pela Diva.')
     return
   }
 
@@ -97,13 +99,16 @@ router.post('/whatsapp', async (req, res) => {
             }
           }
 
-          // Executa a máquina de estados
-          await processConversationMessage({
+          const { botAtivo } = await readBotActive(targetTenantId)
+          if (!botAtivo) {
+            console.log(`[Diva] bot_ativo=false tenant=${targetTenantId}. Webhook sem resposta.`)
+            continue
+          }
+          await handleDivaMessage({
             tenantId: targetTenantId,
-            clientPhone,
-            messageText,
-            phoneNumberId,
-            accessToken: process.env.WHATSAPP_ACCESS_TOKEN,
+            sessionId: `${targetTenantId}:${clientPhone}`,
+            telefone: clientPhone,
+            text: messageText,
           })
         }
       }
